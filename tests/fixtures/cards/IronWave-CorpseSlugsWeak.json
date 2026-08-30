@@ -8,6 +8,9 @@
   "target_index": 0,
   "hand_index": 0,
   "energy": 9,
+  "powers": [],
+  "enchantment": null,
+  "enchant_amount": null,
   "game": {
     "steam_buildid": "23811903",
     "release": "v0.107.1"
@@ -55,13 +58,13 @@
         },
         {
           "index": 2,
-          "id": "DEFEND_IRONCLAD",
-          "name": "Defend",
-          "type": "Skill",
-          "cost": "1",
-          "can_play": true,
-          "unplayable_reason": null,
-          "target_type": "Self",
+          "id": "ASCENDERS_BANE",
+          "name": "Ascender's Bane",
+          "type": "Curse",
+          "cost": "0",
+          "can_play": false,
+          "unplayable_reason": "HasUnplayableKeyword",
+          "target_type": "None",
           "is_upgraded": false
         },
         {
@@ -88,13 +91,13 @@
         },
         {
           "index": 5,
-          "id": "STRIKE_IRONCLAD",
-          "name": "Strike",
-          "type": "Attack",
+          "id": "DEFEND_IRONCLAD",
+          "name": "Defend",
+          "type": "Skill",
           "cost": "1",
           "can_play": true,
           "unplayable_reason": null,
-          "target_type": "AnyEnemy",
+          "target_type": "Self",
           "is_upgraded": false
         }
       ],
@@ -131,8 +134,8 @@
       {
         "entity_id": "CORPSE_SLUG_1",
         "name": "Corpse Slug",
-        "hp": 29,
-        "max_hp": 29,
+        "hp": 27,
+        "max_hp": 27,
         "block": 0,
         "intents": [
           {
@@ -186,13 +189,13 @@
         },
         {
           "index": 1,
-          "id": "DEFEND_IRONCLAD",
-          "name": "Defend",
-          "type": "Skill",
-          "cost": "1",
-          "can_play": true,
-          "unplayable_reason": null,
-          "target_type": "Self",
+          "id": "ASCENDERS_BANE",
+          "name": "Ascender's Bane",
+          "type": "Curse",
+          "cost": "0",
+          "can_play": false,
+          "unplayable_reason": "HasUnplayableKeyword",
+          "target_type": "None",
           "is_upgraded": false
         },
         {
@@ -219,13 +222,13 @@
         },
         {
           "index": 4,
-          "id": "STRIKE_IRONCLAD",
-          "name": "Strike",
-          "type": "Attack",
+          "id": "DEFEND_IRONCLAD",
+          "name": "Defend",
+          "type": "Skill",
           "cost": "1",
           "can_play": true,
           "unplayable_reason": null,
-          "target_type": "AnyEnemy",
+          "target_type": "Self",
           "is_upgraded": false
         }
       ],
@@ -262,8 +265,8 @@
       {
         "entity_id": "CORPSE_SLUG_1",
         "name": "Corpse Slug",
-        "hp": 29,
-        "max_hp": 29,
+        "hp": 27,
+        "max_hp": 27,
         "block": 0,
         "intents": [
           {
@@ -296,7 +299,7 @@
         "is_upgraded": false
       },
       {
-        "id": "DEFEND_IRONCLAD",
+        "id": "ASCENDERS_BANE",
         "is_upgraded": false
       },
       {
@@ -308,12 +311,20 @@
         "is_upgraded": false
       },
       {
-        "id": "STRIKE_IRONCLAD",
+        "id": "DEFEND_IRONCLAD",
         "is_upgraded": false
       }
     ],
     "draw_pile_ordered": [
       {
+        "id": "DEFEND_IRONCLAD",
+        "is_upgraded": false
+      },
+      {
+        "id": "STRIKE_IRONCLAD",
+        "is_upgraded": false
+      },
+      {
         "id": "STRIKE_IRONCLAD",
         "is_upgraded": false
       },
@@ -323,14 +334,6 @@
       },
       {
         "id": "STRIKE_IRONCLAD",
-        "is_upgraded": false
-      },
-      {
-        "id": "DEFEND_IRONCLAD",
-        "is_upgraded": false
-      },
-      {
-        "id": "ASCENDERS_BANE",
         "is_upgraded": false
       },
       {
@@ -338,7 +341,8 @@
         "is_upgraded": false
       }
     ],
-    "discard_pile_ordered": []
+    "discard_pile_ordered": [],
+    "exhaust_pile_ordered": []
   },
   "after_piles": {
     "hand_ordered": [
@@ -347,7 +351,7 @@
         "is_upgraded": false
       },
       {
-        "id": "DEFEND_IRONCLAD",
+        "id": "ASCENDERS_BANE",
         "is_upgraded": false
       },
       {
@@ -359,12 +363,20 @@
         "is_upgraded": false
       },
       {
-        "id": "STRIKE_IRONCLAD",
+        "id": "DEFEND_IRONCLAD",
         "is_upgraded": false
       }
     ],
     "draw_pile_ordered": [
       {
+        "id": "DEFEND_IRONCLAD",
+        "is_upgraded": false
+      },
+      {
+        "id": "STRIKE_IRONCLAD",
+        "is_upgraded": false
+      },
+      {
         "id": "STRIKE_IRONCLAD",
         "is_upgraded": false
       },
@@ -374,14 +386,6 @@
       },
       {
         "id": "STRIKE_IRONCLAD",
-        "is_upgraded": false
-      },
-      {
-        "id": "DEFEND_IRONCLAD",
-        "is_upgraded": false
-      },
-      {
-        "id": "ASCENDERS_BANE",
         "is_upgraded": false
       },
       {
@@ -394,6 +398,7 @@
         "id": "IRON_WAVE",
         "is_upgraded": false
       }
-    ]
+    ],
+    "exhaust_pile_ordered": []
   }
 }
