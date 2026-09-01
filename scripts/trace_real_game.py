@@ -103,6 +103,12 @@ def summarize_state(state: dict[str, Any]) -> dict[str, Any]:
     return {
         "state_type": state.get("state_type"),
         "run": state.get("run"),
+        # The combat's RNG stream positions, which the mod reports under `battle.rng`.
+        # Same lesson as `allies`, `stars` and `orbs` below it, and this function has now
+        # stated it four times: a summary that drops a field is the same blindness one
+        # layer up. A harness comparing stream POSITIONS reads them from here, and with
+        # them missing it silently compared nothing and reported no drift.
+        "rng": battle.get("rng"),
         "player": {
             "character": player.get("character"),
             "hp": player.get("hp"),

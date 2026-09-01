@@ -52,6 +52,7 @@ public static class StateCloning
             CurrentIntent = enemy.CurrentIntent,
             SecondaryIntent = enemy.SecondaryIntent,
             Buffs = [.. enemy.Buffs],
+            LastSpawnedDefId = enemy.LastSpawnedDefId,
             PoweredHitsThisTurn = enemy.PoweredHitsThisTurn,
             MoveIndex = enemy.MoveIndex,
             LastMove = enemy.LastMove,

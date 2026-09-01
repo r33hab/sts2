@@ -262,6 +262,20 @@ class Sts2CombatEnv(gym.Env):
         assert self._handle is not None, "Call reset() before pending_selection_kind()"
         return native.pending_selection_kind(self._handle)
 
+    def rng_call_counts(self) -> dict[str, int]:
+        """Draws taken from each named RNG stream, by the game's own stream names.
+
+        The mod reports the same counts for the live side under `battle.rng`, so a
+        harness can compare stream POSITIONS rather than inferring them from outcomes: a
+        side that made a draw the other did not shows up as an off-by-one on the turn it
+        happened, instead of as a roll that came out differently three turns later.
+        """
+        assert self._handle is not None, "Call reset() before rng_call_counts()"
+        return {
+            name: native.rng_call_count(self._handle, stream)
+            for name, stream in native.RNG_STREAMS.items()
+        }
+
     def action_masks(self) -> np.ndarray:
         """Return a boolean mask of valid actions (for MaskablePPO)."""
         assert self._handle is not None, "Call reset() before action_masks()"

@@ -37,7 +37,7 @@ public static class NativeExports
 
     // v17: observation carries an open card selection (kind, count, candidates).
     // v23: the selection block's own offsets are exported, so a reader can decode it.
-    public const int NATIVE_API_VERSION = 23;
+    public const int NATIVE_API_VERSION = 24;
     private static ReadOnlySpan<int> StarterDeckIds =>
         [472, 472, 472, 472, 472, 131, 131, 131, 131, 30, 10001];
 
@@ -459,6 +459,41 @@ public static class NativeExports
     [UnmanagedCallersOnly(EntryPoint = "Sts2_PendingSelectionKind")]
     public static int Sts2_PendingSelectionKind(int handle) =>
         (int)(_pool[handle]!.State.PendingSelection?.Kind ?? CardSelectionKind.None);
+
+    /// <summary>
+    /// The call count of one named RNG stream, so a differential harness can compare
+    /// stream POSITIONS instead of inferring them from outcomes.
+    /// </summary>
+    /// <remarks>
+    /// The mod reports `battle.rng.&lt;Stream&gt;.counter` for the live side and
+    /// `CountingRandom` has carried `CallCount` all along; this is the half that was
+    /// missing. A move table that diverges because one side made a draw the other did not
+    /// shows up here as an off-by-one on the exact turn it happens, where the intents only
+    /// say that a later roll came out differently.
+    ///
+    /// Stream ids follow the game's own names: 0 Shuffle, 1 CombatTargets,
+    /// 2 CombatCardSelection, 3 CombatCardGeneration, 4 CombatEnergyCosts,
+    /// 5 CombatOrbGeneration, 6 Niche, 7 MonsterAi. A stream the combat never built
+    /// reports -1, which is not the same as a stream sitting at 0.
+    /// </remarks>
+    [UnmanagedCallersOnly(EntryPoint = "Sts2_RngCallCount")]
+    public static int Sts2_RngCallCount(int handle, int stream)
+    {
+        var state = _pool[handle]!.State;
+        var rng = stream switch
+        {
+            0 => state.ShuffleRng,
+            1 => state.TargetRng,
+            2 => state.CardSelectionRng,
+            3 => state.CardGenerationRng,
+            4 => state.EnergyCostRng,
+            5 => state.OrbGenerationRng,
+            6 => state.NicheHpRng,
+            7 => state.AiRng as CountingRandom,
+            _ => null,
+        };
+        return rng?.CallCount ?? -1;
+    }
 
     [UnmanagedCallersOnly(EntryPoint = "Sts2_DebugGainMaxHp")]
     public static unsafe void Sts2_DebugGainMaxHp(int handle, int amount, int* obsBuf)

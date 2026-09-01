@@ -375,6 +375,38 @@ def wait_for_hand_to_reach(
     raise RuntimeError("live game never added the debug cards")
 
 
+def rng_drift(live_state: dict[str, Any], env: Any) -> dict[str, tuple[int, int]]:
+    """Streams whose call counts disagree, as {name: (emu, live)}.
+
+    Every divergence in a move table is ultimately one of two things: the two sides
+    computed different numbers, or they read the same generator at different POSITIONS.
+    Comparing outcomes cannot tell those apart -- a branch that rolls the wrong way looks
+    identical either way -- and three of the four encounters this was built for are the
+    second kind. A stream that is one draw ahead names the turn and the stream, which
+    leaves only the question of what took the draw.
+
+    Streams the emulator never built report -1 and are skipped: not built is not the same
+    as sitting at zero, and the live side always reports every stream.
+    """
+    # `summarize_state` lifts it to the top level; a raw state keeps it under `battle`.
+    live = (live_state.get("rng") or (live_state.get("battle") or {}).get("rng")) or {}
+    if not live:
+        return {}
+    try:
+        emu = env.unwrapped.rng_call_counts()
+    except Exception:  # noqa: BLE001 - an older native library simply cannot answer
+        return {}
+    drift = {}
+    for name, emu_count in emu.items():
+        recorded = live.get(name)
+        if emu_count < 0 or not isinstance(recorded, dict):
+            continue
+        live_count = recorded.get("counter")
+        if isinstance(live_count, int) and live_count != emu_count:
+            drift[name] = (emu_count, live_count)
+    return drift
+
+
 def play_action(live_state: dict[str, Any]) -> int:
     """The first card the live game says is playable, or end turn if none is.
 
@@ -668,6 +700,11 @@ def drive_turns(
                 # replay walks this; `action` alone only describes a turn that played
                 # nothing.
                 "actions": actions,
+                # Stream POSITIONS on both sides. The mod reports the live counters
+                # under `battle.rng` and the emulator exposes `Sts2_RngCallCount`, so a
+                # draw one side makes and the other does not is visible on the turn it
+                # happens rather than as a roll that comes out differently later.
+                "rng_drift": rng_drift(live_summary, env),
                 "live_enemies": [
                     {
                         "name": e.get("name"),
@@ -846,6 +883,14 @@ def capture_one(
         # commonest shape out here -- a segment that reattached, a clutch laid a turn
         # early -- and "three intents against two" does not say whether the extra one
         # survived a hit or was summoned. The HP does.
+        if failed and row.get("rng_drift"):
+            notes.append(
+                f"turn {row['turn']} rng drift (emu vs live): "
+                + ", ".join(
+                    f"{name} {emu}/{live}"
+                    for name, (emu, live) in sorted(row["rng_drift"].items())
+                ),
+            )
         if failed:
             notes.append(
                 f"turn {row['turn']} enemy hp: "

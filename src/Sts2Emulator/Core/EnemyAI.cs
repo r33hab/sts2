@@ -4409,10 +4409,33 @@ public static class EnemyAI
         bool includeDefensive
     )
     {
+        // `SpawnBot` is `RunRng.MonsterAi.NextItem(options)` -- ONE draw per bot, off the
+        // AI stream. Rolling the type off the combat rng instead left MonsterAi two draws
+        // short after a single FABRICATE, and every branch the Fabricator rolled from then
+        // on read the wrong number. Found by comparing stream POSITIONS rather than
+        // outcomes: `MonsterAi 3/5` at turn 3 says which stream and which turn, where the
+        // intents only said a later roll came out differently.
+        var ai = state.AiRng ?? rng;
         int insertIndex = state.Enemies.IndexOf(enemy);
+
+        // `SpawnBot` filters its pool with `m != _lastSpawned` and then takes
+        // `NextItem` -- which draws even from a one-element list, so the draw count does
+        // not change, only the choice. `_lastSpawned` is ONE field shared by both pools,
+        // so a defensive spawn can shut out a defensive option on the next fabricate.
+        int PickBot(int first, int second)
+        {
+            int[] pool =
+                enemy.LastSpawnedDefId == first ? [second]
+                : enemy.LastSpawnedDefId == second ? [first]
+                : [first, second];
+            int chosen = pool[ai.Next(pool.Length)];
+            enemy.LastSpawnedDefId = chosen;
+            return chosen;
+        }
+
         if (includeDefensive && state.Enemies.Count < 6)
         {
-            int defensive = rng.Next(2) == 0 ? KE.Guardbot : KE.Noisebot;
+            int defensive = PickBot(KE.Guardbot, KE.Noisebot);
             var bot = CreateEnemy(
                 defensive,
                 rng,
@@ -4421,11 +4444,11 @@ public static class EnemyAI
                 state: state
             );
             BuffSystem.Apply(bot.Buffs, BuffId.Minion, 1);
-            state.Enemies.Insert(insertIndex++, Effects.RelicEffects.Spawned(state, bot));
+            InsertFabricatorBot(state, enemy, bot);
         }
         if (state.Enemies.Count < 6)
         {
-            int aggro = rng.Next(2) == 0 ? KE.Zapbot : KE.Stabbot;
+            int aggro = PickBot(KE.Zapbot, KE.Stabbot);
             var bot = CreateEnemy(
                 aggro,
                 rng,
@@ -4434,8 +4457,36 @@ public static class EnemyAI
                 state: state
             );
             BuffSystem.Apply(bot.Buffs, BuffId.Minion, 1);
-            state.Enemies.Insert(insertIndex, Effects.RelicEffects.Spawned(state, bot));
+            InsertFabricatorBot(state, enemy, bot);
         }
+    }
+
+    /// <summary>
+    /// Put a fabricated bot in the slot the encounter would give it.
+    /// </summary>
+    /// <remarks>
+    /// `FabricatorNormal.Slots` is `bot1, bot2, fabricator, bot3, bot4` and
+    /// `GetNextSlot` takes the FIRST free one -- so the first two bots stand in front of
+    /// the Fabricator and every one after that stands BEHIND it. The emulator inserted
+    /// every bot ahead of the Fabricator, which puts the roster in an order the game
+    /// never has: `[19, 21, 23, 149]` where the game reads `[21, 19, 149, 23]`. Intents
+    /// are compared by position, and the player's "first enemy" is a position too.
+    /// </remarks>
+    private static void InsertFabricatorBot(
+        CombatState state,
+        EnemyState fabricator,
+        EnemyState bot
+    )
+    {
+        int fabricatorIndex = state.Enemies.IndexOf(fabricator);
+        var spawned = Effects.RelicEffects.Spawned(state, bot);
+        if (fabricatorIndex < FabricatorFrontSlots)
+        {
+            state.Enemies.Insert(fabricatorIndex, spawned);
+            return;
+        }
+
+        state.Enemies.Add(spawned);
     }
 
     /// <summary>
@@ -4598,6 +4649,9 @@ public static class EnemyAI
         // The stunned turn increments MoveIndex on its way past, so -1 lands on BITE.
         enemy.MoveIndex = -1;
     }
+
+    /// <summary>`FabricatorNormal.Slots`: bot1 and bot2 stand ahead of the fabricator.</summary>
+    private const int FabricatorFrontSlots = 2;
 
     /// <summary>`SlumberingBeetle`'s ROLL_OUT: the Strength it takes with every roll.</summary>
     private const int BeetleRolloutStrength = 2;

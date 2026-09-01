@@ -12,7 +12,7 @@ _LIB_NAMES = {
     "darwin": "Sts2Emulator.dylib",
 }
 _ALLOW_STALE_ENV = "STS2_ALLOW_STALE_NATIVE"
-_REQUIRED_NATIVE_API_VERSION = 23
+_REQUIRED_NATIVE_API_VERSION = 24
 _REQUIRED_RUN_NATIVE_API_VERSION = 19
 
 
@@ -228,6 +228,9 @@ _lib.Sts2_DebugAddCardToHand.argtypes = [
 
 _lib.Sts2_PendingSelectionKind.restype = ctypes.c_int
 _lib.Sts2_PendingSelectionKind.argtypes = [ctypes.c_int]
+
+_lib.Sts2_RngCallCount.restype = ctypes.c_int
+_lib.Sts2_RngCallCount.argtypes = [ctypes.c_int, ctypes.c_int]
 
 _lib.Sts2_DebugGainMaxHp.restype = None
 _lib.Sts2_DebugGainMaxHp.argtypes = [
@@ -616,6 +619,26 @@ def debug_add_card_to_hand(
 def pending_selection_kind(handle: int) -> int:
     """Report the kind of card selection the combat is waiting on, or 0 for none."""
     return int(_lib.Sts2_PendingSelectionKind(handle))
+
+
+# The game's own stream names, in the order `Sts2_RngCallCount` expects. Keyed by the
+# name the MOD reports under `battle.rng`, so the two sides can be zipped by name rather
+# than by an index both files have to agree about.
+RNG_STREAMS = {
+    "Shuffle": 0,
+    "CombatTargets": 1,
+    "CombatCardSelection": 2,
+    "CombatCardGeneration": 3,
+    "CombatEnergyCosts": 4,
+    "CombatOrbGeneration": 5,
+    "Niche": 6,
+    "MonsterAi": 7,
+}
+
+
+def rng_call_count(handle: int, stream: int) -> int:
+    """Draws taken from one named stream, or -1 if this combat never built it."""
+    return int(_lib.Sts2_RngCallCount(handle, stream))
 
 
 def debug_gain_max_hp(handle: int, amount: int, obs_buf: ctypes.Array) -> None:

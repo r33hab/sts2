@@ -78,6 +78,13 @@ public sealed class EnemyState
     public List<BuffState> Buffs = [];
 
     /// <summary>
+    /// The def id this creature spawned last, for `Fabricator._lastSpawned`: `SpawnBot`
+    /// filters its pool with `m != _lastSpawned`, so a bot cannot follow itself even
+    /// across the two pools, which share the one field.
+    /// </summary>
+    public int LastSpawnedDefId;
+
+    /// <summary>
     /// `DamageReceivedEntry`s against this enemy from the player, this turn, from POWERED
     /// attacks. Beat Into Shape counts them to size its Forge, and it counts damage
     /// INSTANCES rather than cards -- a multi-hit attack raises it once per hit.
