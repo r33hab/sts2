@@ -813,7 +813,15 @@ public static class CombatEngine
             // relic ever leaves.
             bool ghostSeeded =
                 Effects.RelicEffects.MakesBasicsEthereal(state) && IsBasicStrikeOrDefend(card);
-            if (card.IsEthereal() || ghostSeeded)
+            // `HexPower.TryModifyKeywordsInCombat` grants Ethereal to every card afflicted
+            // with `Hexed`, and `AfterApplied` afflicts EVERY card the player owns in
+            // combat (`AfterCardEnteredCombat` catches the ones made later). So while the
+            // Spectral Knight's Hex is up the whole hand is Ethereal and burns off at end
+            // of turn. The emulator tracked `BuffId.Hex` as a debuff counter and did
+            // nothing with it, so the Knights fight diverged on hands from the turn the
+            // Hex landed and never came back.
+            bool hexed = BuffSystem.Get(state.PlayerBuffs, BuffId.Hex) > 0;
+            if (card.IsEthereal() || ghostSeeded || hexed)
             {
                 Effects.CardEffects.ExhaustCard(state, card, causedByEthereal: true, rng: rng);
                 continue;
@@ -3502,7 +3510,10 @@ public static class CombatEngine
     /// </summary>
     internal static bool IsEtherealForPowers(CombatState state, CardInstance card) =>
         card.IsEthereal()
-        || (Effects.RelicEffects.MakesBasicsEthereal(state) && IsBasicStrikeOrDefend(card));
+        || (Effects.RelicEffects.MakesBasicsEthereal(state) && IsBasicStrikeOrDefend(card))
+        // Hex grants the KEYWORD globally while it is up, so anything that asks whether a
+        // card is Ethereal -- Spirit of Ash, Veilpiercer -- has to see it too.
+        || BuffSystem.Get(state.PlayerBuffs, BuffId.Hex) > 0;
 
     private static bool IsBasicStrikeOrDefend(CardInstance card)
     {
