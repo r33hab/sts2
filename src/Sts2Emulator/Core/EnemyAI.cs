@@ -282,7 +282,7 @@ public static class EnemyAI
 
                 if (enemy.DefId == KE.ThievingHopper && enemy.MoveIndex == 0)
                 {
-                    StealDrawOrDiscardCard(state);
+                    StealDrawOrDiscardCard(state, rng);
                 }
 
                 // WEB_CANNON_MOVE's Frail, and only its: POUNCE_MOVE is
@@ -4257,15 +4257,76 @@ public static class EnemyAI
         enemy.StolenGold += amount;
     }
 
-    private static void StealDrawOrDiscardCard(CombatState state)
+    /// <summary>
+    /// `ThieveryMove`'s steal: the whole draw pile and discard pile together, narrowed to
+    /// the FIRST of four rarity tiers that matches anything, then one taken at random.
+    /// </summary>
+    /// <remarks>
+    /// Taking the top of the draw pile was wrong three ways at once. It ignored the
+    /// tiers, so it would take a Basic over the Uncommon the Hopper is actually after; it
+    /// never looked in the discard, which the game pools with the draw pile; and it spent
+    /// no draw, where the game rolls `Rng.CombatCardGeneration.NextItem` -- so every later
+    /// card generation in the fight was off by one. Against a starter deck all three
+    /// cards are Basic, so only the third tier matches and the visible symptom is just a
+    /// different card going missing: the emulator lost the Bash the game kept.
+    ///
+    /// The order is draw pile then discard pile, which is what
+    /// `CardPile.GetCards(player, PileType.Draw, PileType.Discard)` yields, and the index
+    /// the roll returns is an index into that.
+    /// </remarks>
+    private static void StealDrawOrDiscardCard(CombatState state, Random rng)
     {
-        if (state.DrawPile.Count > 0)
+        var candidates = new List<(bool FromDraw, int Index)>();
+        for (int i = 0; i < state.DrawPile.Count; i++)
         {
-            state.RemoveFromDrawPileAt(0);
+            candidates.Add((true, i));
         }
-        else if (state.DiscardPile.Count > 0)
+
+        for (int i = 0; i < state.DiscardPile.Count; i++)
         {
-            state.DiscardPile.RemoveAt(0);
+            candidates.Add((false, i));
+        }
+
+        if (candidates.Count == 0)
+        {
+            return;
+        }
+
+        CardInstance Card((bool FromDraw, int Index) c) =>
+            c.FromDraw ? state.DrawPile[c.Index] : state.DiscardPile[c.Index];
+        bool NotImbued((bool FromDraw, int Index) c) => Card(c).Enchantment != Enchantment.Imbued;
+        CardRarity Rarity((bool FromDraw, int Index) c) =>
+            GeneratedData.Cards.Get(Card(c).DefId).Rarity;
+
+        Func<(bool FromDraw, int Index), bool>[] tiers =
+        [
+            c => NotImbued(c) && Rarity(c) == CardRarity.Uncommon,
+            c =>
+                NotImbued(c)
+                && Rarity(c) is CardRarity.Common or CardRarity.Rare or CardRarity.Event,
+            c => NotImbued(c) && Rarity(c) is CardRarity.Basic or CardRarity.Quest,
+            c => Rarity(c) == CardRarity.Ancient || !NotImbued(c),
+        ];
+
+        foreach (var tier in tiers)
+        {
+            var matched = candidates.Where(tier).ToList();
+            if (matched.Count > 0)
+            {
+                candidates = matched;
+                break;
+            }
+        }
+
+        var selection = state.CardGenerationRng ?? rng;
+        var picked = candidates[selection.Next(candidates.Count)];
+        if (picked.FromDraw)
+        {
+            state.RemoveFromDrawPileAt(picked.Index);
+        }
+        else
+        {
+            state.DiscardPile.RemoveAt(picked.Index);
         }
     }
 
