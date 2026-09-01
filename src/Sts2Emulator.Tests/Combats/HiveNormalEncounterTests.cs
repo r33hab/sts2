@@ -82,6 +82,55 @@ public class ChompersTests
 public class HunterKillerTests
 {
     /// <summary>
+    /// TENDERIZING_GOOP applies `TenderPower`, not Vulnerable. Tender costs the player 1
+    /// Strength and 1 Dexterity for every card they play that turn and hands it all back
+    /// at the end of it -- a tax on playing MANY cards, not a damage multiplier. As
+    /// Vulnerable it made the bite announce 25 where the game says 17, and made every
+    /// later hit land half again as hard for the rest of the fight.
+    /// </summary>
+    [Fact]
+    public void TheGoopIsTenderAndNotVulnerable()
+    {
+        var fight = HiveNormal.At(CombatFactory.ActOneEncounter.HunterKiller);
+        fight.State.PlayerHp = 900;
+        fight.State.PlayerMaxHp = 900;
+
+        fight.EndTurn(); // the goop lands
+
+        Assert.Equal(1, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.Tender));
+        Assert.Equal(0, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.Vulnerable));
+    }
+
+    /// <summary>Each card played costs 1 Strength and 1 Dexterity; end of turn repays it.</summary>
+    [Fact]
+    public void EveryCardPlayedIsTaxedAndRepaidAtTurnEnd()
+    {
+        var fight = HiveNormal.At(CombatFactory.ActOneEncounter.HunterKiller);
+        fight.State.PlayerHp = 900;
+        fight.State.PlayerMaxHp = 900;
+        fight.EndTurn();
+
+        fight.State.Hand.Clear();
+        fight.State.Hand.Add(new CardInstance(IC.DefendIronclad, false));
+        fight.State.Hand.Add(new CardInstance(IC.DefendIronclad, false));
+        fight.State.Energy = 9;
+
+        fight.Play(0);
+        Assert.Equal(-1, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.Strength));
+        Assert.Equal(-1, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.Dexterity));
+
+        fight.Play(0);
+        Assert.Equal(-2, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.Strength));
+
+        fight.EndTurn();
+
+        Assert.Equal(0, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.Strength));
+        Assert.Equal(0, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.Dexterity));
+        // The power itself is a Counter that lasts the combat.
+        Assert.Equal(1, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.Tender));
+    }
+
+    /// <summary>
     /// TENDERIZING_GOOP once, then a RandomBranchState over BITE and PUNCTURE that both
     /// return to. Equal weights make it a coin flip; `rng.Next(3) == 0` made the bite a
     /// one-in-three. BITE is CannotRepeat and PUNCTURE may run at most twice.
@@ -124,6 +173,52 @@ public class HunterKillerTests
 
 public class LouseProgenitorTests
 {
+    /// <summary>
+    /// CURL_AND_GROW is `GainBlock(CurlBlock)` AND `StrengthPower(5)`. Only the block was
+    /// modelled, so the louse never grew: the game announces POUNCE at 19 then 24 on the
+    /// second and third cycles where the emulator kept saying 14.
+    /// </summary>
+    [Fact]
+    public void CurlingGrowsItByFive()
+    {
+        var fight = HiveNormal.At(CombatFactory.ActOneEncounter.LouseProgenitor);
+        fight.State.PlayerHp = 900;
+        fight.State.PlayerMaxHp = 900;
+        var louse = fight.State.Enemies.First(e => e.DefId == KE.LouseProgenitor);
+
+        // WEB, then CURL.
+        fight.EndTurn();
+        fight.EndTurn();
+
+        Assert.Equal(5, BuffSystem.Get(louse.Buffs, BuffId.Strength));
+        // POUNCE is announced at 14 + 5.
+        Assert.Equal(
+            19,
+            louse.CurrentIntent.Magnitude + BuffSystem.Get(louse.Buffs, BuffId.Strength)
+        );
+    }
+
+    /// <summary>
+    /// The Frail belongs to WEB_CANNON_MOVE. POUNCE_MOVE is `DamageCmd.Attack` and
+    /// nothing else, and it was applying Frail too.
+    /// </summary>
+    [Fact]
+    public void OnlyTheWebIsFrail()
+    {
+        var fight = HiveNormal.At(CombatFactory.ActOneEncounter.LouseProgenitor);
+        fight.State.PlayerHp = 900;
+        fight.State.PlayerMaxHp = 900;
+
+        fight.EndTurn(); // WEB
+        Assert.Equal(2, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.Frail));
+
+        fight.EndTurn(); // CURL
+        fight.State.PlayerBuffs.RemoveAll(b => b.Id == BuffId.Frail);
+        fight.EndTurn(); // POUNCE
+
+        Assert.Equal(0, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.Frail));
+    }
+
     /// <summary>WEB -> CURL -> POUNCE, cycling. Curl's block is the TOUGH pair.</summary>
     [Fact]
     public void ItWebsCurlsAndPouncesInOrder()

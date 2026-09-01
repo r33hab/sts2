@@ -731,6 +731,16 @@ public enum BuffId
     /// Withers at all.
     /// </summary>
     WitheringPresence,
+
+    /// <summary>
+    /// `TenderPower`, the Hunter Killer's TENDERIZING_GOOP. NOT Vulnerable, which is what
+    /// the emulator applied: every card the player plays this turn silently costs them 1
+    /// Strength and 1 Dexterity, and `AfterSideTurnEnd` hands all of it back. It is a tax
+    /// on playing MANY cards in one turn rather than a damage multiplier -- the game
+    /// announced the Hunter Killer's bite at 17 where the emulator, holding Vulnerable,
+    /// said 25.
+    /// </summary>
+    Tender,
 }
 
 public record struct BuffState(BuffId Id, int Magnitude);

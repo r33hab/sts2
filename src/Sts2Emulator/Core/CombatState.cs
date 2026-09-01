@@ -544,6 +544,14 @@ public sealed class CombatState
     /// Arsenal and Pillar of Creation pay from.
     /// </summary>
     public int CardsGeneratedThisCombat;
+
+    /// <summary>
+    /// Cards played this turn while <see cref="BuffId.Tender" /> was up, which is what
+    /// `TenderPower` gives back at the end of the player's turn. The power takes 1
+    /// Strength and 1 Dexterity per card and restores exactly what it took, so the count
+    /// has to be carried rather than recomputed.
+    /// </summary>
+    public int TenderCardsPlayedThisTurn;
     public int UnblockedDamageHitCount; // times player took unblocked damage this combat (TearAsunder)
     public int TargetEnemyIndex = -1; // -1 = auto (first living enemy), >=0 = specific index
 

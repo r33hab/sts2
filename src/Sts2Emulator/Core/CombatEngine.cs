@@ -733,6 +733,16 @@ public static class CombatEngine
         // could be taxed, which made the debuff do nothing at all.
         BuffSystem.Remove(state.PlayerBuffs, BuffId.Tangled);
 
+        // `TenderPower.AfterSideTurnEnd` returns the whole turn's tax at once. The power
+        // itself stays -- it is a Counter that lasts the combat, and only what it took
+        // this turn comes back.
+        if (state.TenderCardsPlayedThisTurn > 0)
+        {
+            BuffSystem.Apply(state.PlayerBuffs, BuffId.Strength, state.TenderCardsPlayedThisTurn);
+            BuffSystem.Apply(state.PlayerBuffs, BuffId.Dexterity, state.TenderCardsPlayedThisTurn);
+            state.TenderCardsPlayedThisTurn = 0;
+        }
+
         bool allDeadAfterEndTurnPowers = NoPrimaryEnemyLeft(state);
         if (allDeadAfterEndTurnPowers)
         {
@@ -3654,6 +3664,17 @@ public static class CombatEngine
     )
     {
         Effects.RelicEffects.ApplyAfterCardPlayed(state, def, rng, energySpent);
+
+        // `TenderPower.AfterCardPlayed`: every card the player plays costs 1 Strength and
+        // 1 Dexterity, applied `silent: true` -- so it does not go through
+        // `GainPlayerStrength`, whose Girya doubling is an on-GAIN hook this must not
+        // trip. `AfterSideTurnEnd` gives back exactly what was taken.
+        if (BuffSystem.Get(state.PlayerBuffs, BuffId.Tender) > 0)
+        {
+            BuffSystem.Apply(state.PlayerBuffs, BuffId.Strength, -1);
+            BuffSystem.Apply(state.PlayerBuffs, BuffId.Dexterity, -1);
+            state.TenderCardsPlayedThisTurn++;
+        }
 
         // `WitheringPresencePower.AfterCardPlayed`: every card the player plays takes one
         // off `CardsLeft`, and at zero the player is handed a Wither and the count resets

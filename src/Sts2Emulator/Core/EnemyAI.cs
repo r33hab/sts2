@@ -604,6 +604,17 @@ public static class EnemyAI
                     BuffSystem.Apply(enemy.Buffs, BuffId.Strength, 5);
                 }
 
+                // CURL_AND_GROW_MOVE is `GainBlock(CurlBlock)` and then
+                // `StrengthPower(5)` -- the same shape as the Mecha Knight's windup, and
+                // the half that was missing. Without it the louse never grew: the game
+                // announces POUNCE at 19 then 24 on its second and third cycles where the
+                // emulator kept saying 14, and every number after the first curl was the
+                // base one.
+                if (enemy.DefId == KE.LouseProgenitor)
+                {
+                    BuffSystem.Apply(enemy.Buffs, BuffId.Strength, LouseCurlStrength);
+                }
+
                 if (enemy.DefId == KE.Axebot && enemy.MoveIndex == 0)
                 {
                     // BootUpStrGain * (2 - StockAmount): nothing on the bot that opens the
@@ -1338,6 +1349,7 @@ public static class EnemyAI
                 };
 
             case KE.LouseProgenitor:
+                // WEB_CANNON -> CURL_AND_GROW -> POUNCE, a fixed ring with no branch.
                 return (enemy.MoveIndex % 3) switch
                 {
                     // WebDamage
@@ -3799,15 +3811,24 @@ public static class EnemyAI
 
             case KE.LouseProgenitor:
                 DealAttackDamage(enemy, state, enemy.CurrentIntent.Magnitude);
-                BuffSystem.Apply(state.PlayerBuffs, BuffId.Frail, 2);
+                // The Frail belongs to WEB_CANNON_MOVE, which is move 0 of the fixed
+                // three-cycle; POUNCE_MOVE is `DamageCmd.Attack` and nothing else. The
+                // index still names the move being executed here -- it is bumped at the
+                // end of the enemy's turn.
+                if (enemy.MoveIndex % 3 == 0)
+                {
+                    BuffSystem.Apply(state.PlayerBuffs, BuffId.Frail, LouseWebFrail);
+                }
+
                 break;
 
             case KE.HunterKiller:
-                BuffSystem.Apply(
-                    state.PlayerBuffs,
-                    BuffId.Vulnerable,
-                    enemy.CurrentIntent.Magnitude
-                );
+                // TENDERIZING_GOOP_MOVE is `PowerCmd.Apply<TenderPower>(targets, 1)`, not
+                // Vulnerable. Vulnerable made the bite announce 25 where the game says 17,
+                // and made every later hit land half again as hard for the rest of the
+                // fight; Tender costs the player Strength and Dexterity per card played
+                // and gives it back at end of turn.
+                BuffSystem.Apply(state.PlayerBuffs, BuffId.Tender, 1);
                 break;
 
             case KE.FakeMerchant:
@@ -4508,6 +4529,12 @@ public static class EnemyAI
         // The stunned turn increments MoveIndex on its way past, so -1 lands on BITE.
         enemy.MoveIndex = -1;
     }
+
+    /// <summary>`LouseProgenitor._growStrength`: what CURL_AND_GROW adds.</summary>
+    private const int LouseCurlStrength = 5;
+
+    /// <summary>`LouseProgenitor._webFrail`: WEB_CANNON's Frail, and only its.</summary>
+    private const int LouseWebFrail = 2;
 
     /// <summary>
     /// The Scroll of Biting: CHOMP -> MORE_TEETH -> CHEW, then a branch back into it.
