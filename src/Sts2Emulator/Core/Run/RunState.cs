@@ -533,6 +533,14 @@ public sealed class RunState
     public int PendingOfferPicks;
 
     /// <summary>
+    /// Whether the offer grid may be closed with fewer picks taken, which is
+    /// `CardSelectorPrefs(prompt, MIN, max)` with a min of ZERO and a manual confirm.
+    /// Sea Glass is the one that has it: fifteen cards, take any number including none.
+    /// Every other grid names one number and closes itself when the picks run out.
+    /// </summary>
+    public bool PendingOfferOptional;
+
+    /// <summary>
     /// Which page of a multi-page event is showing; 0 is the one it opens on. Most
     /// events answer a choice by finishing, but a few answer it with a fresh page of
     /// their own options -- Punch Off's "I Can Take Them" leads to a page whose only

@@ -354,6 +354,7 @@ public static class StateCloning
             BundleOffer = (int[])state.BundleOffer.Clone(),
             SelectedBundle = state.SelectedBundle,
             PendingOfferPicks = state.PendingOfferPicks,
+            PendingOfferOptional = state.PendingOfferOptional,
             EventPage = state.EventPage,
             CrystalSphere = state.CrystalSphere?.Clone(),
             CrystalSphereRng = state.CrystalSphereRng?.Clone(),

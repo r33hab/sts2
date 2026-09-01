@@ -695,6 +695,15 @@ public sealed class RunEngine
                     {
                         SetMask(mask, i);
                     }
+
+                    // One past the last card is DONE, for a grid whose MinSelect is zero.
+                    // Without it the only way off a Sea Glass screen is to take all
+                    // fifteen, which is a different deck from the one a player who wanted
+                    // three would have.
+                    if (State.PendingOfferOptional)
+                    {
+                        SetMask(mask, State.PendingOfferCards.Length);
+                    }
                 }
                 else if (State.PendingRestUpgrade)
                 {
@@ -4306,6 +4315,13 @@ public sealed class RunEngine
     /// </summary>
     private int StepOfferSelect(int action)
     {
+        if (State.PendingOfferOptional && action == State.PendingOfferCards.Length)
+        {
+            // The confirm. `CardSelectCmd.FromSimpleGridForRewards` hands back whatever
+            // was chosen, which may be nothing at all.
+            return CloseOfferGrid();
+        }
+
         if ((uint)action >= (uint)State.PendingOfferCards.Length)
         {
             return -1;
@@ -4323,8 +4339,15 @@ public sealed class RunEngine
             return 0;
         }
 
+        return CloseOfferGrid();
+    }
+
+    /// <summary>Shuts the offer grid and runs whatever was waiting behind it.</summary>
+    private int CloseOfferGrid()
+    {
         State.PendingOfferCards = [];
         State.PendingOfferPicks = 0;
+        State.PendingOfferOptional = false;
 
         // Hefty Tablet's Injury comes WITH the card the grid hands over, not before it:
         // CardPileCmd.Add takes ONE list holding the curse with the chosen card inserted

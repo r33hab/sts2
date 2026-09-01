@@ -602,10 +602,10 @@ public static class RunNonCombatEffects
                 // draws, the same budget as Glass Eye.
                 //
                 // The screen is a 0-to-15 multi-select with a confirm
-                // (`CardSelectorPrefs(prompt, 0, list.Count)`), and the emulator's offer
-                // grid cannot express "stop early" -- it hands over picks until they run
-                // out. A run that wanted only some of the fifteen will diverge here; one
-                // that takes them all will not. See O16.
+                // (`CardSelectorPrefs(prompt, 0, list.Count)`): MinSelect ZERO, so the
+                // player may take any number of the fifteen, including none. That is what
+                // `PendingOfferOptional` is -- every other grid names one number and
+                // closes itself when the picks run out. Closes O16.
                 state.PendingOfferCards =
                 [
                     .. new[] { CardRarity.Common, CardRarity.Uncommon, CardRarity.Rare }.SelectMany(
@@ -622,6 +622,7 @@ public static class RunNonCombatEffects
                     ),
                 ];
                 state.PendingOfferPicks = state.PendingOfferCards.Length;
+                state.PendingOfferOptional = true;
                 return RunFollowUp.PreRolledCardReward;
             case RunConstants.RelicGlassEye:
                 // FIVE card rewards on one screen — Common, Common, Uncommon, Uncommon,

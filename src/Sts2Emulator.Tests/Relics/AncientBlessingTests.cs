@@ -245,6 +245,48 @@ public class AncientBlessingTests
         Assert.All(engine.State.PendingOfferCards, card => Assert.DoesNotContain(card, ironclad));
     }
 
+    /// <summary>
+    /// `CardSelectorPrefs(prompt, 0, list.Count)` is MinSelect ZERO with a manual
+    /// confirm: the player may take any number of the fifteen, including none. The grid
+    /// used to hand over picks until they ran out, so the only way off the screen was to
+    /// take all fifteen -- a different deck from the one a player who wanted three would
+    /// have. Closes O16.
+    /// </summary>
+    [Fact]
+    public void SeaGlassLetsThePlayerStopEarly()
+    {
+        var engine = Pristine.Clone();
+        RunNonCombatEffects.GenerateAncientOptions(engine.State, RunConstants.AncientOrobas);
+        RunNonCombatEffects.ApplyRelicPickup(engine.State, RunConstants.RelicSeaGlass);
+        engine.State.Phase = RunPhase.TransformSelect;
+        int deckBefore = engine.State.Deck.Count;
+
+        engine.Step(0, -1, out _, out _, out _);
+        engine.Step(0, -1, out _, out _, out _);
+        // One past the last remaining card is the confirm.
+        engine.Step(engine.State.PendingOfferCards.Length, -1, out _, out _, out _);
+
+        Assert.Equal(deckBefore + 2, engine.State.Deck.Count);
+        Assert.Empty(engine.State.PendingOfferCards);
+        Assert.False(engine.State.PendingOfferOptional);
+    }
+
+    /// <summary>Taking none at all is a legal answer to a MinSelect of zero.</summary>
+    [Fact]
+    public void SeaGlassCanBeDeclinedOutright()
+    {
+        var engine = Pristine.Clone();
+        RunNonCombatEffects.GenerateAncientOptions(engine.State, RunConstants.AncientOrobas);
+        RunNonCombatEffects.ApplyRelicPickup(engine.State, RunConstants.RelicSeaGlass);
+        engine.State.Phase = RunPhase.TransformSelect;
+        int deckBefore = engine.State.Deck.Count;
+
+        engine.Step(engine.State.PendingOfferCards.Length, -1, out _, out _, out _);
+
+        Assert.Equal(deckBefore, engine.State.Deck.Count);
+        Assert.Empty(engine.State.PendingOfferCards);
+    }
+
     [Fact]
     public void SeaGlassOffersFiveOfEachRarityInOrder()
     {
