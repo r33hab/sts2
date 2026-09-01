@@ -4400,10 +4400,20 @@ public static class EnemyAI
     private static void SummonToughEggs(EnemyState enemy, CombatState state, Random rng)
     {
         // The cap is FREE SLOTS, and a slot is free when nothing LIVING stands in it:
-        // `Slots.LastOrDefault(s => Enemies.All(c => c.SlotName != s))`. Counting the
-        // whole roster instead means a corpse still holding a place in the list keeps the
-        // clutch one egg short.
-        int eggsToAdd = Math.Min(3, 6 - state.Enemies.Count(other => other.Hp > 0));
+        // `Slots.LastOrDefault(s => Enemies.All(c => c.SlotName != s))`. The game REMOVES
+        // a dead creature, so its slot comes back; the emulator keeps the corpse in the
+        // roster on purpose, to hold an observation slot steady. Counting only the living
+        // gets the COUNT right and then grows the list past six, which silently pushes
+        // the Ovicopter itself out of the observation's six enemy slots -- it stopped
+        // being reported at all, while the game still had it at 116.
+        //
+        // So a dead egg's place is REUSED rather than added to. That is what the game
+        // does with the slot, and it keeps the roster the size the readout can hold.
+        var deadEggs = state
+            .Enemies.Where(other => other.Hp <= 0 && other.DefId == KE.ToughEgg)
+            .ToList();
+        int freeSlots = 6 - state.Enemies.Count(other => other.Hp > 0);
+        int eggsToAdd = Math.Min(3, freeSlots);
         for (int i = 0; i < eggsToAdd; i++)
         {
             // `Slots` is `egg1..egg5, ovicopter` and LayEggs takes
@@ -4427,7 +4437,17 @@ public static class EnemyAI
                 state: state
             );
             BuffSystem.Apply(egg.Buffs, BuffId.Minion, 1);
-            state.Enemies.Insert(insertIndex, Effects.RelicEffects.Spawned(state, egg));
+            var spawned = Effects.RelicEffects.Spawned(state, egg);
+            if (deadEggs.Count > 0)
+            {
+                // Reuse the corpse's place: the game freed that slot and refilled it.
+                var corpse = deadEggs[0];
+                deadEggs.RemoveAt(0);
+                state.Enemies[state.Enemies.IndexOf(corpse)] = spawned;
+                continue;
+            }
+
+            state.Enemies.Insert(insertIndex, spawned);
         }
     }
 

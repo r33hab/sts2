@@ -751,12 +751,20 @@ def drive_turns(
         except Exception:  # noqa: BLE001 - never fail a sweep over instrumentation
             emu_hand_size = action
         if emu_hand_size != action:
-            # Still reported: the two sides holding different numbers of cards at the end
-            # of a turn is a real divergence. It is no longer also a mis-step.
-            notes.append(
-                f"turn {turn}: hands differ at end of turn -- emulator holds "
-                f"{emu_hand_size} cards, live holds {action}",
-            )
+            # Re-read before believing it. A power can add a card on a DELAY --
+            # `WitheringPresencePower.AfterCardPlayed` does `await Cmd.Wait(0.5f)` before
+            # handing over its Wither -- so a live hand read the instant a play settles is
+            # a hand the game has not finished filling. The emulator has no such delay and
+            # looks one card ahead, which is a readout race and not a divergence.
+            time.sleep(0.75)
+            live_state = start_real_game_run.get_state(base_url)
+            settled = end_turn_action(live_state)
+            if emu_hand_size != settled:
+                notes.append(
+                    f"turn {turn}: hands differ at end of turn -- emulator holds "
+                    f"{emu_hand_size} cards, live holds {settled}",
+                )
+            action = settled
         actions.append(action)
         round_before = live_round(live_state)
         trace_real_game.post_action(base_url, {"action": "end_turn"})
