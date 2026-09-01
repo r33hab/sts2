@@ -79,6 +79,22 @@ clean — 38 of 38 on deck order, roster, HP and opening intents — so what is 
 narrower than "act 2 is unverified": it is enemy move tables. `combat_sweep.py --act hive`
 and `--act glory` name the fights.
 
+**A9 is clean; a second and third SEED are not.** After E427-E436 both acts swept clean at
+A8 and at A9 on seed `QS2GYXRKWN`. Three seeds found four more, none of which one seed
+could show:
+
+| encounter | seeds | what the sweep saw |
+| --- | --- | --- |
+| `ovicopter` | 4MW6NTLDWU | four creatures at turn 3 where the game has three, then THREE where the game has five: the clutches are laid on different turns, which E430 fixed only for the path seed 1 walked |
+| `decimillipede` | 4MW6NTLDWU | three segments alive at turn 6 where the game has two |
+| `fabricator` | DY8J86G9K6 | its bots' intents diverge from turn 3, and one side is announcing a Defend the other is not |
+| `aeonglass` | DY8J86G9K6, 4MW6NTLDWU | the move cycle is a step out: the emulator announces EYE_LASERS where the game announces INCREASING_INTENSITY, and the player's hand is three cards against five |
+
+`aeonglass` and `fabricator` had never been compared at all -- on seed 1 the auto-player
+could not drive them and both came back `CAPTURE FAILED: live game never played the card`.
+**A new seed does not only walk new branches; it makes encounters DRIVEABLE that the old
+one could not drive**, and a summary line that reads 15/18 hides which three were missing.
+
 All of it is known-wrong or never-checked rather than merely unlisted; every batch put
 through the combat suite so far has found something. HANDOFF's "Next work" is the register for that, and it is the one to
 read before deciding what to do next.
