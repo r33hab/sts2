@@ -1331,6 +1331,13 @@ public static class CombatEngine
             }
         }
 
+        // `RampartPower.AfterSideTurnStart` is the ONLY thing that armours the Turret
+        // Operator: the shield grants it at the start of the PLAYER's turn, and the
+        // turret's own moves are two Unloads and a Reload that takes Strength. A second
+        // grant of 25 sat in the ATTACK branch of `EnemyAI`, left behind when the block
+        // was moved off RELOAD_MOVE onto the power -- so the turret carried 50 where the
+        // game gives it 25. Settled by comparing enemy BLOCK, which nothing did until
+        // now; see O18.
         int rampart = state
             .Enemies.Where(e => e.Hp > 0)
             .Select(e => BuffSystem.Get(e.Buffs, BuffId.Rampart))

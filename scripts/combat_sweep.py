@@ -824,6 +824,7 @@ def drive_turns(
                     {
                         "name": e.get("name"),
                         "hp": e.get("hp"),
+                        "block": e.get("block"),
                         "intent": validate.live_enemy_intent(e),
                     }
                     for e in live_summary.get("enemies") or []
@@ -831,10 +832,19 @@ def drive_turns(
                 "emu_enemies": [
                     {
                         "hp": e.get("hp"),
+                        "block": e.get("block"),
                         "intent": (e.get("intent_type"), e.get("intent_magnitude")),
                     }
                     for e in living_emu_enemies(emu_summary)
                 ],
+                # Enemy BLOCK, which nothing compared. It is the only readout that says
+                # whether a Defend intent paid what it announced, and O18 -- the Turret
+                # Operator's Rampart -- has stood open for want of exactly this: "a live
+                # capture compares intents and player HP, not enemy block".
+                "block_match": [
+                    e.get("block") for e in live_summary.get("enemies") or []
+                ]
+                == [e.get("block") for e in living_emu_enemies(emu_summary)],
                 "intents_match": len(live_intents) == len(emu_intents)
                 and all(
                     map(intents_agree, live_intents, emu_intents),
@@ -972,7 +982,10 @@ def capture_one(
     }
     if turns:
         sections["turns"] = all(
-            row["intents_match"] and row["player_match"] and row["hand_match"]
+            row["intents_match"]
+            and row["player_match"]
+            and row["hand_match"]
+            and row["block_match"]
             for row in turn_rows
         )
 
@@ -1000,7 +1013,10 @@ def capture_one(
         # and a note that omits them makes the reader guess: Paper Cuts on the Scrolls
         # fights showed as identical HP, drifting max HP, and no way to tell what hit.
         failed = not (
-            row["intents_match"] and row["player_match"] and row["hand_match"]
+            row["intents_match"]
+            and row["player_match"]
+            and row["hand_match"]
+            and row["block_match"]
         )
         if failed and row["intents_match"]:
             notes.append(
@@ -1044,6 +1060,12 @@ def capture_one(
             notes.append(
                 f"turn {row['turn']} piles draw/disc/exh: "
                 f"emu {row.get('emu_piles')} vs live {row.get('live_piles')}",
+            )
+        if not row["block_match"]:
+            notes.append(
+                f"turn {row['turn']} enemy block: "
+                f"emu {[e['block'] for e in row['emu_enemies']]} "
+                f"vs live {[e['block'] for e in row['live_enemies']]}",
             )
         if failed or row.get("rng_drift"):
             notes.append(

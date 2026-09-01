@@ -309,11 +309,6 @@ public static class EnemyAI
                     SummonFabricatorBots(enemy, state, rng, includeDefensive: false);
                 }
 
-                if (enemy.DefId == KE.TurretOperator)
-                {
-                    enemy.Block += 25;
-                }
-
                 if (enemy.DefId == KE.PunchConstruct && enemy.MoveIndex % 3 == 1)
                 {
                     BuffSystem.Apply(state.PlayerBuffs, BuffId.Frail, 1);
