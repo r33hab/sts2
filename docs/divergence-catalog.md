@@ -88,7 +88,7 @@ could show:
 | `ovicopter` | 4MW6NTLDWU | four creatures at turn 3 where the game has three, then THREE where the game has five: the clutches are laid on different turns, which E430 fixed only for the path seed 1 walked |
 | `decimillipede` | 4MW6NTLDWU | three segments alive at turn 6 where the game has two |
 | `fabricator` | DY8J86G9K6 | its bots' intents diverge from turn 3, and one side is announcing a Defend the other is not |
-| `aeonglass` | DY8J86G9K6, 4MW6NTLDWU | the move cycle is a step out: the emulator announces EYE_LASERS where the game announces INCREASING_INTENSITY, and the player's hand is three cards against five |
+| `aeonglass` | DY8J86G9K6, 4MW6NTLDWU | **not established as an emulator defect.** The drift line says `Shuffle 10/19` -- the emulator never reshuffles, its hand is three cards against five and its piles read `draw 1, discard 8, exhaust 0` against the game's `6, 0, 1`. But driving the emulator DIRECTLY through the same actions the sweep records reproduces the game exactly: shuffle 19, piles `6, 0, 1`, and the identical five-card hand. So the two sides part company inside the harness, somewhere before the first row the sweep prints, and the encounter is unproven rather than wrong |
 
 `aeonglass` and `fabricator` had never been compared at all -- on seed 1 the auto-player
 could not drive them and both came back `CAPTURE FAILED: live game never played the card`.
@@ -989,3 +989,12 @@ It also found its own blind spot immediately: the first wiring compared nothing,
 `summarize_state` did not carry `rng` and silently returned an empty drift. That function
 already says three times, about `allies`, `stars` and `orbs`, that **a summary which drops
 a field is the same blindness one layer up**. It now says it a fourth time about this one.
+
+**An encounter that fails a sweep has not necessarily been shown to be wrong.** Every
+other divergence this week reproduced the moment it was driven by hand; `aeonglass` did
+not. Driven directly through the same action sequence the sweep records, the emulator
+lands on the game's shuffle count, the game's pile sizes and the game's exact hand. The
+sweep's own run of it does not, which makes the harness the first suspect rather than the
+last. That distinction is only visible because the notes now print the action run-up and
+the pile sizes: with just "the intents diverged" it would have gone into the catalog as a
+defect and someone would have gone looking for it in `EnemyAI`.

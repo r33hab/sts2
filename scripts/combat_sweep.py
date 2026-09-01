@@ -730,6 +730,19 @@ def drive_turns(
                 "live_player_hp": live_player.get("hp"),
                 "live_player_max_hp": live_player.get("max_hp"),
                 "emu_player_hp": emu_player.get("hp"),
+                # Pile SIZES on both sides. A hand that comes up short says the draw ran
+                # out; only the piles say whether the cards are in the discard waiting for
+                # a reshuffle that did not happen, or gone from the combat altogether.
+                "live_piles": [
+                    live_player.get("draw_pile_count"),
+                    live_player.get("discard_pile_count"),
+                    live_player.get("exhaust_pile_count"),
+                ],
+                "emu_piles": [
+                    emu_player.get("draw_pile_count"),
+                    emu_player.get("discard_pile_count"),
+                    emu_player.get("exhaust_pile_count"),
+                ],
                 "emu_player_max_hp": emu_player.get("max_hp"),
                 # The hand IN ORDER, by model slug. This is what puts the mid-combat
                 # RESHUFFLE under test: the pile counts can agree turn after turn while
@@ -894,6 +907,28 @@ def capture_one(
                     f"{name} {emu}/{live}"
                     for name, (emu, live) in sorted(row["rng_drift"].items())
                 ),
+            )
+        # What the turn actually played. The policy sends the LIVE game's choice to both
+        # sides, so a row can fail because of what was played rather than because of what
+        # either side did with it -- and without the actions in the note there is no way
+        # to tell a divergence from a harness artefact.
+        if failed:
+            # Every turn's actions up to this one, not just this turn's. A row fails
+            # because of the state it INHERITED, and the actions that built that state
+            # were taken on turns that passed -- printing only the failing turn's actions
+            # describes the symptom and hides the run-up.
+            notes.append(
+                f"turn {row['turn']} actions so far: "
+                + " | ".join(
+                    f"t{earlier['turn']}={earlier.get('actions')}"
+                    for earlier in turn_rows
+                    if earlier["turn"] <= row["turn"]
+                ),
+            )
+        if failed:
+            notes.append(
+                f"turn {row['turn']} piles draw/disc/exh: "
+                f"emu {row.get('emu_piles')} vs live {row.get('live_piles')}",
             )
         if failed or row.get("rng_drift"):
             notes.append(
