@@ -48,8 +48,24 @@ right about the Fogmog all along. The capture that reproduced it is committed as
 nobody has closed. It is not a measure of what is wrong with the emulator, and right now
 it is a bad proxy for one: the largest known defect surface is not in it at all. That is
 **no suspect ascension literals left** (`scripts/audit_ascension_literals.py` reports
-zero) and **three whole characters — Defect, Necrobinder, Regent, 264 cards — with not one
-card verified**.
+zero) and **the two STARTING characters barely captured at all**. That last line used to
+read "three whole characters — Defect, Necrobinder, Regent, 264 cards — with not one card
+verified", and it was badly stale: those three are now the best-covered pools in the game.
+Counted against `tests/fixtures/cards`, singleplayer-reachable cards only:
+
+| pool | captured | | pool | captured |
+| --- | --- | --- | --- | --- |
+| Defect | 88/88 | | Ironclad | 29/85 |
+| Necrobinder | 88/88 | | Silent | 21/86 |
+| Regent | 87/87 | | Colorless | 23/53 |
+| | | | Curse | 1/18 |
+| | | | Status | 1/12 |
+
+**182 singleplayer-reachable cards have never been played against the game**, and they are
+the wrong 182: Ironclad and Silent are in every act-1 run and get played constantly, while
+the three pools that are finished belong to characters a run has to be started
+deliberately as. The 21 `MultiplayerOnly` cards are excluded throughout — `Ignition` is
+one, which is why Defect reads 88/88 rather than 87/88.
 
 **"No encounter left unwalked" is not what an empty `CombatCoverageTests.Pending` means**,
 and reading it that way is how acts 2 and 3 stayed unmeasured. It means every encounter
@@ -916,3 +932,11 @@ a call left behind when its site moved, and a buff nothing read. The intent tabl
 names, types, ascension pairs -- were transcribed carefully and are almost entirely
 correct. What was missing was the BODY of each move, which is the part an intent readout
 cannot check and an opening-state sweep agrees with completely.
+
+**A coverage claim ages faster than anything else in this file.** The "264 cards with not
+one verified" line was true when written and wrong by the time it was quoted -- I repeated
+it twice as the largest remaining surface before counting, and the count reversed it
+exactly: the three pools it named are done and the two it did not name are the gap. A
+defect entry describes something that happened and stays true; a coverage figure describes
+a moment. **Anything in this file that is a NUMBER about how much is covered should be
+recomputed before it is repeated**, and the command that recomputes it belongs beside it.
