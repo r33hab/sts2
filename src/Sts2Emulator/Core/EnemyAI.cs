@@ -1488,8 +1488,14 @@ public static class EnemyAI
                 // FABRICATING_STRIKE. With the bench full it DISINTEGRATES instead, a move
                 // the emulator never reached: it rolled the pair unconditionally, so a
                 // Fabricator with four bots up kept summoning into a full board.
-                bool canFabricate =
-                    (roster?.Count(other => other.Hp > 0 && other != enemy) ?? 0) < 4;
+                // `CanFabricate` is `GetTeammatesOf(this).Count(alive) < 4`, and
+                // `GetTeammatesOf` is `GetCreaturesOnSide` -- everyone on the side, THE
+                // FABRICATOR INCLUDED. Excluding itself let it fabricate with three bots
+                // up, where the game disintegrates; and because the fabricate branch ROLLS
+                // and disintegrate does not, that also spent an AI draw the game never
+                // made, so every later branch in the fight read the wrong number. Exactly
+                // E430's off-by-one on the Ovicopter, in the same shape, one act over.
+                bool canFabricate = (roster?.Count(other => other.Hp > 0) ?? 0) < 4;
                 if (!canFabricate)
                 {
                     // DisintegrateDamage
