@@ -285,9 +285,14 @@ public static class EnemyAI
                     StealDrawOrDiscardCard(state);
                 }
 
-                if (enemy.DefId == KE.LouseProgenitor && enemy.MoveIndex == 0)
+                // WEB_CANNON_MOVE's Frail, and only its: POUNCE_MOVE is
+                // `DamageCmd.Attack` and nothing else. This is the LIVE site -- a second
+                // `case KE.LouseProgenitor` sat in `ApplyDebuffIntent`, which the louse
+                // never reaches because none of its three intents is a Debuff. It has
+                // been removed rather than corrected.
+                if (enemy.DefId == KE.LouseProgenitor && enemy.MoveIndex % 3 == 0)
                 {
-                    BuffSystem.Apply(state.PlayerBuffs, BuffId.Frail, 2);
+                    BuffSystem.Apply(state.PlayerBuffs, BuffId.Frail, LouseWebFrail);
                 }
 
                 // TENDERIZER_MOVE's rider, which used to ride on the Debuff branch
@@ -561,6 +566,26 @@ public static class EnemyAI
                 {
                     BuffSystem.Apply(state.PlayerBuffs, BuffId.Vulnerable, 2);
                     BuffSystem.Apply(state.PlayerBuffs, BuffId.Weak, 2);
+                }
+
+                // ROLL_OUT_MOVE is `DamageCmd.Attack(RolloutDamage)` and then
+                // `StrengthPower(2)` on itself, and it follows up to ITSELF -- so the
+                // beetle's damage climbs 16, 18, 20 once it wakes. Only the attack was
+                // modelled, so it announced 16 every turn where the game said 18 then 20.
+                // The `BuffIntent()` riding beside the attack in its MoveState is what
+                // says there is a second half.
+                if (enemy.DefId == KE.SlumberingBeetle)
+                {
+                    BuffSystem.Apply(enemy.Buffs, BuffId.Strength, BeetleRolloutStrength);
+                }
+
+                // SPIKE_EXPLOSION_MOVE ends with `ThornsPower(-5)`: the explosion SPENDS
+                // the Thorns that PROTRUDING_SPIKES put up. Never taking it away left the
+                // toad stacking 5 more every cycle, so a player who kept attacking it took
+                // escalating damage the game never dealt.
+                if (enemy.DefId == KE.SpinyToad && enemy.MoveIndex % 3 == 1)
+                {
+                    BuffSystem.Apply(enemy.Buffs, BuffId.Thorns, -ToadSpikeThorns);
                 }
 
                 // BarrageMove's StrengthPower, which followed its attack into the attack
@@ -3812,19 +3837,6 @@ public static class EnemyAI
                 AddStatusToHand(state, ST.Toxic, enemy.CurrentIntent.Magnitude);
                 break;
 
-            case KE.LouseProgenitor:
-                DealAttackDamage(enemy, state, enemy.CurrentIntent.Magnitude);
-                // The Frail belongs to WEB_CANNON_MOVE, which is move 0 of the fixed
-                // three-cycle; POUNCE_MOVE is `DamageCmd.Attack` and nothing else. The
-                // index still names the move being executed here -- it is bumped at the
-                // end of the enemy's turn.
-                if (enemy.MoveIndex % 3 == 0)
-                {
-                    BuffSystem.Apply(state.PlayerBuffs, BuffId.Frail, LouseWebFrail);
-                }
-
-                break;
-
             case KE.HunterKiller:
                 // TENDERIZING_GOOP_MOVE is `PowerCmd.Apply<TenderPower>(targets, 1)`, not
                 // Vulnerable. Vulnerable made the bite announce 25 where the game says 17,
@@ -4532,6 +4544,15 @@ public static class EnemyAI
         // The stunned turn increments MoveIndex on its way past, so -1 lands on BITE.
         enemy.MoveIndex = -1;
     }
+
+    /// <summary>`SlumberingBeetle`'s ROLL_OUT: the Strength it takes with every roll.</summary>
+    private const int BeetleRolloutStrength = 2;
+
+    /// <summary>
+    /// `SpinyToad`'s PROTRUDING_SPIKES puts up this much Thorns and SPIKE_EXPLOSION takes
+    /// exactly it back down again.
+    /// </summary>
+    private const int ToadSpikeThorns = 5;
 
     /// <summary>`LouseProgenitor._growStrength`: what CURL_AND_GROW adds.</summary>
     private const int LouseCurlStrength = 5;
