@@ -4554,10 +4554,24 @@ public static class CardEffects
                 BuffSystem.Apply(target.Buffs, BuffId.Poison, envenom);
             }
 
+            // `PersonalHivePower.AfterDamageReceived` adds its Dazed at
+            // `CardPilePosition.Random`, which `CardPileCmd` resolves as one
+            // `Rng.Shuffle.NextInt(pile.Count + 1)` per card. Bottom-decking them is wrong
+            // twice over: the card arrives on a different turn, and the placement SPENDS A
+            // SHUFFLE DRAW that the emulator was not making -- the same stream desync as
+            // E427, and it moves every later shuffle in the fight.
             int personalHive = BuffSystem.Get(target.Buffs, BuffId.PersonalHive);
-            for (int i = 0; i < personalHive; i++)
+            if (personalHive > 0)
             {
-                state.BottomDeck(new CardInstance(ST.Dazed, false));
+                // No rng parameter reaches this far down the damage path, and the helper
+                // prefers `state.ShuffleRng` anyway; the fallback is only for a state
+                // built without one, which is a hand-made test fight rather than a run.
+                AddCardToDrawPileRandomly(
+                    state,
+                    ST.Dazed,
+                    personalHive,
+                    state.ShuffleRng ?? new Random(0)
+                );
             }
 
             int curlUp = BuffSystem.Get(target.Buffs, BuffId.CurlUp);

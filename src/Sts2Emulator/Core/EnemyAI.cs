@@ -1324,10 +1324,13 @@ public static class EnemyAI
                 // that always does both -- `% 4` gave the Ovicopter an extra turn.
                 return (enemy.MoveIndex % 3) switch
                 {
-                    // CanLay is `living teammates <= 3`. With none it always lays, which
-                    // is why the eggs it summons decide its own next move.
-                    0 => roster is not null
-                    && roster.Count(other => !ReferenceEquals(other, enemy) && other.Hp > 0) > 3
+                    // CanLay is `GetTeammatesOf(this).Count(alive) <= 3`, and
+                    // `GetTeammatesOf` is `GetCreaturesOnSide` -- everyone on the side,
+                    // THE OVICOPTER INCLUDED. So it lays only while at most TWO eggs are
+                    // alive. Excluding itself let it lay one egg-load too many, which is
+                    // both the extra pair of eggs the game does not have and the Strength
+                    // it never gained: the game takes NUTRITIONAL_PASTE at that branch.
+                    0 => roster is not null && roster.Count(other => other.Hp > 0) > 3
                         // NutritionalPasteStrengthAmount
                         ? new Intent(
                             IntentType.Buff,
