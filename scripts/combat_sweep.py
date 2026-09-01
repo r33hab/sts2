@@ -830,6 +830,18 @@ def capture_one(
             + ", ".join(sorted(validate.UNMAPPED_INTENT_TYPES)),
         )
     for row in turn_rows:
+        # Intents whenever ANY part of the row failed, not only when the intents did. A
+        # row that fails on player state is a row whose CAUSE is usually which moves ran,
+        # and a note that omits them makes the reader guess: Paper Cuts on the Scrolls
+        # fights showed as identical HP, drifting max HP, and no way to tell what hit.
+        failed = not (
+            row["intents_match"] and row["player_match"] and row["hand_match"]
+        )
+        if failed and row["intents_match"]:
+            notes.append(
+                f"turn {row['turn']} intents (agreeing): "
+                f"emu {[e['intent'] for e in row['emu_enemies']]}",
+            )
         if not row["intents_match"]:
             notes.append(
                 f"turn {row['turn']} intents: emu {[e['intent'] for e in row['emu_enemies']]} "

@@ -309,11 +309,6 @@ public static class EnemyAI
                     SummonFabricatorBots(enemy, state, rng, includeDefensive: false);
                 }
 
-                if (enemy.DefId == KE.ScrollOfBiting)
-                {
-                    ApplyPaperCuts(enemy, state);
-                }
-
                 if (enemy.DefId == KE.TurretOperator)
                 {
                     enemy.Block += 25;
@@ -4120,6 +4115,12 @@ public static class EnemyAI
         // PaperCutsPower.AfterDamageGiven: the player loses max HP when this creature
         // lands UNBLOCKED damage on them. It used to fire on the scroll's BUFF instead,
         // which is both the wrong trigger and the wrong branch.
+        //
+        // This is the ONLY site. A second one fired a flat helping per ATTACK from the
+        // Attack-intent block -- the old call, left behind when the trigger was moved here
+        // -- so a scroll that chewed cost the player three helpings instead of two and one
+        // that chomped two instead of one. Whole turns came out at 10 max HP where the
+        // game took 6.
         if (unblocked > 0)
         {
             int paperCuts = BuffSystem.Get(enemy.Buffs, BuffId.PaperCuts);
@@ -4328,20 +4329,6 @@ public static class EnemyAI
         {
             state.DiscardPile.RemoveAt(picked.Index);
         }
-    }
-
-    private static void ApplyPaperCuts(EnemyState enemy, CombatState state)
-    {
-        int amount = BuffSystem.Get(enemy.Buffs, BuffId.PaperCuts);
-        if (amount <= 0)
-        {
-            return;
-        }
-
-        // Bare for the same reason as the Paper Cuts clamp above: SetMaxHp is not a
-        // current-HP change as far as the hook is concerned.
-        state.PlayerMaxHp = Math.Max(1, state.PlayerMaxHp - amount);
-        state.PlayerHp = Math.Min(state.PlayerHp, state.PlayerMaxHp);
     }
 
     /// <summary>
