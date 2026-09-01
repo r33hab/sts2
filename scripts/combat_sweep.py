@@ -842,6 +842,16 @@ def capture_one(
                 f"turn {row['turn']} intents (agreeing): "
                 f"emu {[e['intent'] for e in row['emu_enemies']]}",
             )
+        # Enemy HP on any failing row. A roster that differs by one creature is the
+        # commonest shape out here -- a segment that reattached, a clutch laid a turn
+        # early -- and "three intents against two" does not say whether the extra one
+        # survived a hit or was summoned. The HP does.
+        if failed:
+            notes.append(
+                f"turn {row['turn']} enemy hp: "
+                f"emu {[e['hp'] for e in row['emu_enemies']]} "
+                f"vs live {[e['hp'] for e in row['live_enemies']]}",
+            )
         if not row["intents_match"]:
             notes.append(
                 f"turn {row['turn']} intents: emu {[e['intent'] for e in row['emu_enemies']]} "

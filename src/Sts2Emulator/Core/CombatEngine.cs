@@ -958,6 +958,18 @@ public static class CombatEngine
         {
             if (BuffSystem.Get(enemy.Buffs, BuffId.Reviving) > 0)
             {
+                // A segment that reattaches waits a whole enemy phase FIRST. `AfterDeath`
+                // puts it in DEAD_MOVE, which it performs on the following turn, and
+                // `DoReattach` runs at the END of that turn -- so the player sees it at 0
+                // for two of their own turns, not none. Reviving is seeded at 2 for a
+                // reattach and 1 for an Illusion, whose revive turn IS the heal; this
+                // spends the extra phase without curing anything.
+                if (BuffSystem.Get(enemy.Buffs, BuffId.Reviving) > 1)
+                {
+                    BuffSystem.Apply(enemy.Buffs, BuffId.Reviving, -1);
+                    continue;
+                }
+
                 // IllusionPower.ReviveMove: Heal(MaxHp - CurrentHp), then back to the move
                 // it was on. It cannot be hit while reviving, which the emulator gets for
                 // free -- everything targets by "alive", and it is not yet.
@@ -2902,7 +2914,9 @@ public static class CombatEngine
             return false;
         }
 
-        BuffSystem.Apply(enemy.Buffs, BuffId.Reviving, 1);
+        // TWO, not one: the phase it dies in is not the phase it reattaches in. See the
+        // revive loop in EndTurn.
+        BuffSystem.Apply(enemy.Buffs, BuffId.Reviving, 2);
         // A HealIntent, so the readout says what the turn is spent on.
         enemy.CurrentIntent = new Intent(IntentType.Buff, 0);
         enemy.Block = 0;

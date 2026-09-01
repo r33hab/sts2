@@ -101,6 +101,15 @@ public class DecimillipedeTests
         segment.Block = 0;
         fight.Play(0, target: 0);
 
+        // TWO enemy phases, not one. `AfterDeath` puts the segment in DEAD_MOVE, which it
+        // performs on the FOLLOWING turn, and `DoReattach` runs at the end of that turn --
+        // so the player sees it at 0 for two of their own turns. This test asserted one
+        // phase until a live sweep on seed 4MW6NTLDWU showed the game's segment still at 0
+        // on the turn the emulator had already healed it (E437).
+        fight.EndTurn();
+        Assert.Equal(0, segment.Hp);
+
+        fight.State.PlayerHp = 999;
         fight.EndTurn();
 
         Assert.Equal(3, fight.State.Enemies.Count);
@@ -138,6 +147,8 @@ public class DecimillipedeTests
         segment.Hp = 1;
         segment.Block = 0;
         fight.Play(0, target: 0);
+        fight.EndTurn(); // the phase it spends dead
+        fight.State.PlayerHp = 999;
         fight.EndTurn(); // the reattach turn
 
         fight.State.PlayerHp = 999;
