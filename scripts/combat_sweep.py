@@ -883,7 +883,11 @@ def capture_one(
         # commonest shape out here -- a segment that reattached, a clutch laid a turn
         # early -- and "three intents against two" does not say whether the extra one
         # survived a hit or was summoned. The HP does.
-        if failed and row.get("rng_drift"):
+        # Drift is reported on EVERY row that has it, not only on failing ones. Two sides
+        # at different stream positions will agree on outcomes for a while and then stop,
+        # and the turn it starts is the turn worth reading -- reporting it only once the
+        # outcomes diverge hides exactly the information that locates the cause.
+        if row.get("rng_drift"):
             notes.append(
                 f"turn {row['turn']} rng drift (emu vs live): "
                 + ", ".join(
@@ -891,7 +895,7 @@ def capture_one(
                     for name, (emu, live) in sorted(row["rng_drift"].items())
                 ),
             )
-        if failed:
+        if failed or row.get("rng_drift"):
             notes.append(
                 f"turn {row['turn']} enemy hp: "
                 f"emu {[e['hp'] for e in row['emu_enemies']]} "

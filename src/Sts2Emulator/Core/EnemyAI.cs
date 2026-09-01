@@ -3752,12 +3752,26 @@ public static class EnemyAI
                 break;
 
             case KE.ToughEgg:
+            {
                 BuffSystem.Remove(enemy.Buffs, BuffId.Hatch);
                 enemy.Buffs.RemoveAll(buff => buff.Id != BuffId.Minion);
-                int hatchlingHp = rng.Next(20, 24);
+                // `Hatch()` is `RunRng.Niche.NextInt(HatchlingMinHp, HatchlingMaxHp)`.
+                // Two things were wrong and each shows up differently. The stream: rolling
+                // off the combat rng left NICHE two draws short after two eggs hatched,
+                // and every Niche roll afterwards -- including the HP of the next clutch --
+                // read the wrong number. And the RANGE: `NextInt(min, max)` is max
+                // EXCLUSIVE, so a hatchling is 20 to 22 at A8, never the 23 the emulator
+                // could produce. It is a plain roll with no uniqueness rule, unlike the
+                // egg's own initial HP.
+                var niche = state.NicheHpRng ?? rng;
+                int hatchlingHp = niche.Next(
+                    Ascension.Value(state.AscensionLevel, Ascension.ToughEnemies, 20, 19),
+                    Ascension.Value(state.AscensionLevel, Ascension.ToughEnemies, 23, 22)
+                );
                 enemy.Hp = hatchlingHp;
                 enemy.MaxHp = hatchlingHp;
                 break;
+            }
         }
     }
 
@@ -4385,10 +4399,25 @@ public static class EnemyAI
 
     private static void SummonToughEggs(EnemyState enemy, CombatState state, Random rng)
     {
-        int eggsToAdd = Math.Min(3, 6 - state.Enemies.Count);
-        int insertIndex = state.Enemies.IndexOf(enemy);
+        // The cap is FREE SLOTS, and a slot is free when nothing LIVING stands in it:
+        // `Slots.LastOrDefault(s => Enemies.All(c => c.SlotName != s))`. Counting the
+        // whole roster instead means a corpse still holding a place in the list keeps the
+        // clutch one egg short.
+        int eggsToAdd = Math.Min(3, 6 - state.Enemies.Count(other => other.Hp > 0));
         for (int i = 0; i < eggsToAdd; i++)
         {
+            // `Slots` is `egg1..egg5, ovicopter` and LayEggs takes
+            // `Slots.LastOrDefault(free)` -- the LAST free slot -- so the clutch fills
+            // egg5, egg4, egg3 and the roster, which is in slot order, ends up with the
+            // NEWEST egg first. The emulator appended each egg after the previous one, so
+            // its clutch stood in the opposite order; the player attacks position 0, so a
+            // different egg took the damage and a different egg died.
+            int insertIndex = state.Enemies.FindIndex(other => other.DefId == KE.ToughEgg);
+            if (insertIndex < 0)
+            {
+                insertIndex = state.Enemies.IndexOf(enemy);
+            }
+
             // Not stunned — Ovicopter adds eggs with a plain CreatureCmd.Add, and the
             // egg's own first move is its hatch, so the delay is already modelled once.
             var egg = CreateEnemy(
@@ -4398,7 +4427,7 @@ public static class EnemyAI
                 state: state
             );
             BuffSystem.Apply(egg.Buffs, BuffId.Minion, 1);
-            state.Enemies.Insert(insertIndex + i, Effects.RelicEffects.Spawned(state, egg));
+            state.Enemies.Insert(insertIndex, Effects.RelicEffects.Spawned(state, egg));
         }
     }
 
