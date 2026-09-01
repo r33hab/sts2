@@ -71,7 +71,10 @@ one, which is why Defect reads 88/88 rather than 87/88.
 and reading it that way is how acts 2 and 3 stayed unmeasured. It means every encounter
 has a SUITE. Act 1's suites are backed by committed live captures; Hive's and Glory's were
 written from the decompiled source, and sweeping them found **10 of 33 diverging on move
-tables**, with 5 more the auto-player could not drive at all. Their opening states are
+tables**. All ten are now closed (E427-E436) and both acts sweep clean at A8 AND at A9 --
+which matters because `DeadlyEnemies` is 9, so every `Ascension.Value(a, DeadlyEnemies,
+high, low)` pair in the game had only ever been checked on its LOW branch. A9 flips all of
+them at once and found nothing, so the high halves are right too. Their opening states are
 clean — 38 of 38 on deck order, roster, HP and opening intents — so what is wrong is
 narrower than "act 2 is unverified": it is enemy move tables. `combat_sweep.py --act hive`
 and `--act glory` name the fights.
