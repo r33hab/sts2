@@ -375,6 +375,38 @@ def wait_for_hand_to_reach(
     raise RuntimeError("live game never added the debug cards")
 
 
+def driven_pile(env: Any, pile: str) -> list[tuple[str, bool]]:
+    """One pile of the env the sweep is actually driving, in `compare_draw_pile` terms.
+
+    `compare_deck` answers a different question: it builds a FRESH emulator from the seed
+    and checks that one deals the game's hand. That is worth knowing and it is not the
+    same as "the object about to be stepped is in that state", which is what every later
+    row is compared against.
+    """
+    names = compare_draw_pile.card_name_by_id()
+    return [
+        (names.get(card_id, f"<unknown:{card_id}>"), upgraded)
+        for card_id, upgraded in env.unwrapped.get_pile(pile)
+    ]
+
+
+def pile_disagreements(live_state: dict[str, Any], env: Any) -> list[str]:
+    """Piles where the driven emulator and the live game hold different cards."""
+    out = []
+    norm = compare_draw_pile.normalize
+    for pile in ("hand", "draw", "discard"):
+        try:
+            emu = [(norm(n), up) for n, up in driven_pile(env, pile)]
+            live = [
+                (norm(n), up) for n, up in compare_draw_pile.live_pile(live_state, pile)
+            ]
+        except Exception:  # noqa: BLE001 - a pile the readout does not carry
+            continue
+        if emu != live:
+            out.append(f"{pile}: emu {emu} vs live {live}")
+    return out
+
+
 def rng_drift(live_state: dict[str, Any], env: Any) -> dict[str, tuple[int, int]]:
     """Streams whose call counts disagree, as {name: (emu, live)}.
 
@@ -464,9 +496,37 @@ def wait_for_card_to_leave_hand(
     raise RuntimeError("live game never played the card")
 
 
-def apply_action(base_url: str, env: Any, live_state: dict[str, Any], action: int):
-    """Send one integer action to both sides, and hand back the new live state."""
+def apply_action(
+    base_url: str,
+    env: Any,
+    live_state: dict[str, Any],
+    action: int,
+    notes: list[str] | None = None,
+    turn: int | None = None,
+):
+    """Send one integer action to both sides, and hand back the new live state.
+
+    The action is an INDEX, and an index only means the same thing while the two hands
+    hold the same cards in the same order. Nothing checked that: a hand out of step plays
+    a Defend on one side and a Strike on the other and both sides carry on, so the
+    divergence surfaces turns later as an intent or a pile that will not reconcile. The
+    card each side is about to play is compared here, at the action that would cause it.
+    """
     hand_size = len((live_state.get("player") or {}).get("hand") or [])
+    live_hand = (live_state.get("player") or {}).get("hand") or []
+    if notes is not None and action < hand_size:
+        norm = compare_draw_pile.normalize
+        try:
+            emu_hand = driven_pile(env, "hand")
+        except Exception:  # noqa: BLE001 - never fail a sweep over instrumentation
+            emu_hand = []
+        live_card = norm(str(live_hand[action].get("id") or ""))
+        emu_card = norm(emu_hand[action][0]) if action < len(emu_hand) else "<none>"
+        if live_card != emu_card:
+            notes.append(
+                f"turn {turn}: action {action} plays {emu_card!r} on the emulator and "
+                f"{live_card!r} live -- the hands are out of step",
+            )
     trace_real_game.post_action(
         base_url, trace_real_game.action_payload_from_index(live_state, action)
     )
@@ -612,6 +672,29 @@ def drive_turns(
         notes += add_cards_to_both_hands(base_url, env, add_cards)
         wait_for_hand_to_reach(base_url, before + len(add_cards))
 
+    # The opening state of the env that is about to be driven, before a single action.
+    # Everything below is compared against this and nothing was checking it: `deck:ok`
+    # is computed from a FRESH emulator built from the seed, not from `env`, and the
+    # first row the loop appends is already a whole turn of play old. A harness that
+    # starts the two sides apart reports the divergence at turn 2 and looks like an
+    # emulator defect.
+    opening = start_real_game_run.get_state(base_url)
+    if opening.get("state_type") in COMBAT_STATE_TYPES:
+        opening_drift = rng_drift(
+            trace_real_game.summarize_state(opening),
+            env,
+        )
+        if opening_drift:
+            notes.append(
+                "turn 0 rng drift (emu vs live): "
+                + ", ".join(
+                    f"{name} {emu}/{live}"
+                    for name, (emu, live) in sorted(opening_drift.items())
+                ),
+            )
+        for line in pile_disagreements(opening, env):
+            notes.append(f"turn 0 driven env {line}")
+
     for turn in range(1, turns + 1):
         live_state = start_real_game_run.get_state(base_url)
         if live_state.get("state_type") not in {"monster", "elite", "boss"}:
@@ -644,6 +727,8 @@ def drive_turns(
                     env,
                     live_state,
                     choice,
+                    notes=notes,
+                    turn=turn,
                 )
                 if live_state.get("state_type") not in COMBAT_STATE_TYPES or terminated:
                     break
@@ -656,6 +741,22 @@ def drive_turns(
                 break
 
         action = end_turn_action(live_state)
+        # END TURN is `len(hand)`, so it only means "end turn" on a side whose hand is
+        # that long. A shorter emulator hand makes the same integer an out-of-range
+        # action; a longer one makes it a CARD PLAY. This was the one action nobody
+        # checked, and it is the only one whose meaning depends on a size rather than on
+        # a card.
+        try:
+            emu_hand_size = len(env.unwrapped.get_pile("hand"))
+        except Exception:  # noqa: BLE001 - never fail a sweep over instrumentation
+            emu_hand_size = action
+        if emu_hand_size != action:
+            # Still reported: the two sides holding different numbers of cards at the end
+            # of a turn is a real divergence. It is no longer also a mis-step.
+            notes.append(
+                f"turn {turn}: hands differ at end of turn -- emulator holds "
+                f"{emu_hand_size} cards, live holds {action}",
+            )
         actions.append(action)
         round_before = live_round(live_state)
         trace_real_game.post_action(base_url, {"action": "end_turn"})
@@ -669,7 +770,13 @@ def drive_turns(
             notes.append(f"live combat did not return to play phase after turn {turn}")
             break
 
-        _obs, _reward, terminated, truncated, _info = env.step(action)
+        # The emulator is stepped with ITS OWN end-turn index. The live side ends its
+        # turn by NAME (`{"action": "end_turn"}`) and never needed an index at all; only
+        # the emulator addresses end turn as `len(hand)`. Handing it the live hand's
+        # length made the same integer a CARD PLAY whenever the emulator held more cards
+        # -- which is how the Aeonglass sweep diverged while the emulator, driven by
+        # hand through the same plays, reproduced the game exactly.
+        _obs, _reward, terminated, truncated, _info = env.step(emu_hand_size)
         # The emulator raises its own screen during ITS enemy turn, which is the step
         # just taken -- so its answer belongs here, after it, and matches the live one.
         # ASKED, not counted: a live poll can see one screen twice, and an extra step
