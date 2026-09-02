@@ -147,6 +147,11 @@ def orb_literal(orb: dict[str, Any]) -> str:
 # because that is how a missing power gets noticed at all.
 BUFF_ALIASES = {
     "ENERGY_NEXT_TURN_POWER": "NextTurnEnergy",
+    # One power in the game, two buffs here: `CrimsonMantlePower.Amount` is the block it
+    # grants at the start of the turn and its `SelfDamage` var is the HP it costs, and the
+    # emulator keeps those as separate numbers because a BuffState is an id and ONE value.
+    # The mod reports the power's Amount, which is the block half.
+    "CRIMSON_MANTLE_POWER": "CrimsonMantleBlock",
     "DRAW_CARDS_NEXT_TURN_POWER": "NextTurnDraw",
     # Every `: TemporaryStrengthPower` subclass. They add nothing but a sign, and the
     # emulator models them all as the base power -- thirteen classes in the game and one

@@ -152,6 +152,13 @@
   python scripts/generate_card_capture_tests.py               # -> Cards/CardCaptures.g.cs
   ```
 
+  **A failed capture poisons the ones after it.** When `capture_card.py` dies partway it
+  leaves the game sitting on `character_select`, and every later capture then fails at
+  `abandon_any_run` with "Never reached the main menu to abandon from" -- so one bad card
+  turns a batch of twenty into one result and nineteen identical errors. Batch captures
+  through a loop that restarts the game after any failure, and do it in the background:
+  a restart plus twenty captures runs well past ten minutes.
+
   `--select` answers the selection screens a card raises, in the order they appear:
 
   ```

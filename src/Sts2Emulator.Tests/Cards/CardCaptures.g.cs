@@ -106,6 +106,42 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void Aggression_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Aggression --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Aggression), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Empty(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(1, fight.PlayerBuffAmount(BuffId.Aggression));
+        fight.PlayerPowersAre(BuffId.Aggression);
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
     public void Alignment_Base_ByrdonisElite_Regent_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -436,6 +472,42 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void Barricade_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Barricade --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Barricade), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(6, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Empty(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(1, fight.PlayerBuffAmount(BuffId.Barricade));
+        fight.PlayerPowersAre(BuffId.Barricade);
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
     public void Bash_Base_CorpseSlugsWeak_Ironclad_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -464,6 +536,42 @@ public class CardCaptureTests
         Assert.Equal(29, fight.State.Enemies[1].Hp);
         Assert.Equal(0, fight.State.Enemies[1].Block);
         Assert.Equal(4, fight.EnemyBuffAmount(BuffId.Ravenous, 1));
+    }
+
+    [Fact]
+    public void BattleTrance_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card BattleTrance --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.BattleTrance), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(9, fight.State.Energy);
+        Assert.Equal(3, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(1, fight.PlayerBuffAmount(BuffId.NoDraw));
+        fight.PlayerPowersAre(BuffId.NoDraw);
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
     }
 
     [Fact]
@@ -735,6 +843,76 @@ public class CardCaptureTests
         Assert.Equal(8, fight.EnemyBuffAmount(BuffId.Doom, 0));
         Assert.Equal(1, fight.State.OstyHp);
         Assert.Equal(1, fight.State.OstyMaxHp);
+    }
+
+    [Fact]
+    public void BloodWall_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card BloodWall --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.BloodWall), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(62, fight.State.PlayerHp);
+        Assert.Equal(16, fight.State.PlayerBlock);
+        Assert.Equal(7, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
+    public void Bloodletting_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Bloodletting --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Bloodletting), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(61, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(11, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
     }
 
     [Fact]
@@ -1035,6 +1213,42 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void Break_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Break --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Break), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(70, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+        Assert.Equal(5, fight.EnemyBuffAmount(BuffId.Vulnerable, 0));
+    }
+
+    [Fact]
     public void Breakthrough_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -1153,6 +1367,41 @@ public class CardCaptureTests
         Assert.Equal(2, fight.PlayerBuffAmount(BuffId.Dexterity));
         fight.PlayerPowersAre(BuffId.Strength, BuffId.Dexterity);
         Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
+    public void Bully_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Bully --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Bully), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(9, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(86, fight.State.Enemies[0].Hp);
         Assert.Equal(0, fight.State.Enemies[0].Block);
         Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
     }
@@ -1820,6 +2069,42 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void Colossus_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Colossus --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Colossus), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(5, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(1, fight.PlayerBuffAmount(BuffId.Colossus));
+        fight.PlayerPowersAre(BuffId.Colossus);
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
     public void Comet_Base_ByrdonisElite_Regent_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -1909,6 +2194,41 @@ public class CardCaptureTests
         Assert.Equal(OrbType.Lightning, fight.State.Orbs[0].Type);
         fight.PlayerPowersAre();
         Assert.Equal(83, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
+    public void Conflagration_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Conflagration --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Conflagration), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(82, fight.State.Enemies[0].Hp);
         Assert.Equal(0, fight.State.Enemies[0].Block);
         Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
     }
@@ -2108,6 +2428,42 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void Corruption_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Corruption --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Corruption), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(6, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Empty(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(1, fight.PlayerBuffAmount(BuffId.Corruption));
+        fight.PlayerPowersAre(BuffId.Corruption);
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
     public void CosmicIndifference_Base_ByrdonisElite_Regent_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -2256,6 +2612,78 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void CrimsonMantle_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card CrimsonMantle --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.CrimsonMantle), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Empty(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(8, fight.PlayerBuffAmount(BuffId.CrimsonMantleBlock));
+        fight.PlayerPowersAre(BuffId.CrimsonMantleBlock);
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
+    public void Cruelty_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Cruelty --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Cruelty), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Empty(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(25, fight.PlayerBuffAmount(BuffId.CrueltyPower));
+        fight.PlayerPowersAre(BuffId.CrueltyPower);
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
     public void CrushUnder_Base_ByrdonisElite_Regent_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -2346,6 +2774,42 @@ public class CardCaptureTests
         Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
         Assert.Equal(1, fight.State.OstyHp);
         Assert.Equal(1, fight.State.OstyMaxHp);
+    }
+
+    [Fact]
+    public void DarkEmbrace_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card DarkEmbrace --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.DarkEmbrace), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(7, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Empty(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(1, fight.PlayerBuffAmount(BuffId.DarkEmbrace));
+        fight.PlayerPowersAre(BuffId.DarkEmbrace);
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
     }
 
     [Fact]
@@ -2599,6 +3063,41 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void DefendIronclad_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card DefendIronclad --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(5, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
     public void DefendNecrobinder_Base_ByrdonisElite_Necrobinder_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -2813,6 +3312,42 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void DemonForm_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card DemonForm --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.DemonForm), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(6, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Empty(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(2, fight.PlayerBuffAmount(BuffId.DemonForm));
+        fight.PlayerPowersAre(BuffId.DemonForm);
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
     public void Devastate_Base_ByrdonisElite_Regent_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -2960,6 +3495,43 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void Dominate_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Dominate --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Dominate), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Empty(fight.State.DiscardPile);
+        Assert.Single(fight.State.ExhaustPile);
+        Assert.Equal(1, fight.PlayerBuffAmount(BuffId.Strength));
+        fight.PlayerPowersAre(BuffId.Strength);
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Vulnerable, 0));
+    }
+
+    [Fact]
     public void DoubleEnergy_Base_ByrdonisElite_Defect_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -3049,6 +3621,41 @@ public class CardCaptureTests
         Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
         Assert.Equal(1, fight.State.OstyHp);
         Assert.Equal(1, fight.State.OstyMaxHp);
+    }
+
+    [Fact]
+    public void DrumOfBattle_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card DrumOfBattle --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.DrumOfBattle), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(4, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
     }
 
     [Fact]
@@ -3394,6 +4001,77 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void EvilEye_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card EvilEye --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.EvilEye), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(8, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
+    public void ExpectAFight_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card ExpectAFight --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.ExpectAFight), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(10, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(1, fight.PlayerBuffAmount(BuffId.NoEnergyGain));
+        fight.PlayerPowersAre(BuffId.NoEnergyGain);
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
     public void Expose_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -3540,6 +4218,41 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void Feed_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Feed --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Feed), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Empty(fight.State.DiscardPile);
+        Assert.Single(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(80, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
     public void FeedingFrenzy_Base_CorpseSlugsWeak_Ironclad_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -3569,6 +4282,42 @@ public class CardCaptureTests
         Assert.Equal(29, fight.State.Enemies[1].Hp);
         Assert.Equal(0, fight.State.Enemies[1].Block);
         Assert.Equal(4, fight.EnemyBuffAmount(BuffId.Ravenous, 1));
+    }
+
+    [Fact]
+    public void FeelNoPain_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card FeelNoPain --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.FeelNoPain), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Empty(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(3, fight.PlayerBuffAmount(BuffId.FeelNoPain));
+        fight.PlayerPowersAre(BuffId.FeelNoPain);
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
     }
 
     [Fact]
@@ -3692,6 +4441,43 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void FightMe_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card FightMe --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.FightMe), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(7, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(3, fight.PlayerBuffAmount(BuffId.Strength));
+        fight.PlayerPowersAre(BuffId.Strength);
+        Assert.Equal(80, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Strength, 0));
+    }
+
+    [Fact]
     public void FightThrough_Base_ByrdonisElite_Defect_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -3776,6 +4562,42 @@ public class CardCaptureTests
         Assert.Single(fight.State.Orbs);
         Assert.Equal(OrbType.Lightning, fight.State.Orbs[0].Type);
         fight.PlayerPowersAre();
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
+    public void FlameBarrier_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card FlameBarrier --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.FlameBarrier), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(12, fight.State.PlayerBlock);
+        Assert.Equal(7, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(4, fight.PlayerBuffAmount(BuffId.FlameBarrier));
+        fight.PlayerPowersAre(BuffId.FlameBarrier);
         Assert.Equal(90, fight.State.Enemies[0].Hp);
         Assert.Equal(0, fight.State.Enemies[0].Block);
         Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
@@ -4848,6 +5670,41 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void Havoc_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Havoc --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Havoc), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(5, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Single(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(84, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
     public void Headbutt_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -5029,6 +5886,42 @@ public class CardCaptureTests
         Assert.Equal(29, fight.State.Enemies[1].Hp);
         Assert.Equal(0, fight.State.Enemies[1].Block);
         Assert.Equal(4, fight.EnemyBuffAmount(BuffId.Ravenous, 1));
+    }
+
+    [Fact]
+    public void Hellraiser_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Hellraiser --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Hellraiser), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(7, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Empty(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(1, fight.PlayerBuffAmount(BuffId.Hellraiser));
+        fight.PlayerPowersAre(BuffId.Hellraiser);
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
     }
 
     [Fact]
@@ -5222,6 +6115,41 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void HowlFromBeyond_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card HowlFromBeyond --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.HowlFromBeyond), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(6, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(74, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
     public void Hyperbeam_Base_ByrdonisElite_Defect_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -5312,6 +6240,148 @@ public class CardCaptureTests
         Assert.Equal(OrbType.Frost, fight.State.Orbs[2].Type);
         fight.PlayerPowersAre();
         Assert.Equal(63, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
+    public void Impervious_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Impervious --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Impervious), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(30, fight.State.PlayerBlock);
+        Assert.Equal(7, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Empty(fight.State.DiscardPile);
+        Assert.Single(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
+    public void InfernalBlade_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card InfernalBlade --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.InfernalBlade), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Empty(fight.State.DiscardPile);
+        Assert.Single(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
+    public void Inferno_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Inferno --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Inferno), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Empty(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(6, fight.PlayerBuffAmount(BuffId.Inferno));
+        fight.PlayerPowersAre(BuffId.Inferno);
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
+    public void Inflame_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Inflame --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Inflame), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Empty(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(2, fight.PlayerBuffAmount(BuffId.Strength));
+        fight.PlayerPowersAre(BuffId.Strength);
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
         Assert.Equal(0, fight.State.Enemies[0].Block);
         Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
     }
@@ -5471,6 +6541,42 @@ public class CardCaptureTests
         Assert.Equal(29, fight.State.Enemies[1].Hp);
         Assert.Equal(0, fight.State.Enemies[1].Block);
         Assert.Equal(4, fight.EnemyBuffAmount(BuffId.Ravenous, 1));
+    }
+
+    [Fact]
+    public void Juggling_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Juggling --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Juggling), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Empty(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(1, fight.PlayerBuffAmount(BuffId.Juggling));
+        fight.PlayerPowersAre(BuffId.Juggling);
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
     }
 
     [Fact]
@@ -5833,6 +6939,43 @@ public class CardCaptureTests
         Assert.Equal(84, fight.State.Enemies[0].Hp);
         Assert.Equal(0, fight.State.Enemies[0].Block);
         Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
+    public void Mangle_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Mangle --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Mangle), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(6, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(75, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+        Assert.Equal(-10, fight.EnemyBuffAmount(BuffId.Strength, 0));
+        Assert.Equal(10, fight.EnemyBuffAmount(BuffId.TemporaryStrength, 0));
     }
 
     [Fact]
@@ -6532,6 +7675,41 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void NotYet_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card NotYet --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.NotYet), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(74, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(7, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Empty(fight.State.DiscardPile);
+        Assert.Single(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
     public void Null_Base_ByrdonisElite_Defect_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -6598,6 +7776,41 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void Offering_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Offering --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Offering), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(58, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(11, fight.State.Energy);
+        Assert.Equal(3, fight.State.DrawPile.Count);
+        Assert.Empty(fight.State.DiscardPile);
+        Assert.Single(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
     public void Omnislice_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -6619,6 +7832,42 @@ public class CardCaptureTests
         Assert.Empty(fight.State.ExhaustPile);
         fight.PlayerPowersAre();
         Assert.Equal(82, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
+    public void OneTwoPunch_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card OneTwoPunch --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.OneTwoPunch), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(1, fight.PlayerBuffAmount(BuffId.OneTwoPunch));
+        fight.PlayerPowersAre(BuffId.OneTwoPunch);
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
         Assert.Equal(0, fight.State.Enemies[0].Block);
         Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
     }
@@ -7046,6 +8295,41 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void Pillage_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Pillage --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Pillage), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(4, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(84, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
     public void PillarOfCreation_Base_ByrdonisElite_Regent_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -7132,6 +8416,41 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void PommelStrike_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card PommelStrike --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.PommelStrike), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(5, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(81, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
     public void Pounce_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -7183,6 +8502,41 @@ public class CardCaptureTests
         Assert.Equal(9, fight.State.Energy);
         Assert.Equal(5, fight.State.DrawPile.Count);
         Assert.Equal(2, fight.State.DiscardPile.Count);
+        Assert.Empty(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
+    public void PrimalForce_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card PrimalForce --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.PrimalForce), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(9, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
         Assert.Empty(fight.State.ExhaustPile);
         fight.PlayerPowersAre();
         Assert.Equal(90, fight.State.Enemies[0].Hp);
@@ -7429,6 +8783,42 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void Pyre_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Pyre --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Pyre), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(7, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Empty(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(1, fight.PlayerBuffAmount(BuffId.PyrePower));
+        fight.PlayerPowersAre(BuffId.PyrePower);
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
     public void Quadcast_Base_ByrdonisElite_Defect_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -7526,6 +8916,42 @@ public class CardCaptureTests
         Assert.Equal(9, fight.State.Stars);
         fight.PlayerPowersAre();
         Assert.Equal(63, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
+    public void Rage_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Rage --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Rage), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(9, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(3, fight.PlayerBuffAmount(BuffId.Rage));
+        fight.PlayerPowersAre(BuffId.Rage);
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
         Assert.Equal(0, fight.State.Enemies[0].Block);
         Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
     }
@@ -8105,6 +9531,42 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void Rupture_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Rupture --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Rupture), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Empty(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(1, fight.PlayerBuffAmount(BuffId.RupturePower));
+        fight.PlayerPowersAre(BuffId.RupturePower);
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
     public void Sacrifice_Base_ByrdonisElite_Necrobinder_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -8537,6 +9999,43 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void SetupStrike_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card SetupStrike --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.SetupStrike), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(2, fight.PlayerBuffAmount(BuffId.Strength));
+        Assert.Equal(2, fight.PlayerBuffAmount(BuffId.TemporaryStrength));
+        fight.PlayerPowersAre(BuffId.Strength, BuffId.TemporaryStrength);
+        Assert.Equal(83, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
     public void SevenStars_Base_ByrdonisElite_Regent_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -8776,6 +10275,41 @@ public class CardCaptureTests
         Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
         Assert.Equal(1, fight.State.OstyHp);
         Assert.Equal(1, fight.State.OstyMaxHp);
+    }
+
+    [Fact]
+    public void ShrugItOff_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card ShrugItOff --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.ShrugItOff), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(8, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(5, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
     }
 
     [Fact]
@@ -9296,6 +10830,41 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void Spite_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Spite --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Spite), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(9, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(85, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
     public void Splash_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -9477,6 +11046,42 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void Stampede_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Stampede --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Stampede), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(7, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Empty(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(1, fight.PlayerBuffAmount(BuffId.Stampede));
+        fight.PlayerPowersAre(BuffId.Stampede);
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
     public void Stardust_Base_ByrdonisElite_Regent_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -9500,6 +11105,112 @@ public class CardCaptureTests
         Assert.Equal(0, fight.State.Stars);
         fight.PlayerPowersAre();
         Assert.Equal(45, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
+    public void Stoke_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Stoke --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Stoke), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Equal(5, fight.State.ExhaustPile.Count);
+        fight.PlayerPowersAre();
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
+    public void Stomp_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Stomp --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Stomp), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(6, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(78, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
+    public void StoneArmor_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card StoneArmor --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.StoneArmor), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Empty(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(4, fight.PlayerBuffAmount(BuffId.Plating));
+        fight.PlayerPowersAre(BuffId.Plating);
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
         Assert.Equal(0, fight.State.Enemies[0].Block);
         Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
     }
@@ -9964,6 +11675,41 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void SwordBoomerang_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card SwordBoomerang --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.SwordBoomerang), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(81, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
     public void SwordSage_Base_ByrdonisElite_Regent_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -10055,6 +11801,77 @@ public class CardCaptureTests
         Assert.Equal(1, fight.PlayerBuffAmount(BuffId.FreePowerPower));
         fight.PlayerPowersAre(BuffId.FreePowerPower);
         Assert.Equal(76, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
+    public void Taunt_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Taunt --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Taunt), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(7, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Vulnerable, 0));
+    }
+
+    [Fact]
+    public void TearAsunder_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card TearAsunder --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.TearAsunder), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(7, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(85, fight.State.Enemies[0].Hp);
         Assert.Equal(0, fight.State.Enemies[0].Block);
         Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
     }
@@ -10580,6 +12397,41 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void TwinStrike_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card TwinStrike --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.TwinStrike), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(80, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
     public void Tyranny_Base_ByrdonisElite_Regent_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -10692,6 +12544,78 @@ public class CardCaptureTests
         Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
         Assert.Equal(1, fight.State.OstyHp);
         Assert.Equal(1, fight.State.OstyMaxHp);
+    }
+
+    [Fact]
+    public void Unmovable_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Unmovable --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Unmovable), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(7, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Empty(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(1, fight.PlayerBuffAmount(BuffId.UnmovablePower));
+        fight.PlayerPowersAre(BuffId.UnmovablePower);
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
+    public void Unrelenting_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Unrelenting --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Unrelenting), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(7, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(1, fight.PlayerBuffAmount(BuffId.FreeAttackPower));
+        fight.PlayerPowersAre(BuffId.FreeAttackPower);
+        Assert.Equal(76, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
     }
 
     [Fact]
@@ -10876,6 +12800,42 @@ public class CardCaptureTests
     }
 
     [Fact]
+    public void Vicious_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Vicious --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Vicious), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(8, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Empty(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        Assert.Equal(1, fight.PlayerBuffAmount(BuffId.Vicious));
+        fight.PlayerPowersAre(BuffId.Vicious);
+        Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
     public void VoidForm_Base_ByrdonisElite_Regent_MatchesLiveCapture()
     {
         // Captured from the live game (v0.107.1) by
@@ -10946,6 +12906,41 @@ public class CardCaptureTests
         Assert.Equal(OrbType.Lightning, fight.State.Orbs[1].Type);
         fight.PlayerPowersAre();
         Assert.Equal(90, fight.State.Enemies[0].Hp);
+        Assert.Equal(0, fight.State.Enemies[0].Block);
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
+    }
+
+    [Fact]
+    public void Whirlwind_Base_ByrdonisElite_Ironclad_MatchesLiveCapture()
+    {
+        // Captured from the live game (v0.107.1) by
+        // scripts/capture_card.py --card Whirlwind --encounter ByrdonisElite --seed ABCDEF.
+        // Every number below is the game's, not the emulator's.
+        var fight = Fight.Hand(Card(IC.Whirlwind), Card(IC.DefendIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .PlayerHp(64, 80)
+            .Energy(9)
+            .Draw(Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.StrikeIronclad), Card(IC.DefendIronclad), Card(IC.AscendersBane), Card(IC.StrikeIronclad))
+            .Enemy(defId: 12, hp: 90, maxHp: 90, intent: new Intent(IntentType.Attack, 17), buffs: [new BuffState(BuffId.Territorial, 1)]);
+        fight.State.CardsDrawnThisCombat = 5;
+        fight.State.CardsGeneratedThisCombat = 1;
+        fight.State.ShuffleRng = new CountingRandom(1347594942, 10);
+        fight.State.TargetRng = new CountingRandom(565245502, 0);
+        fight.State.CardSelectionRng = new CountingRandom(-588813869, 0);
+        fight.State.CardGenerationRng = new CountingRandom(2044740623, 0);
+        fight.State.EnergyCostRng = new CountingRandom(1817943625, 0);
+        fight.State.OrbGenerationRng = new CountingRandom(287263396, 0);
+        fight.State.NicheHpRng = new CountingRandom(-463219012, 1);
+
+        fight.Play(index: 0, target: 0);
+
+        Assert.Equal(64, fight.State.PlayerHp);
+        Assert.Equal(0, fight.State.PlayerBlock);
+        Assert.Equal(0, fight.State.Energy);
+        Assert.Equal(6, fight.State.DrawPile.Count);
+        Assert.Single(fight.State.DiscardPile);
+        Assert.Empty(fight.State.ExhaustPile);
+        fight.PlayerPowersAre();
+        Assert.Equal(45, fight.State.Enemies[0].Hp);
         Assert.Equal(0, fight.State.Enemies[0].Block);
         Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Territorial, 0));
     }
