@@ -1312,3 +1312,27 @@ failing run rather than to look at the passing one.
 The 27 `coverage:FAIL` rows are unchanged and are not divergences: they say an intent was
 never SEEN in four turns, which is a limit of how long the sweep drives each fight. That
 number has been stable across all three runs, so it is a known ceiling rather than drift.
+
+### The 27 coverage failures have two different causes, and only one of them closes
+
+`coverage:FAIL` says an intent was never SEEN, not that it disagreed, and the same 27 rows
+appear in every run. Six distinct enemies account for all of them, and they split in two:
+
+**Turn-limited -- Rocket 4/5, Crusher 4/5, Infested Prism 3/4, Tough Egg 1/2, The Obscura
+3/4.** The first three are plain `% N` cycles over five, five and four moves; four turns
+cannot show five. The Tough Egg hatches and then nibbles, and the eggs are summoned partway
+through the fight, so four turns from the START is fewer than four turns of egg. **These
+close by raising `--turns`** and nothing else is wrong with them.
+
+**Policy-limited -- Bowlbug (Rock) 1/2, unseen in 12 rows out of 12.** Its DIZZY branch is a
+`ConditionalBranchState` on `IsOffBalance`, which the Rock enters only when its own headbutt
+is **fully blocked**. The sweep's policy plays the first card the live game says is
+playable, and that policy essentially never assembles enough block to zero a 15-damage
+headbutt. **Raising `--turns` will never close this one**, because the branch is conditional
+on player behaviour the policy does not produce.
+
+That distinction is the point of writing this down. A count of 27 that never moves reads
+like drift, and someone re-derives it every time; what it actually says is that five enemies
+need a longer sweep and one needs a different PLAYER. The emulator's Rock matches the source
+exactly -- `% 2` alternation was the old bug, and the conditional is right -- so the gap is
+in what has been exercised, not in what was written.
