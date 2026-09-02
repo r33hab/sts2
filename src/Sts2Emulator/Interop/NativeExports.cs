@@ -37,7 +37,7 @@ public static class NativeExports
 
     // v17: observation carries an open card selection (kind, count, candidates).
     // v23: the selection block's own offsets are exported, so a reader can decode it.
-    public const int NATIVE_API_VERSION = 24;
+    public const int NATIVE_API_VERSION = 25;
     private static ReadOnlySpan<int> StarterDeckIds =>
         [472, 472, 472, 472, 472, 131, 131, 131, 131, 30, 10001];
 

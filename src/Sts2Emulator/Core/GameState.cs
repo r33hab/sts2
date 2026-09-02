@@ -8,6 +8,6 @@ public sealed class GameState
     public int Floor;
     public List<CardInstance> Deck = [];
     public List<RelicInstance> Relics = [];
-    public int[] PotionSlots = new int[3];
+    public int[] PotionSlots = new int[Run.RunConstants.PotionSlotCapacity];
     public CombatState? ActiveCombat;
 }

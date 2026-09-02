@@ -23,9 +23,17 @@ public static class CombatObservation
 
     public const int HandOffset = ScalarCount;
     public const int PotionSlotSize = 2;
+
+    /// <summary>
+    /// Potion slots the observation carries. Fixed at the run's capacity rather than at
+    /// the three a run starts combat with: Alchemical Coffer alone takes a run to six,
+    /// and an observation three wide cannot show the potions it bought. Widening the
+    /// layout is why this was recorded rather than done in passing -- see O15.
+    /// </summary>
+    public const int MaxPotions = Run.RunConstants.PotionSlotCapacity;
     public const int PotionOffset = HandOffset + MaxHand * CardSlotSize;
     public const int BuffSlotSize = 2;
-    public const int PlayerBuffOffset = PotionOffset + 3 * PotionSlotSize;
+    public const int PlayerBuffOffset = PotionOffset + MaxPotions * PotionSlotSize;
 
     /// <summary>Hp, max hp, block, intent type, announced magnitude, then the buffs.</summary>
     public const int EnemySlotSize = 5 + MaxEnemyBuffs * BuffSlotSize;
@@ -122,10 +130,11 @@ public static class CombatObservation
         }
 
         int offset = PotionOffset;
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < MaxPotions; i++)
         {
-            obs[offset + i * PotionSlotSize] = s.PotionSlots[i];
-            obs[offset + i * PotionSlotSize + 1] = s.PotionSlots[i] != 0 ? 1 : 0;
+            int potion = i < s.PotionSlots.Length ? s.PotionSlots[i] : 0;
+            obs[offset + i * PotionSlotSize] = potion;
+            obs[offset + i * PotionSlotSize + 1] = potion != 0 ? 1 : 0;
         }
 
         offset = PlayerBuffOffset;

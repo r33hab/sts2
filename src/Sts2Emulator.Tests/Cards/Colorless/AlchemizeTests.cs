@@ -47,7 +47,8 @@ public class AlchemizeTests
 
         fight.Play();
 
-        Assert.Equal(new[] { 5, 6, 7 }, fight.State.PotionSlots.ToList());
+        // The array is `PotionSlotCapacity` wide; only the first MaxPotionSlots exist.
+        Assert.Equal(new[] { 5, 6, 7 }, fight.State.PotionSlots.Take(3).ToList());
     }
 
     [Fact]

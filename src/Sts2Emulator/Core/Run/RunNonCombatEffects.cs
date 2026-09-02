@@ -2401,7 +2401,7 @@ public static class RunNonCombatEffects
             (DishJellyLiver, 3f),
             (DishFriedEel, 3f),
         };
-        if (state.PotionSlots.Any(potion => potion == 0))
+        if (state.UsablePotionSlots().Any(potion => potion == 0))
         {
             dishes.Add((DishSuspiciousCondiment, 3f));
         }

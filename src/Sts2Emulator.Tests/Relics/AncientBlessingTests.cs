@@ -105,12 +105,11 @@ public class AncientBlessingTests
         Assert.Equal(slotsBefore + 4, engine.State.MaxPotionSlots);
         Assert.Equal(rewardsBefore, engine.State.PlayerRng.Rewards.CallCount);
 
-        // NOT asserting four potions. RunState.PotionSlots is a fixed int[3] — as are
-        // CombatState's and GameState's, and the combat observation is laid out around
-        // that width — so the emulator physically cannot hold the six a Coffer run has.
-        // Deliberately left failing-in-the-world rather than asserted at three, which
-        // would bake the cap in as though it were the rule. See O15.
-        Assert.True(engine.State.PotionSlots.Count(potion => potion != 0) >= 3);
+        // FOUR potions, which the emulator could not hold until O15 was closed: the
+        // arrays were a fixed int[3] and the observation was laid out around that width,
+        // so a Coffer run's six slots had nowhere to go. This assertion is the whole
+        // point of the relic and it is now checkable.
+        Assert.Equal(4, engine.State.PotionSlots.Count(potion => potion != 0));
     }
 
     /// <summary>

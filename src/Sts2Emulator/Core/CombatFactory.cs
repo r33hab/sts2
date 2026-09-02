@@ -343,7 +343,7 @@ public static class CombatFactory
         state.StatusCardsDrawnThisTurn = 0;
         state.ResolvingDefendCard = false;
         state.PlayedCardCostForCombat = int.MinValue;
-        state.PotionSlots = new int[3];
+        state.PotionSlots = new int[RunConstants.PotionSlotCapacity];
         for (int i = 0; i < Math.Min(state.PotionSlots.Length, potionIds.Length); i++)
         {
             state.PotionSlots[i] = potionIds[i];

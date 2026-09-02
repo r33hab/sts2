@@ -139,7 +139,7 @@ public sealed class RunState
     /// <c>Populate</c>. A non-zero entry is a potion the event named outright.
     /// </summary>
     public List<int> PendingPotionRewards = [];
-    public int[] PotionSlots = new int[3];
+    public int[] PotionSlots = new int[Run.RunConstants.PotionSlotCapacity];
 
     /// <summary>
     /// How many of those slots the run may actually fill.
@@ -153,6 +153,15 @@ public sealed class RunState
     /// is what proved it moves at all.
     /// </remarks>
     public int MaxPotionSlots = 2;
+
+    /// <summary>
+    /// The slots that actually exist right now. <see cref="PotionSlots" /> is a fixed
+    /// <see cref="RunConstants.PotionSlotCapacity" /> wide so the observation keeps one
+    /// shape; anything asking "is there room for a potion" has to stop at
+    /// <see cref="MaxPotionSlots" /> or it will find room the run has not bought.
+    /// </summary>
+    public IEnumerable<int> UsablePotionSlots() =>
+        PotionSlots.Take(Math.Min(MaxPotionSlots, PotionSlots.Length));
 
     /// <summary>
     /// Extra `CardReward`s owed by Prayer Wheel or White Star. Counted rather than

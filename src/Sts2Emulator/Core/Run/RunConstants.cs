@@ -384,6 +384,14 @@ public static class RunConstants
     public const int ActGlory = 4;
 
     /// <summary>
+    /// How many potion slots a run can ever hold, which is the width of the arrays and of
+    /// the observation -- NOT how many are usable. `MaxPotionSlots` says that, and it
+    /// starts at two and grows: Potion Belt +2, Phial Holster +1, Alchemical Coffer +4.
+    /// The Coffer alone takes a starting run to six, which is why three was never enough.
+    /// </summary>
+    public const int PotionSlotCapacity = 6;
+
+    /// <summary>
     /// <c>ModelDb.ActsByIndex</c>: the acts a run may play at each index, in the order the
     /// game declares them. <c>ActModel.GetRandomList</c> takes ONE per index off the
     /// act_selection stream — including where there is only one candidate, which still

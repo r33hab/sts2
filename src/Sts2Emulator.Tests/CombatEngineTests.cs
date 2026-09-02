@@ -430,7 +430,8 @@ public class CombatEngineTests
             potionIds: [1, 0, 2]
         );
 
-        Assert.Equal(new[] { 1, 0, 2 }, state.PotionSlots);
+        // The array is `PotionSlotCapacity` wide and the run hands over what it holds.
+        Assert.Equal(new[] { 1, 0, 2 }, state.PotionSlots.Take(3).ToArray());
     }
 
     [Fact]

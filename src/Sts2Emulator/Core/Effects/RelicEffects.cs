@@ -528,7 +528,9 @@ public static class RelicEffects
         // this looks for a slot rather than making room.
         if (HasRelic(state, PetrifiedToad))
         {
-            for (int i = 0; i < state.PotionSlots.Length; i++)
+            // USABLE slots only: the array is the run's capacity wide, and the ones past
+            // MaxPotionSlots are not free, they do not exist yet.
+            for (int i = 0; i < Math.Min(state.MaxPotionSlots, state.PotionSlots.Length); i++)
             {
                 if (state.PotionSlots[i] == 0)
                 {

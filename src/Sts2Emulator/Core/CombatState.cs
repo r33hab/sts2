@@ -180,7 +180,7 @@ public sealed class CombatState
     public List<int> StrangleBeforePlay = [];
 
     // Potions: slot index → potion def ID, 0 = empty
-    public int[] PotionSlots = new int[3];
+    public int[] PotionSlots = new int[Run.RunConstants.PotionSlotCapacity];
 
     /// <summary>Every card the fight is holding, wherever it sits.</summary>
     public IEnumerable<CardInstance> AllCards() =>
