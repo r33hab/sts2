@@ -538,3 +538,69 @@ public class StarterAndPaelRelicTests
         Assert.Equal(2, BuffSystem.Get(combat.PlayerBuffs, BuffId.Strength));
     }
 }
+
+/// <summary>
+/// The two energy relics whose answer depends on the TURN, which is why neither can live
+/// in `MaxEnergyRelics` -- that list is folded into MaxEnergy once at combat start.
+/// </summary>
+public class TurnGatedEnergyRelicTests
+{
+    private static CombatState Fight(params int[] relicIds)
+    {
+        var engine = new RunEngine();
+        engine.Reset("NXV45HW43K");
+        foreach (int id in relicIds)
+        {
+            RunNonCombatEffects.ApplyRelicPickup(engine.State, id);
+        }
+
+        engine.State.Phase = RunPhase.Map;
+        for (int i = 0; i < engine.State.MapNodeTypes.Length; i++)
+        {
+            if (engine.State.MapNodeTypes[i] == RunConstants.NodeNormal)
+            {
+                engine.Step(i, -1, out _, out _, out _);
+                break;
+            }
+        }
+
+        return engine.State.ActiveCombat!;
+    }
+
+    /// <summary>
+    /// `PaelsFlesh.ModifyMaxEnergy` returns the amount unchanged while `TurnNumber < 3`,
+    /// so it pays from turn THREE. Turns one and two get nothing.
+    /// </summary>
+    [Theory]
+    [InlineData(1, 0)]
+    [InlineData(2, 0)]
+    [InlineData(3, 1)]
+    [InlineData(9, 1)]
+    public void PaelsFleshPaysFromTurnThree(int turnNumber, int extra)
+    {
+        var combat = Fight(RelicEffects.PaelsFlesh);
+
+        Assert.Equal(10 + extra, RelicEffects.ModifyMaxEnergy(combat, 10, turnNumber));
+    }
+
+    /// <summary>Bread still pays from turn two, and the two stack.</summary>
+    [Fact]
+    public void BreadAndPaelsFleshStack()
+    {
+        var both = Fight(RelicEffects.PaelsFlesh, RelicEffects.Bread);
+
+        Assert.Equal(11, RelicEffects.ModifyMaxEnergy(both, 10, 2));
+        Assert.Equal(12, RelicEffects.ModifyMaxEnergy(both, 10, 3));
+    }
+
+    /// <summary>
+    /// `WhisperingEarring`'s +1 max energy IS modelled even though its auto-play is
+    /// declared. A relic can be half-wired on purpose; what it must not be is half-wired
+    /// by accident, which is what the declared list records.
+    /// </summary>
+    [Fact]
+    public void WhisperingEarringStillPaysItsEnergy()
+    {
+        Assert.Equal(4, Fight(RelicEffects.WhisperingEarring).Energy);
+    }
+}

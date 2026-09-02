@@ -786,6 +786,14 @@ READ: dict[str, tuple[str, str]] = {
         "BeforeHandDraw turn one: one Power MOVED from draw to hand off CombatCardSelection, free for the turn. Moves rather than makes, so the draw pile shortens and the turn-one reorder sees it.",
     ),
     "SignetRing": ("9f6083896263", "GoldVar(999) on pickup, through GainGold so Bloody Idol sees it."),
+    "PaelsFlesh": (
+        "fee2db0b5a01",
+        "+1 max energy from turn THREE (`TurnNumber < 3` returns unchanged). Rides Bread's per-turn hook rather than MaxEnergyRelics, which is folded into MaxEnergy once at combat start and cannot answer a question whose answer depends on the turn.",
+    ),
+    "WhisperingEarring": (
+        "dfb8531ca8ea",
+        "+1 max energy, modelled. Its auto-play of up to thirteen cards on turn one through the game's VakuuCardSelector is NOT: that is a policy choosing the player's cards, and it is declared in RelicEffects.UnmodelledInRun rather than approximated.",
+    ),
     "PaelsTears": (
         "cb9b701cad0a",
         "Two energy at turn start IF last turn ended with energy left. The counter is the flag: written in BeforeSideTurnEnd, read at the next turn start, so it never pays on the turn that earned it.",

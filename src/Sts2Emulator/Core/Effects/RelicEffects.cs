@@ -275,6 +275,8 @@ public static class RelicEffects
     public const int InfusedCore = 116;
     public const int PhylacteryUnbound = 197;
     public const int ToastyMittens = 266;
+    public const int PaelsFlesh = 178;
+    public const int WhisperingEarring = 289;
 
     /// <summary>`SealOfGold`'s GoldVar(5) -- the toll it takes for its energy.</summary>
     private const int SealOfGoldPrice = 5;
@@ -304,6 +306,11 @@ public static class RelicEffects
         // shuffled into the deck on pickup -- a run-level cost for a combat-level gain,
         // which is why only this half lives here.
         BloodSoakedRose,
+        // `WhisperingEarring.ModifyMaxEnergy`: EnergyVar(1). Its OTHER half auto-plays up
+        // to thirteen cards on turn one through the game's own card selector, which is an
+        // AI standing in for the player -- see `UnmodelledInRun` for why that is declared
+        // rather than approximated.
+        WhisperingEarring,
     ];
 
     /// <summary>The game's DynamicVar("Cards", 6) on Velvet Choker.</summary>
@@ -1813,6 +1820,11 @@ public static class RelicEffects
         // share to hang it on. Declared rather than guessed -- see E451 for what a
         // wrong draw count costs.
         DelicateFrond,
+        // `WhisperingEarring.AfterAutoPrePlayPhaseEnteredLate` auto-plays up to thirteen
+        // cards on turn one through the game's `VakuuCardSelector` -- an AI choosing the
+        // player's cards for them. Its +1 max energy IS modelled; only the auto-play is
+        // declared, because approximating a policy is worse than admitting there is one.
+        WhisperingEarring,
     ];
 
     /// <summary>
@@ -2497,8 +2509,17 @@ public static class RelicEffects
     /// then charged 2 at its side-turn start, which is the card's whole shape — a bad
     /// first turn bought with a better every turn after.
     /// </summary>
+    /// <remarks>
+    /// `PaelsFlesh.ModifyMaxEnergy` is the same shape with a later gate: `TurnNumber < 3`
+    /// returns the amount unchanged, so it pays from turn THREE. It rides this hook rather
+    /// than `MaxEnergyRelics` for the reason Bread does -- that list is folded into
+    /// `MaxEnergy` once at combat start, and a relic whose answer depends on the turn
+    /// cannot be answered once.
+    /// </remarks>
     internal static int ModifyMaxEnergy(CombatState state, int maxEnergy, int turnNumber) =>
-        turnNumber > 1 && HasRelic(state, Bread) ? maxEnergy + 1 : maxEnergy;
+        maxEnergy
+        + (turnNumber > 1 && HasRelic(state, Bread) ? 1 : 0)
+        + (turnNumber >= 3 && HasRelic(state, PaelsFlesh) ? 1 : 0);
 
     /// <summary>
     /// `LavaLamp.TryModifyCardRewardOptionsLate`: every upgradable option on the card

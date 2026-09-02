@@ -497,21 +497,31 @@ public class LastingCandyTests
     }
 
     /// <summary>
-    /// Three declared gaps, each for a reason that is not "nobody got to it". Lasting
-    /// Candy needs a fourth card-reward slot and Driftwood needs a reward reroll -- both
+    /// Four declared gaps, each for a reason that is not "nobody got to it". Lasting Candy
+    /// needs a fourth card-reward slot and Driftwood needs a reward reroll -- both
     /// action-space changes, not missing effects. Delicate Frond would have to guess a
     /// draw count on `CombatPotionGeneration`, and E451 is what a wrong draw count costs.
-    /// Fake Snecko Eye left the list when Confused arrived with Snecko Eye.
+    /// Whispering Earring's auto-play is a POLICY -- the game's own selector choosing up
+    /// to thirteen cards for the player -- and approximating a policy is worse than
+    /// admitting there is one; its +1 max energy is modelled, so it is a PARTIAL entry
+    /// here, the same shape as Snecko Eye's. Fake Snecko Eye left the list when Confused
+    /// arrived with Snecko Eye.
     ///
     /// Pinned by MEMBERSHIP rather than by count, so the list cannot quietly become a
-    /// place to park work: adding a fourth goes red here and has to be argued for in this
+    /// place to park work: adding a fifth goes red here and has to be argued for in this
     /// comment, which is the whole point of the guard.
     /// </summary>
     [Fact]
-    public void TheDeclaredRunGapsAreTheThreeThatAreArguedFor()
+    public void TheDeclaredRunGapsAreTheFourThatAreArguedFor()
     {
         Assert.Equal(
-            new[] { RelicEffects.LastingCandy, RelicEffects.Driftwood, RelicEffects.DelicateFrond },
+            new[]
+            {
+                RelicEffects.LastingCandy,
+                RelicEffects.Driftwood,
+                RelicEffects.DelicateFrond,
+                RelicEffects.WhisperingEarring,
+            },
             RelicEffects.UnmodelledInRun
         );
     }
