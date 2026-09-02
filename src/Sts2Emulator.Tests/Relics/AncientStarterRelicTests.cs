@@ -735,3 +735,163 @@ public class IronClubTests
         );
     }
 }
+
+/// <summary>
+/// `Fiddle` draws two more every turn and refuses every OTHER draw while it is your turn.
+/// Modelling only the two would make it a strictly better Bag of Preparation.
+/// </summary>
+public class FiddleTests
+{
+    private static CombatState Fight(params int[] relicIds)
+    {
+        var engine = new RunEngine();
+        engine.Reset("NXV45HW43K");
+        foreach (int id in relicIds)
+        {
+            RunNonCombatEffects.ApplyRelicPickup(engine.State, id);
+        }
+
+        engine.State.Phase = RunPhase.Map;
+        for (int i = 0; i < engine.State.MapNodeTypes.Length; i++)
+        {
+            if (engine.State.MapNodeTypes[i] == RunConstants.NodeNormal)
+            {
+                engine.Step(i, -1, out _, out _, out _);
+                break;
+            }
+        }
+
+        return engine.State.ActiveCombat!;
+    }
+
+    /// <summary>Two more in the opening hand, and two more every turn after.</summary>
+    [Fact]
+    public void FiddleDrawsTwoMore()
+    {
+        Assert.Equal(2, RelicEffects.ExtraOpeningHandDraw(Fight(RelicEffects.Fiddle)));
+        Assert.Equal(2, RelicEffects.ExtraHandDraw(Fight(RelicEffects.Fiddle)));
+        Assert.Equal(7, Fight(RelicEffects.Fiddle).Hand.Count);
+    }
+
+    /// <summary>
+    /// And nothing else may draw while it is your turn -- the refusal is `ShouldDraw`
+    /// returning false for any draw that is not the hand draw.
+    /// </summary>
+    [Fact]
+    public void FiddleRefusesEveryOtherDrawOnYourTurn()
+    {
+        var combat = Fight(RelicEffects.Fiddle);
+        combat.PlayerTurn = true;
+        int before = combat.Hand.Count;
+
+        CardEffects.DrawCards(combat, 3, new System.Random(1));
+
+        Assert.Equal(before, combat.Hand.Count);
+    }
+
+    /// <summary>
+    /// But a draw on the ENEMY's turn still lands. The game writes that exception out --
+    /// `player.Creature.Side != CombatState.CurrentSide` -- and without it Fiddle would
+    /// also silence the powers that draw between turns.
+    /// </summary>
+    [Fact]
+    public void FiddleAllowsDrawsOnTheEnemyTurn()
+    {
+        var combat = Fight(RelicEffects.Fiddle);
+        combat.PlayerTurn = false;
+        int before = combat.Hand.Count;
+
+        CardEffects.DrawCards(combat, 3, new System.Random(1));
+
+        Assert.Equal(before + 3, combat.Hand.Count);
+    }
+
+    /// <summary>Without the relic an ordinary extra draw is untouched.</summary>
+    [Fact]
+    public void WithoutFiddleExtraDrawsLand()
+    {
+        var combat = Fight();
+        combat.PlayerTurn = true;
+        int before = combat.Hand.Count;
+
+        CardEffects.DrawCards(combat, 3, new System.Random(1));
+
+        Assert.Equal(before + 3, combat.Hand.Count);
+    }
+}
+
+/// <summary>
+/// `WarHammer.AfterCombatVictory(room.RoomType == Elite)`: four upgradable deck cards,
+/// `StableShuffle(Rng.Niche).Take(4)`.
+/// </summary>
+public class WarHammerTests
+{
+    private static RunEngine Run(params int[] relicIds)
+    {
+        var engine = new RunEngine();
+        engine.Reset("NXV45HW43K");
+        foreach (int id in relicIds)
+        {
+            RunNonCombatEffects.ApplyRelicPickup(engine.State, id);
+        }
+
+        return engine;
+    }
+
+    private static int Upgraded(RunEngine engine) => engine.State.Deck.Count(c => c.Upgraded);
+
+    /// <summary>An elite victory upgrades four.</summary>
+    [Fact]
+    public void AnEliteVictoryUpgradesFour()
+    {
+        var engine = Run(RelicEffects.WarHammer);
+        int before = Upgraded(engine);
+
+        RunNonCombatEffects.ApplyWarHammerOnVictory(engine.State, wasElite: true);
+
+        Assert.Equal(before + 4, Upgraded(engine));
+    }
+
+    /// <summary>
+    /// A NORMAL victory upgrades nothing. The room gate is the interesting half -- the
+    /// same one Sword of Stone counts on -- so both sides of it are pinned.
+    /// </summary>
+    [Fact]
+    public void ANormalVictoryUpgradesNothing()
+    {
+        var engine = Run(RelicEffects.WarHammer);
+        int before = Upgraded(engine);
+
+        RunNonCombatEffects.ApplyWarHammerOnVictory(engine.State, wasElite: false);
+
+        Assert.Equal(before, Upgraded(engine));
+    }
+
+    /// <summary>And without the hammer an elite pays nothing either.</summary>
+    [Fact]
+    public void WithoutTheHammerAnEliteUpgradesNothing()
+    {
+        var engine = Run();
+        int before = Upgraded(engine);
+
+        RunNonCombatEffects.ApplyWarHammerOnVictory(engine.State, wasElite: true);
+
+        Assert.Equal(before, Upgraded(engine));
+    }
+
+    /// <summary>
+    /// It draws on `Rng.Niche`, and `UpgradeRandomCards` orders by the game's ModelId
+    /// before shuffling -- sorting by the emulator's numeric ids puts a different card
+    /// under the same draw, which is E40's mistake.
+    /// </summary>
+    [Fact]
+    public void ItSpendsTheNicheStream()
+    {
+        var engine = Run(RelicEffects.WarHammer);
+        int before = engine.State.Rng.Niche.CallCount;
+
+        RunNonCombatEffects.ApplyWarHammerOnVictory(engine.State, wasElite: true);
+
+        Assert.True(engine.State.Rng.Niche.CallCount > before);
+    }
+}

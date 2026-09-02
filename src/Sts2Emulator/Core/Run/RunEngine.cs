@@ -1213,6 +1213,11 @@ public sealed class RunEngine
                         State.LastResolvedRoomType == RunConstants.NodeElite
                     );
 
+                    RunNonCombatEffects.ApplyWarHammerOnVictory(
+                        State,
+                        State.LastResolvedRoomType == RunConstants.NodeElite
+                    );
+
                     // `EnterCombatWithoutExitingEvent(..., shouldResumeAfterCombat: true)`:
                     // the room was never the combat's, so the event pays instead of the
                     // fight. `ShouldGiveRewards => false` on the encounter is the same

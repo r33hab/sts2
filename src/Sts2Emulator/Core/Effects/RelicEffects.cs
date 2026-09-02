@@ -280,6 +280,8 @@ public static class RelicEffects
     public const int TanxsWhistle = 258;
     public const int JewelryBox = 121;
     public const int IronClub = 118;
+    public const int WarHammer = 286;
+    public const int Fiddle = 88;
 
     /// <summary>`IronClub`'s CardsVar(4): every fourth card played draws one.</summary>
     private const int IronClubCards = 4;
@@ -1037,6 +1039,8 @@ public static class RelicEffects
         + (HasRelic(state, SneckoEye) ? 2 : 0)
         // `PaelsBlood.ModifyHandDraw`: CardsVar(1), unconditionally.
         + (HasRelic(state, PaelsBlood) ? 1 : 0)
+        // `Fiddle.ModifyHandDrawLate`: CardsVar(2), unconditionally.
+        + (HasRelic(state, Fiddle) ? 2 : 0)
         // `RingOfTheDrake.ModifyHandDraw`: CardsVar(2) while `TurnNumber <= Turns`, where
         // Turns is 3 -- so turns two and three, turn one having been paid by the opening
         // hand above. The comparison is on the turn number the draw is FOR.
@@ -1051,6 +1055,18 @@ public static class RelicEffects
                 ? 2
                 : 0
         );
+
+    /// <summary>
+    /// `Fiddle.ShouldDraw` returns FALSE for its owner on its OWN side turn whenever the
+    /// draw is not the hand draw -- so nothing a card or a power does can add to the hand
+    /// while it is your turn. Draws on the ENEMY's turn still land, which is the exception
+    /// the game writes out (`player.Creature.Side != CombatState.CurrentSide`).
+    ///
+    /// That refusal is the whole price of its two extra cards, and modelling only the two
+    /// would make Fiddle a strictly better Bag of Preparation.
+    /// </summary>
+    internal static bool BlocksExtraDraws(CombatState state) =>
+        HasRelic(state, Fiddle) && state.PlayerTurn;
 
     /// <summary>
     /// `InfusedCore.ModifyOrbValue`: +1 to the player's LIGHTNING orbs, passive and evoke
@@ -1168,6 +1184,10 @@ public static class RelicEffects
         // `PaelsBlood.ModifyHandDraw`: CardsVar(1) with no turn guard, so like Snecko Eye
         // it pays on turn one and every turn after and has to appear in both places.
         + (HasRelic(state, PaelsBlood) ? 1 : 0)
+        // `Fiddle.ModifyHandDrawLate`: CardsVar(2), every turn. Its PRICE is `ShouldDraw`,
+        // which refuses every draw that is not a hand draw while it is your turn -- see
+        // `BlocksExtraDraws`. A bigger hand, and nothing else may add to it.
+        + (HasRelic(state, Fiddle) ? 2 : 0)
         // `RingOfTheDrake.ModifyHandDraw`: CardsVar(2) while TurnNumber <= Turns(3). Turn
         // one is here; turns two and three are in `ExtraHandDraw`.
         + (HasRelic(state, RingOfTheDrake) ? 2 : 0)

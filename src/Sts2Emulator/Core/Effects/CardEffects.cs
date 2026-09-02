@@ -2532,6 +2532,15 @@ public static class CardEffects
             return;
         }
 
+        // `Fiddle.ShouldDraw` refuses any draw that is not the hand draw while it is its
+        // owner's turn. Sits beside NoDraw because it is the same kind of veto, and after
+        // it because NoDraw is unconditional where this one spares the hand draw and the
+        // enemy's turn.
+        if (!fromHandDraw && RelicEffects.BlocksExtraDraws(state))
+        {
+            return;
+        }
+
         for (int i = 0; i < count; i++)
         {
             // `CardPileCmd.Draw` STOPS at a full hand -- `if (num <= 0) break`, and again on

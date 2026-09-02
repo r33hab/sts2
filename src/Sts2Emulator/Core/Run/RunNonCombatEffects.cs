@@ -2886,6 +2886,24 @@ public static class RunNonCombatEffects
     /// ordinally — before it shuffles, so sorting by the emulator's own numeric ids puts a
     /// different card under the same draw. Both were wrong in the Light Door once (E40).
     /// </remarks>
+    /// <summary>
+    /// `WarHammer.AfterCombatVictory(room.RoomType == Elite)`: `CardsVar(4)` upgradable
+    /// deck cards, `StableShuffle(Rng.Niche).Take(4)`.
+    /// </summary>
+    /// <remarks>
+    /// Takes `wasElite` rather than reading the room, for the same reason
+    /// `CountEliteVictoryForSwordOfStone` does: the gate is the interesting half and a
+    /// parameter is the only way to test both sides of it. On the VICTORY, so fleeing or
+    /// dying in an elite pays nothing.
+    /// </remarks>
+    public static void ApplyWarHammerOnVictory(RunState state, bool wasElite)
+    {
+        if (wasElite && Effects.RelicEffects.Has(state.Relics, Effects.RelicEffects.WarHammer))
+        {
+            UpgradeRandomCards(state, 4, state.Rng.Niche);
+        }
+    }
+
     public static void UpgradeRandomCards(RunState state, int count, GameRng rng)
     {
         var indexes = state

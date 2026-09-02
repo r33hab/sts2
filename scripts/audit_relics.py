@@ -786,6 +786,14 @@ READ: dict[str, tuple[str, str]] = {
         "BeforeHandDraw turn one: one Power MOVED from draw to hand off CombatCardSelection, free for the turn. Moves rather than makes, so the draw pile shortens and the turn-one reorder sees it.",
     ),
     "SignetRing": ("9f6083896263", "GoldVar(999) on pickup, through GainGold so Bloody Idol sees it."),
+    "Fiddle": (
+        "e4ca940a266e",
+        "ModifyHandDrawLate +2 every turn, and ShouldDraw REFUSES every other draw while it is your turn -- draws on the enemy's turn still land. Both halves: the refusal is the price, and without it Fiddle is a strictly better Bag of Preparation.",
+    ),
+    "WarHammer": (
+        "c155379868ed",
+        "Four upgradable deck cards on an ELITE victory, StableShuffle(Rng.Niche).Take(4). Gated on the room the way Sword of Stone is, and on the VICTORY so fleeing pays nothing.",
+    ),
     "IronClub": (
         "fae09b192c3f",
         "Every FOURTH card played draws one. The count is a [SavedProperty] nothing resets -- not AfterCombatEnd, not combat start -- so it runs the length of the RUN and is in RunCounterRelics. Restarting it each combat would pay out strictly less often than the game.",
