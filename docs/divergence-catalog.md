@@ -1067,3 +1067,21 @@ real weakening" and that each entry "needs a hand-written test to cover the numb
 instead". Two tests later, one of the two counters was wrong (E450) and the other was
 right. The weakening was recorded honestly by whoever wrote that comment, and following
 its instruction is what turned an unassertable capture into a found defect.
+
+**Every card in the game bar one has now been played against it.** 511 of 512
+singleplayer-reachable cards have a live capture; the exception is `GrandFinale`, whose
+`IsPlayable => Draw.Cards.Count == 0` a staged capture cannot satisfy, and whose condition
+the emulator matches exactly. Getting the last 28 needed a new capture SHAPE rather than
+more of the same: curses and statuses are mostly Unplayable, so `assert_playable` refused
+them and the harness could not reach them at all. `--hold` ends the turn with the card in
+hand and snapshots the next one, which is where `OnTurnEndInHand` has happened and where a
+card that merely took up a slot shows as a hand one short.
+
+**The last two hundred cards found two defects.** E450 (Panache counting its own play) and
+nothing else across Ironclad, Silent, Colorless, and the curses and statuses. That is a
+real answer to a question this catalog has asked repeatedly -- whether a card verified only
+against `decompiled/` is trustworthy -- and for the oldest, most-read pools the answer
+turns out to be yes. It is not the answer for enemy move tables, where the same exercise
+found ten. **The difference is not the reading, it is what the reading has to cover**: a
+card's OnPlay is a dozen lines in one file, and a monster is a state machine whose body
+lives somewhere else entirely.

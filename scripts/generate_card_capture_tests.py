@@ -563,9 +563,17 @@ def render_test(
             "capture claims an enchantment but records no hand_index to put it on",
         )
     hand_index = fixture["hand_index"]
+    # A HELD capture never played the card: it sat in hand while the turn ended, which is
+    # the only way to reach an Unplayable curse or status. `OnTurnEndInHand` is what most
+    # of them do, and the rest are visible as a slot the hand did not have free.
+    action = (
+        "        fight.EndTurn();"
+        if fixture.get("held")
+        else f"        fight.Play(index: {hand_index}, target: {fixture['target_index']});"
+    )
     lines += [
         "",
-        f"        fight.Play(index: {hand_index}, target: {fixture['target_index']});",
+        action,
         *selection_lines(fixture),
         "",
         f"        Assert.Equal({after_player['hp']}, fight.State.PlayerHp);",

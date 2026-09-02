@@ -548,6 +548,42 @@ def wait_for_play_to_settle(
     )
 
 
+def end_turn_holding(base_url: str, state: dict[str, Any]) -> dict[str, Any]:
+    """End the turn with the staged card still in hand, and snapshot the far side.
+
+    Most curses and statuses are UNPLAYABLE, so `capture_card.py`'s whole shape -- stage a
+    card, play it, diff -- cannot reach them: `assert_playable` refuses before anything
+    happens. What they do instead is happen AT you. `CardModel.OnTurnEndInHand` is the hook
+    for nine of them (Burn, Wither, Decay, Doubt, Shame, Regret, Debt, Bad Luck, Infection)
+    and the rest work by taking up a slot, which is visible in the piles either way.
+
+    So the capture ends the turn instead of playing, and records the state at the start of
+    the next one -- the same far-side snapshot the VoidForm work needed, for the same
+    reason: the moment worth comparing is after the board has finished moving.
+    """
+    round_before = (state.get("battle") or {}).get("round")
+    trace_real_game.post_action(base_url, {"action": "end_turn"})
+    deadline = time.monotonic() + 45.0
+    while time.monotonic() < deadline:
+        latest = start_real_game_run.get_state(base_url)
+        battle = latest.get("battle") or {}
+        if (
+            latest.get("state_type") in {"monster", "elite", "boss"}
+            and battle.get("turn") == "player"
+            and battle.get("is_play_phase")
+            and battle.get("round") != round_before
+        ):
+            # One more settle: a status that burns the player at end of turn does it
+            # partway through, and the hand for the new turn is dealt after.
+            time.sleep(0.75)
+            return start_real_game_run.get_state(base_url)
+        time.sleep(0.5)
+
+    raise RuntimeError(
+        "the turn never came back to the player -- the held card may have ended the run.",
+    )
+
+
 def capture(
     base_url: str,
     card: str,
@@ -564,6 +600,7 @@ def capture(
     enchant_amount: float = 1.0,
     character: str = "IRONCLAD",
     picks: list[int] | None = None,
+    hold: bool = False,
 ) -> dict[str, Any]:
     if not reuse_run:
         wait_for_menu_options(base_url)
@@ -605,16 +642,19 @@ def capture(
         enchantment=enchantment,
         enchant_amount=enchant_amount,
     )
-    assert_playable(before_state, index, card)
     selections: list[dict[str, Any]] = []
-    after_state = play_card(
-        base_url,
-        index,
-        target_index,
-        before_state,
-        picks=list(picks or []),
-        recorded=selections,
-    )
+    if hold:
+        after_state = end_turn_holding(base_url, before_state)
+    else:
+        assert_playable(before_state, index, card)
+        after_state = play_card(
+            base_url,
+            index,
+            target_index,
+            before_state,
+            picks=list(picks or []),
+            recorded=selections,
+        )
 
     before = trace_real_game.summarize_state(before_state)
     after = trace_real_game.summarize_state(after_state)
@@ -639,6 +679,10 @@ def capture(
         # The mod adds to the top of the pile, but recording the index the card was
         # actually played from keeps the generated test correct if that ever changes.
         "hand_index": index,
+        # Held through the turn rather than played: an Unplayable curse or status, whose
+        # effect is `OnTurnEndInHand` or simply taking up a slot. The rebuilt test ends the
+        # turn instead of playing.
+        "held": hold,
         "energy": energy,
         "powers": powers,
         # The enchantment belongs in the FIXTURE, not just the filename. The first Sharp
@@ -686,6 +730,7 @@ def default_out(
     enchantment: str | None = None,
     character: str = "IRONCLAD",
     picks: list[int] | None = None,
+    held: bool = False,
 ) -> Path:
     suffix = "-upgraded" if upgraded else ""
     # Staged powers change what the capture proves, so they belong in the filename --
@@ -701,10 +746,15 @@ def default_out(
     # different facts, the same way two captures with different staged powers are.
     # Index 0 is the default and stays unmarked so existing filenames do not move.
     picked = "-pick" + "".join(str(p) for p in picks) if picks and any(picks) else ""
+    # A held capture and a played one are different facts about the same card.
+    holding = "-held" if held else ""
     # The character is part of what a capture proves: the same card played by a
     # Necrobinder has Osty on the board and by an Ironclad does not.
     who = "" if character.upper() == "IRONCLAD" else f"-{character.lower()}"
-    return FIXTURES / f"{card}{suffix}{staged}{enchanted}{picked}{who}-{encounter}.json"
+    return (
+        FIXTURES
+        / f"{card}{suffix}{staged}{enchanted}{picked}{holding}{who}-{encounter}.json"
+    )
 
 
 def main() -> None:
@@ -772,6 +822,15 @@ def main() -> None:
         help="stage a power first, e.g. VULNERABLE_POWER=2 or STRENGTH_POWER=3@player",
     )
     parser.add_argument(
+        "--hold",
+        action="store_true",
+        help=(
+            "end the turn with the card still in hand instead of playing it, and capture "
+            "the start of the next turn. The only way to reach an UNPLAYABLE curse or "
+            "status: its effect is OnTurnEndInHand, or simply that it took up a slot."
+        ),
+    )
+    parser.add_argument(
         "--select",
         default="",
         help=(
@@ -800,6 +859,7 @@ def main() -> None:
         enchant_amount=args.enchant_amount,
         character=args.character,
         picks=[int(x) for x in args.select.split(",") if x.strip()],
+        hold=args.hold,
     )
 
     out = args.out or default_out(
@@ -810,6 +870,7 @@ def main() -> None:
         args.enchantment,
         args.character,
         [int(x) for x in args.select.split(",") if x.strip()],
+        args.hold,
     )
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(fixture, indent=2) + "\n", encoding="utf-8")

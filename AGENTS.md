@@ -159,6 +159,19 @@
   through a loop that restarts the game after any failure, and do it in the background:
   a restart plus twenty captures runs well past ten minutes.
 
+  `--hold` ends the turn with the card still in hand instead of playing it, and captures
+  the start of the next turn:
+
+  ```
+  python scripts/capture_card.py --card Burn --hold        # an UNPLAYABLE status
+  ```
+
+  This is the only way to reach a curse or status. Most of them are Unplayable, so
+  `assert_playable` refuses before anything happens -- and what they do is happen AT you:
+  `OnTurnEndInHand` for nine of them, and for the rest simply occupying a slot the hand
+  did not have free. The generated test ends the turn rather than playing, and the
+  fixture carries `held: true` so the two shapes cannot be confused.
+
   **Cards the harness cannot stage**, as opposed to cards nobody has got to yet:
 
   - `GrandFinale` -- `IsPlayable => Draw.Cards.Count == 0`, and a staged capture always
