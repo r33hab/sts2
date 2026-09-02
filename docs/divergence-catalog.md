@@ -31,7 +31,7 @@ rather than Overgrowth.
 
 ## Open
 
-Four. Two are in act 2 — territory nothing could reach until buffed runs started
+Three. Two are in act 2 — territory nothing could reach until buffed runs started
 winning, and which `--enter-acts` now puts a few seconds away instead of behind a won boss
 fight. O20 is CLOSED — see E426; it was the Aeonglass's
 Withering Presence, recorded rather than approximated on the grounds that a buff nothing
@@ -103,7 +103,6 @@ read before deciding what to do next.
 | --- | --- | --- | --- |
 | O17 | Mad Science plays as a plain 12-damage attack whatever Tinker Time built | `ZenWeaverReflectionsTinkerTests` | The event is faithful now — three pages, the right shuffles, and the chosen type and rider recorded on the `CardInstance` — but the CARD is not. `MadScience.OnPlay` branches on its type (attack 12 / block 8 / a power) and then applies one of nine riders; the emulator has the card-table entry, so it plays as the Attack row regardless. Two of the riders need powers that do not exist (`CuriousPower`, `ImprovementPower`) and Chaos plays a mocked random card, so this is a card-implementation job rather than a missed line. |
 | O15 | Alchemical Coffer wants six potion slots; the emulator caps at three | `AncientBlessingTests` | `RunState.PotionSlots` is a fixed `int[3]`, as are `CombatState`'s and `GameState`'s, and the combat observation is laid out around that width — so a run cannot hold more than three potions whatever `MaxPotionSlots` says. The Coffer grants four slots on top of two. Widening the array is an observation-layout change, which is why it is recorded rather than done in passing; the test deliberately does NOT assert three, because that would bake the cap in as though it were the rule. |
-| O23 | whether The Hunt's extra card reward populates BEFORE or AFTER the room's ordinary one | `TheHuntTests` | A Hunt that kills adds a whole extra `CardReward` to the room. `CardReward` does not roll its cards in the constructor — `Populate()` does, when the screen is built — so the extra offer's three options come off `PlayerRng.Rewards` with the rest rather than at the moment of the kill. What is NOT settled is the order: both rewards are `RewardsSetIndex` 5, so they populate in the order they were added, and the extra is added DURING the combat while the ordinary set is built at its end. Modelled as "after", which is a guess; every card the rewards stream produces from the second offer on depends on it. A capture of a run that plays The Hunt to a kill settles it in one fight. |
 | O25 | a Nightmare names the card it is holding; the emulator only says how many | `NightmareTests` | NARROWED by E425, which gave the power a `BuffId` -- `CombatObservation` writes `PlayerBuffs` generically, so an agent can now see `Nightmare 3` and know three cards are arriving. What it still cannot see is WHICH: the game's `StringVar("Card")` names it, and the emulator keeps the clones in `CopiesToHandBeforeDraw`, which nothing in the observation reads. `ReturnToHandBeforeDraw` has the same gap and is still fully invisible -- it has no buff beside it. Exposing card IDENTITY is an observation-layout change, the same reason O15 stands. |
 
 All fourteen encounter models that roll their own composition now read the encounter's
@@ -1016,3 +1015,12 @@ ten lines, and it answered the question on its first run. **An open row that nam
 measurement it needs is a request for a tool, not a mystery**, and it is worth re-reading
 the others for the same shape: O23 says outright that "a capture of a run that plays The
 Hunt to a kill settles it in one fight".
+
+**O23 closed without the capture it asked for.** The row said "a capture of a run that
+plays The Hunt to a kill settles it in one fight", and that was true but unnecessary:
+`RewardsSet.WithRewardsFromRoom` appends the room's ordinary rewards and THEN the extra
+ones, and `GenerateWithoutOffering` walks that list calling `Populate()` before it sorts
+by `RewardsSetIndex` -- so the sort moves the display and cannot move the rolls. The
+emulator's guess of "after" was right. **A row that names the experiment it wants is still
+worth re-reading for an answer in the source**, because the reason it was left open was
+that nobody had gone back to the two files either side of the question.

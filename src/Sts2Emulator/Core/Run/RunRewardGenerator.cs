@@ -245,12 +245,14 @@ public static class RunRewardGenerator
         // -- so the extra offer's three cards come off the rewards stream here with the
         // rest, not at the moment of the kill.
         //
-        // UNVERIFIED: whether the extra offer populates BEFORE or AFTER the room's
-        // ordinary one. Both are RewardsSetIndex 5, so the order is the order they were
-        // added, and the extra was added during the combat while the ordinary set is built
-        // at its end. Taken as "after" here; a capture of a run that plays The Hunt to a
-        // kill would settle it, and until then every card the rewards stream produces from
-        // the second offer on is a guess.
+        // AFTER, and the source says so outright -- this needed no capture in the end.
+        // `RewardsSet.WithRewardsFromRoom` does `Rewards.AddRange(GenerateRewardsFor(...))`
+        // and THEN `Rewards.AddRange(combatRoom.ExtraRewards[player])`, so the ordinary
+        // set is in the list first. `GenerateWithoutOffering` then walks that list in
+        // order calling `Populate()` on each, and only sorts by `RewardsSetIndex`
+        // AFTERWARDS -- so the sort moves the display and cannot move the rolls. The
+        // ordinary offer draws its three first and the extra one draws next, which is
+        // what this does. Closes O23.
         int extraCardRewards = state.ActiveCombat?.ExtraCardRewards ?? 0;
         for (int i = 0; i < extraCardRewards; i++)
         {
