@@ -277,6 +277,8 @@ public static class RelicEffects
     public const int ToastyMittens = 266;
     public const int PaelsFlesh = 178;
     public const int WhisperingEarring = 289;
+    public const int TanxsWhistle = 258;
+    public const int JewelryBox = 121;
 
     /// <summary>`SealOfGold`'s GoldVar(5) -- the toll it takes for its energy.</summary>
     private const int SealOfGoldPrice = 5;

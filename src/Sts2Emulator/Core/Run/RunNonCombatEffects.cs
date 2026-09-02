@@ -358,6 +358,21 @@ public static class RunNonCombatEffects
             {
                 AddCardToDeck(state, new CardInstance(166, Upgraded: false));
             }
+
+            // `TanxsWhistle.AfterObtained` and `JewelryBox.AfterObtained` are the same
+            // one line with a different card: `CreateCard<T>` then `CardPileCmd.Add` to
+            // the DECK. Through `AddCardToDeck` for the reason Blood Soaked Rose's curse
+            // is -- Bing Bong clones whatever enters the deck, and Fresnel Lens enchants
+            // it, and a direct `Deck.Add` is invisible to both.
+            if (relicId == Effects.RelicEffects.TanxsWhistle)
+            {
+                AddCardToDeck(state, new CardInstance(539, Upgraded: false));
+            }
+
+            if (relicId == Effects.RelicEffects.JewelryBox)
+            {
+                AddCardToDeck(state, new CardInstance(16, Upgraded: false));
+            }
         }
 
         // RelicCmd.Obtain strikes the relic from both grab bags unless it is stackable,

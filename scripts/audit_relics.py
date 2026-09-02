@@ -786,6 +786,8 @@ READ: dict[str, tuple[str, str]] = {
         "BeforeHandDraw turn one: one Power MOVED from draw to hand off CombatCardSelection, free for the turn. Moves rather than makes, so the draw pile shortens and the turn-one reorder sees it.",
     ),
     "SignetRing": ("9f6083896263", "GoldVar(999) on pickup, through GainGold so Bloody Idol sees it."),
+    "TanxsWhistle": ("2f72338cf1c8", "A Whistle into the deck on pickup, through AddCardToDeck so Bing Bong and Fresnel Lens see it."),
+    "JewelryBox": ("61278e1566bf", "An Apotheosis into the deck on pickup, same one line as Tanx's Whistle with a different card."),
     "PaelsFlesh": (
         "fee2db0b5a01",
         "+1 max energy from turn THREE (`TurnNumber < 3` returns unchanged). Rides Bread's per-turn hook rather than MaxEnergyRelics, which is folded into MaxEnergy once at combat start and cannot answer a question whose answer depends on the turn.",

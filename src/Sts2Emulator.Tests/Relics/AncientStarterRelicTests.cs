@@ -604,3 +604,50 @@ public class TurnGatedEnergyRelicTests
         Assert.Equal(4, Fight(RelicEffects.WhisperingEarring).Energy);
     }
 }
+
+/// <summary>
+/// The two pickups that are one line each: a card into the deck. Their whole risk is going
+/// through `AddCardToDeck` rather than `Deck.Add`, because Bing Bong clones what enters the
+/// deck and Fresnel Lens enchants it, and neither can see a direct add.
+/// </summary>
+public class DeckGrantingRelicTests
+{
+    private static RunEngine Run(params int[] relicIds)
+    {
+        var engine = new RunEngine();
+        engine.Reset("NXV45HW43K");
+        foreach (int id in relicIds)
+        {
+            RunNonCombatEffects.ApplyRelicPickup(engine.State, id);
+        }
+
+        return engine;
+    }
+
+    /// <summary>`TanxsWhistle`: a Whistle into the deck.</summary>
+    [Fact]
+    public void TanxsWhistleGrantsAWhistle()
+    {
+        Assert.Contains(Run(RelicEffects.TanxsWhistle).State.Deck, card => card.DefId == 539);
+    }
+
+    /// <summary>`JewelryBox`: an Apotheosis into the deck.</summary>
+    [Fact]
+    public void JewelryBoxGrantsAnApotheosis()
+    {
+        Assert.Contains(Run(RelicEffects.JewelryBox).State.Deck, card => card.DefId == 16);
+    }
+
+    /// <summary>
+    /// And Bing Bong sees them, which is the whole reason these go through the chokepoint.
+    /// A direct `Deck.Add` would leave the doll's gift silently not applying to the one
+    /// card the relic just handed over.
+    /// </summary>
+    [Fact]
+    public void BingBongClonesTheGrantedCard()
+    {
+        var engine = Run(RelicEffects.BingBong, RelicEffects.TanxsWhistle);
+
+        Assert.Equal(2, engine.State.Deck.Count(card => card.DefId == 539));
+    }
+}
