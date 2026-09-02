@@ -2963,6 +2963,16 @@ public static class CombatEngine
             return false;
         }
 
+        // Death strips the segment's powers. `PowerModel.ShouldPowerBeRemovedAfterOwnerDeath`
+        // defaults to TRUE and `ReattachPower` is one of the few that overrides it to false,
+        // so a segment comes back carrying its Reattach and nothing else -- the Strength its
+        // BULK turns banked is gone with the rest.
+        //
+        // Kept: Reattach itself, and the Reviving bookkeeping applied just below. Without
+        // this a segment that died mid-fight came back with every point of Strength it had
+        // ever gained, and announced damage the game never deals.
+        enemy.Buffs.RemoveAll(buff => buff.Id is not (BuffId.Reattach or BuffId.Reviving));
+
         // TWO, not one: the phase it dies in is not the phase it reattaches in. See the
         // revive loop in EndTurn.
         BuffSystem.Apply(enemy.Buffs, BuffId.Reviving, 2);

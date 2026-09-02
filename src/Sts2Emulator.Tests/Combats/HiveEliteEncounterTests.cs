@@ -118,6 +118,47 @@ public class DecimillipedeTests
     }
 
     /// <summary>
+    /// Death STRIPS the segment's powers. `PowerModel.ShouldPowerBeRemovedAfterOwnerDeath`
+    /// defaults to true and `ReattachPower` is one of the few that overrides it to false,
+    /// so a segment comes back holding its Reattach and nothing else -- the Strength its
+    /// BULK turns banked dies with it.
+    /// </summary>
+    /// <remarks>
+    /// Found by a sweep driven eight turns with the player kept alive: emu segment powers
+    /// `[REATTACH 25, STRENGTH 4]` against the game's `[REATTACH 25]`, and an announced 18
+    /// where the game said 10. Nothing shorter reached it -- a segment has to die and come
+    /// back and then take a BULK turn before the two sides can disagree.
+    /// </remarks>
+    [Fact]
+    public void AKilledSegmentLosesItsStrengthAndKeepsItsReattach()
+    {
+        var fight = Fight.EncounterWithStream(RunConstants.DecimillipedeEncounterId, 0);
+        var segment = fight.State.Enemies[0];
+        fight.State.PlayerHp = 999;
+
+        BuffSystem.Apply(segment.Buffs, BuffId.Strength, 4);
+        Assert.Equal(4, BuffSystem.Get(segment.Buffs, BuffId.Strength));
+
+        fight.State.Hand.Clear();
+        fight.State.Hand.Add(new CardInstance(472, Upgraded: false));
+        fight.State.Energy = 5;
+        segment.Hp = 1;
+        segment.Block = 0;
+        fight.Play(0, target: 0);
+
+        Assert.Equal(0, BuffSystem.Get(segment.Buffs, BuffId.Strength));
+        Assert.True(BuffSystem.Get(segment.Buffs, BuffId.Reattach) > 0);
+
+        // And it is still gone once the segment is actually back on its feet.
+        fight.EndTurn();
+        fight.State.PlayerHp = 999;
+        fight.EndTurn();
+
+        Assert.Equal(RunConstants.DecimillipedeReattachHeal, segment.Hp);
+        Assert.Equal(0, BuffSystem.Get(segment.Buffs, BuffId.Strength));
+    }
+
+    /// <summary>
     /// REATTACH_MOVE's FollowUpState is the machine's RandomBranchState, not the cycle, so
     /// a segment that comes back ROLLS its next move — and every branch is CannotRepeat,
     /// so it cannot roll the one it last performed. The emulator resumed the cycle where

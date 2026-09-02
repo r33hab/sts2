@@ -1536,3 +1536,22 @@ already models.
 miscounting, and both survived every attempt to close them by playing differently or driving
 longer -- which was the evidence that they were not about play at all. A coverage number that
 cannot go green is worth suspecting before the thing it measures.
+
+### E464 -- a reattached segment kept the Strength it died with
+
+`PowerModel.ShouldPowerBeRemovedAfterOwnerDeath` defaults to TRUE, and `ReattachPower` is
+one of the few powers that overrides it to false. So a Decimillipede segment that dies comes
+back holding its Reattach **and nothing else** -- the Strength its BULK turns banked dies
+with it. The emulator kept everything, so a segment that had died mid-fight came back with
+every point it had ever gained and announced damage the game never deals: `[REATTACH 25,
+STRENGTH 4]` against the game's `[REATTACH 25]`, and an announced 18 where the game said 10.
+
+**Nothing shorter than this sweep could reach it.** A segment has to die, come back, and then
+take a BULK turn before the two sides can disagree at all -- which needs the fight to run
+past turn 8 with the player still alive. It took `--turns 8 --buff-max-hp 200`, the same
+configuration assembled to close the coverage ceiling, and it surfaced on the enemy POWERS comparison
+added earlier the same day.
+
+That is three separate pieces of harness work compounding: the powers comparison to see it,
+the survival flag to reach it, and the turn count to let it happen twice. None of them found
+anything alone.
