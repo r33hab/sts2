@@ -127,6 +127,34 @@ public class NightmareTests
         Assert.Equal(3, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.Nightmare));
     }
 
+    /// <summary>
+    /// The observation NAMES the cards that are coming, not just how many. The game shows
+    /// the held card on the power (`StringVar("Card")`), so a player can see three
+    /// Backstabs arriving and plan the energy; E425 made the count visible and this is the
+    /// other half. Closes O25.
+    /// </summary>
+    [Fact]
+    public void TheObservationNamesTheCardsThatAreComing()
+    {
+        var fight = WithNightmare(Card(SI.Backstab));
+        fight.Play();
+        fight.Choose(0);
+
+        var obs = new int[CombatObservation.ObsSize];
+        CombatObservation.Write(fight.State, obs);
+
+        for (int i = 0; i < 3; i++)
+        {
+            Assert.Equal(
+                SI.Backstab,
+                obs[CombatObservation.IncomingOffset + i * CombatObservation.CardSlotSize]
+            );
+        }
+
+        // And nothing beyond the three it actually owes.
+        Assert.Equal(0, obs[CombatObservation.IncomingOffset + 3 * CombatObservation.CardSlotSize]);
+    }
+
     /// <summary>`await PowerCmd.Remove(this)` -- the power goes with the copies.</summary>
     [Fact]
     public void ThePowerGoesWhenTheCopiesArrive()

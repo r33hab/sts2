@@ -31,7 +31,7 @@ rather than Overgrowth.
 
 ## Open
 
-One. Two are in act 2 — territory nothing could reach until buffed runs started
+None. Two are in act 2 — territory nothing could reach until buffed runs started
 winning, and which `--enter-acts` now puts a few seconds away instead of behind a won boss
 fight. O20 is CLOSED — see E426; it was the Aeonglass's
 Withering Presence, recorded rather than approximated on the grounds that a buff nothing
@@ -101,7 +101,6 @@ read before deciding what to do next.
 
 | # | Metric | Seed | What is known |
 | --- | --- | --- | --- |
-| O25 | a Nightmare names the card it is holding; the emulator only says how many | `NightmareTests` | NARROWED by E425, which gave the power a `BuffId` -- `CombatObservation` writes `PlayerBuffs` generically, so an agent can now see `Nightmare 3` and know three cards are arriving. What it still cannot see is WHICH: the game's `StringVar("Card")` names it, and the emulator keeps the clones in `CopiesToHandBeforeDraw`, which nothing in the observation reads. `ReturnToHandBeforeDraw` has the same gap and is still fully invisible -- it has no buff beside it. Exposing card IDENTITY is an observation-layout change, the same reason O15 stands. |
 
 All fourteen encounter models that roll their own composition now read the encounter's
 own stream, and `EncounterCompositionStreamTests` holds them there by varying the seed and
@@ -611,6 +610,7 @@ that failed could not have.
 | E446 | The Sea Glass grid could not be left without emptying it | `AncientBlessingTests` | `CardSelectorPrefs(prompt, 0, list.Count)` is MinSelect ZERO with a manual confirm: the player takes any number of the fifteen, including none. The emulator's grid handed over picks until they ran out, so the only way off the screen was to take all fifteen -- a different deck from the one a player who wanted three would have, and an agent that could not decline. `PendingOfferOptional` marks a grid whose minimum is zero and the action one past the last card is the confirm. **This closes O16**, which had been recorded as "the same gap applies to any future 0-to-N grid" -- and it does: the flag is the general answer, not a Sea Glass special case. |
 | E447 | A run could not hold the potions it had bought | `AncientBlessingTests` | `RunState.PotionSlots` was a fixed `int[3]`, as were `CombatState`'s and `GameState`'s, and the observation was laid out around that width -- so Alchemical Coffer, which grants four slots on top of two, had nowhere to put its four potions. The arrays are now `RunConstants.PotionSlotCapacity` (six) wide and the OBSERVATION with them; `MaxPotionSlots` still says how many exist, and the three scans that asked "is there a free slot" by looking at the whole array now stop at it -- a slot past the maximum is not free, it does not exist yet. Native API 24 -> 25. **Closes O15**, whose test deliberately asserted `>= 3` rather than `== 3` so the cap would not be baked in as though it were the rule; that test now asserts the four the relic gives. |
 | E448 | Mad Science's last three riders | `MadScienceTests`, `RunEngineTests` | O17 described this as "plays as a plain 12-damage attack whatever Tinker Time built", and that had stopped being true: the card already branched on TinkerType and handled five of the nine riders. What was left was three. CHOKING is `StranglePower` 6 on the target -- the power was already fully modelled and the rider had been left out on the grounds that a Strangle "cannot trigger on itself", which the snapshot `PlayCard` takes before the play already handles. CURIOUS is `CuriousPower`, a cost reduction on POWER cards only, which refuses a card already at zero (`if (originalCost <= 0m) return false`) and never goes below it. IMPROVEMENT is `AfterCombatEnd`: upgrade N upgradable DECK cards off `Rng.CombatCardSelection` without replacement, whether the fight was won or lost -- a run-side payout for a power held in combat, which is why it was the last of the nine. **Closes O17.** Still not modelled and now the only thing left on this card: its `Type` follows TinkerType in the game, so a type-sensitive relic reads it as whatever it was tinkered into, where the emulator's CardDef says Skill. |
+| E449 | The observation could not say which cards were coming | `NightmareTests`, `OrbObservationTests` | `NightmarePower`'s `StringVar("Card")` NAMES what it is holding, so a player sees three Backstabs arriving and plans the energy for them. E425 gave the power a `BuffId` and made the COUNT visible; the cards themselves sat in `CopiesToHandBeforeDraw`, which nothing in `CombatObservation` read -- and `ReturnToHandBeforeDraw` had the same gap and predated it. A five-slot block now carries both, in delivery order, appended after the orbs rather than inserted anywhere: every offset above it is a committed layout. Native API 25 -> 26. **Closes O25, and the Open table with it.** |
 | E365 | Howl From Beyond replayed a turn late, out of a pile it can never reach on its own | `HowlFromBeyondTests` | Found by reading the card beside Bombardment (E339), which has the same shape and neither of its two rules. Howl declares NO `CanonicalKeywords` — its Exhaust is an `ExtraHoverTips`, exactly as Havoc's is — so `GetResultPileTypeForCardPlay` discards it, and a probe that played it into a fresh fight left the exhaust pile empty and the whole replay mechanic dead. Nothing puts Howl in that pile but another card: Havoc's `forceExhaust`, or an exhaust-from-hand effect. The extractor was right to give the def no Exhaust flag; the emulator's mistake was expecting the card to arrive there by itself. Then the replay fired at the wrong phase — `AfterAutoPrePlayPhaseEntered` beside Mayhem, after the NEXT turn's hand draw, where Howl is `AfterAutoPostPlayPhaseEntered`: the moment the player ends the turn, before `BeforeTurnEnd` and before the enemies act. Against an enemy about to swing that is the difference between killing it and being hit first, and it is the only one of eleven assertions that a whole-`EndTurn` step can tell apart. And `CardCmd.AutoPlay(choiceContext, this, null)` takes no `forceExhaust`, so the replayed copy lands in the DISCARD — once per trip to the exhaust pile, where Bombardment's Exhaust keyword returns it and it fires forever. The emulator also never removed it from the pile before replaying (E339 found that half), which alongside the discard placement would have made it a free 16-to-all every turn for the rest of the fight. **Two cards, one shape, and every difference between them lives outside the method they share.** |
 | — | five of the eight remaining dark events are UNREACHABLE today | `RunNonCombatEffects.IsEventAllowed` | Colorful Philosophers, Colossal Flower, Grave Of The Forgotten and Round Tea Party are refused outright because their `IsAllowed` reads `CurrentActIndex` and the emulator models act one; Fake Merchant is in `ActTwoAndLaterEvents` for the same reason. So a wrong body in any of the five harms nothing today and everything the moment act two lands. Worth knowing before ranking the rest of this pass by risk: **Battleworn Dummy and The Trial were the only two an agent could actually meet**, and both were placeholders. |
 
@@ -1042,3 +1042,18 @@ row named the measurement it needed. In every case the row was written when the 
 first seen and never revisited, while the code moved underneath it. **A row describing a
 gap ages exactly like a coverage number does** -- re-read the code before believing the
 description, not just before believing the priority.
+
+**The Open table is empty for the first time since it was started.** That is worth reading
+narrowly, in exactly the way the table's own preamble has always said: it holds
+divergences a capture or a test SURFACED and nobody closed, and it is not a measure of
+what is wrong with the emulator. Six rows went in one session, and five of the six were
+closed by re-reading the row against the current code rather than by hard work -- one had
+its answer in the source, one needed ten lines of tooling, one was already half
+implemented, one had its fix written out in its own test's comment. The sixth, this one,
+was a genuine layout change and took an hour.
+
+What that says about the table is that **its rows were accurate when written and none of
+them was re-read**. The largest known defect surface is still not in it and never was:
+179 singleplayer-reachable cards with no live capture, 46 unmodelled relics, and Glory's
+event pool still returning Hive's list behind a placeholder comment. An empty Open table
+means nothing is queued, not that nothing is wrong.

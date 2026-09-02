@@ -79,7 +79,23 @@ public static class CombatObservation
     // Appended after the selection block, not filed with the player's own scalars: every
     // offset above is a committed layout that fixtures and any trained policy are written
     // against, and inserting a field renumbers all of them. Same discipline as BuffId.
-    public const int ObsSize = OrbOffset + MaxOrbs * OrbSlotSize;
+    /// <summary>
+    /// Cards already promised to the hand at the start of the next turn, in the order
+    /// they will arrive: <c>ReturnToHandBeforeDraw</c> first, then
+    /// <c>CopiesToHandBeforeDraw</c>.
+    /// </summary>
+    /// <remarks>
+    /// `NightmarePower` is a visible power in the game and its `StringVar("Card")` NAMES
+    /// what it is holding, so a player can see three Backstabs coming and plan the energy
+    /// for them. E425 made the COUNT observable by giving the power a BuffId; this is the
+    /// other half, and it closes O25. Five slots covers a Nightmare's three with room for
+    /// the return-to-hand list beside it.
+    /// </remarks>
+    public const int MaxIncomingCards = 5;
+
+    public const int IncomingOffset = OrbOffset + MaxOrbs * OrbSlotSize;
+
+    public const int ObsSize = IncomingOffset + MaxIncomingCards * CardSlotSize;
 
     /// <summary>Writes one card into a slot: what it is, and what has been done to it.</summary>
     private static void WriteCard(Span<int> obs, int at, CardInstance card)
@@ -135,6 +151,23 @@ public static class CombatObservation
             int potion = i < s.PotionSlots.Length ? s.PotionSlots[i] : 0;
             obs[offset + i * PotionSlotSize] = potion;
             obs[offset + i * PotionSlotSize + 1] = potion != 0 ? 1 : 0;
+        }
+
+        // Cards already promised to the next hand, in delivery order: EndTurn hands over
+        // `ReturnToHandBeforeDraw` and then `CopiesToHandBeforeDraw`. Without this an
+        // agent pays three energy for a Nightmare and cannot see what it bought until the
+        // cards turn up -- the game shows the card's NAME on the power.
+        offset = IncomingOffset;
+        int incoming = 0;
+        foreach (var card in s.ReturnToHandBeforeDraw.Concat(s.CopiesToHandBeforeDraw))
+        {
+            if (incoming >= MaxIncomingCards)
+            {
+                break;
+            }
+
+            WriteCard(obs, offset + incoming * CardSlotSize, card);
+            incoming++;
         }
 
         offset = PlayerBuffOffset;

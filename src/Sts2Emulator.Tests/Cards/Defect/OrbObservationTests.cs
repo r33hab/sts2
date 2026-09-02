@@ -38,8 +38,16 @@ public class OrbObservationTests
             CombatObservation.OrbCapacityOffset
         );
         Assert.Equal(CombatObservation.OrbCapacityOffset + 1, CombatObservation.OrbOffset);
+        // The orb block is followed by the incoming-cards block (O25), which is APPENDED
+        // after it rather than inserted before -- the point of this guard is that nothing
+        // renumbers the offsets above, not that orbs stay last for ever.
         Assert.Equal(
             CombatObservation.OrbOffset + CombatObservation.MaxOrbs * CombatObservation.OrbSlotSize,
+            CombatObservation.IncomingOffset
+        );
+        Assert.Equal(
+            CombatObservation.IncomingOffset
+                + CombatObservation.MaxIncomingCards * CombatObservation.CardSlotSize,
             CombatObservation.ObsSize
         );
     }
