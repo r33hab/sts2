@@ -317,7 +317,16 @@ public static class EnemyAI
                 // because the intent was typed Debuff. Retyping it Attack -- which is
                 // what the move declares FIRST -- moves the damage into DealAttack and
                 // would have dropped the Vulnerable on the floor.
-                if (enemy.DefId == KE.Ovicopter && enemy.MoveIndex % 4 == 2)
+                // `% 3`, matching the intent table above it. The Ovicopter's machine is a
+                // THREE-cycle -- LAY_EGGS-or-PASTE, SMASH, TENDERIZER -- and the table was
+                // corrected from `% 4` to `% 3` when that was found. This rider kept the
+                // old modulus, so the Vulnerable landed on turns TENDERIZER did not run
+                // and skipped turns it did.
+                //
+                // Nothing local said the two were connected: the table and the rider are
+                // three hundred lines apart and each reads correctly on its own. Two
+                // places deriving a move from the same index have to be corrected together.
+                if (enemy.DefId == KE.Ovicopter && enemy.MoveIndex % 3 == 2)
                 {
                     BuffSystem.Apply(state.PlayerBuffs, BuffId.Vulnerable, 2);
                 }

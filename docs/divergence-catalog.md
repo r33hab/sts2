@@ -1456,3 +1456,47 @@ The escape uses the `Hp = 0` plus `Escaped` pair the Fat Gremlin and the Battlew
 already use, and it matters twice for this creature: an escaped Hopper keeps the card its
 `SwipePower` took. Losing the card is what the escape is FOR, and until now it was
 unreachable.
+
+### E463 -- the Ovicopter's Vulnerable kept the old modulus
+
+`TENDERIZER_MOVE` is an attack that then applies `VulnerablePower(2)`. The Ovicopter's
+intent table was corrected from `% 4` to `% 3` when its machine turned out to be a
+THREE-cycle -- and **the rider that applies the Vulnerable kept `% 4`**. So the debuff
+landed on turns TENDERIZER did not run and skipped the turns it did.
+
+Nothing local said the two were connected. The table and the rider are three hundred lines
+apart, each reads correctly on its own, and the correction that fixed one had no reason to
+look at the other. **Two places deriving a move from the same index have to be corrected
+together**; an audit over every `enemy.DefId == KE.X && enemy.MoveIndex % N` against its
+own table found this was the only survivor, and that audit is worth re-running after any
+cycle-length fix.
+
+**How it surfaced is the interesting part.** The Ovicopter's own row agreed on everything.
+What disagreed was a THIRD creature: the hatched eggs announced 4 where the game announced
+6, because 4 x 1.5 is what a Vulnerable player is shown. The sweep does not compare PLAYER
+powers -- only enemy ones -- so a missing debuff on the player could only appear as
+arithmetic on somebody else's intent. That is the next blind spot in the harness, and it is
+now a known one rather than a suspected one.
+
+It also took six turns to reach. TENDERIZER is the third move of a three-cycle and the
+eggs have to hatch before they announce anything, so nothing before turn 7 could show it.
+
+### Correcting the coverage analysis
+
+An earlier entry split the 27 `coverage:FAIL` rows into "turn-limited, closes by raising
+`--turns`" and "policy-limited, never closes". **The six-turn sweep shows the first half of
+that was wrong.** Coverage went 27 -> 23, and the entire improvement was the Obscura.
+`Rocket 4/5`, `Crusher 4/5`, `Infested Prism 3/4` and `Tough Egg 1/2` came back at exactly
+the same counts.
+
+The reason is in the same log: **54 of 70 completed fights ended before six turns.** Driving
+more turns does not help when the encounter is already dead -- the policy kills it. So the
+ceiling has three causes, not two: too few turns (the Obscura, now closed), the fight ending
+first (four enemies, and no number of turns fixes it), and the policy never blocking (the
+Bowlbug Rock). Only the first responds to `--turns`.
+
+Longer runs also cost stability: aborted rows went from 3 at four turns to 10 at six, all
+"live game never played the card". The six-turn sweep was still worth it -- it found E463,
+which four turns structurally could not reach -- but "raise `--turns` to close coverage" was
+a claim I made from reasoning about cycle lengths rather than from measurement, and the
+measurement disagrees.

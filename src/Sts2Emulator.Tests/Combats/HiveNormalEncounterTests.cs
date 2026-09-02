@@ -324,6 +324,40 @@ public class OvicopterTests
     }
 
     /// <summary>
+    /// TENDERIZER's Vulnerable rides the SAME three-cycle its intent does. The table was
+    /// corrected from `% 4` to `% 3` and this rider kept the old modulus, so the debuff
+    /// landed on turns TENDERIZER did not run and skipped the turns it did.
+    /// </summary>
+    /// <remarks>
+    /// Found by a six-turn live sweep, and only visible through a THIRD creature: the
+    /// hatched eggs announced 4 against the game's 6, because 4 x 1.5 is what a Vulnerable
+    /// player is shown. Nothing about the Ovicopter's own row disagreed, and the sweep does
+    /// not compare PLAYER powers at all -- the missing debuff surfaced as arithmetic on
+    /// someone else's intent.
+    /// </remarks>
+    [Fact]
+    public void TenderizersVulnerableLandsOnTheTenderizerTurn()
+    {
+        var fight = HiveNormal.At(CombatFactory.ActOneEncounter.Ovicopter);
+        var ovicopter = fight.State.Enemies[0];
+        fight.State.PlayerHp = 999;
+
+        var seen = new List<(IntentType Type, int Vulnerable)>();
+        for (int turn = 0; turn < 6; turn++)
+        {
+            ovicopter.Hp = 999;
+            var intent = ovicopter.CurrentIntent.Type;
+            BuffSystem.Remove(fight.State.PlayerBuffs, BuffId.Vulnerable);
+            fight.EndTurn();
+            seen.Add((intent, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.Vulnerable)));
+        }
+
+        // TENDERIZER is the third slot of the cycle: Buff, Attack(smash), Attack(tenderize).
+        Assert.All(seen.Where((_, i) => i % 3 == 2), entry => Assert.Equal(2, entry.Vulnerable));
+        Assert.All(seen.Where((_, i) => i % 3 != 2), entry => Assert.Equal(0, entry.Vulnerable));
+    }
+
+    /// <summary>
     /// CanLay is `living teammates <= 3`. Alone it always lays; crowded it makes paste
     /// instead, and the paste's Strength is the Deadly pair.
     /// </summary>
