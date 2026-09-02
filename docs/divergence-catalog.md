@@ -1590,3 +1590,27 @@ E466 also explains why a permutation bug looks flaky: seeds whose draw lands whe
 orderings happen to agree pass. Two of four did.
 
 All four seeds now pass: `deck:ok enemies:ok intent:ok player:ok turns:ok coverage:ok`.
+
+### Where the relic pass actually stands
+
+274/296 modelled, and the more useful number: **131/131 of the relics an act 1 run can
+actually end up holding**. The 22 still unmodelled are all outside act 1's reach, so the
+raw count overstates the gap the way "27 unverified moves" did for coverage.
+
+One of the 22 is not a gap at all. `MassiveScroll.IsAllowed` is `runState.Players.Count > 1`
+-- it is **multiplayer-only**, and `RelicGrabBag.AllowedInSoloRun` already strikes it by
+name. A solo run can never be handed it, so there is nothing to model. `SilverCrucible` and
+`WingedBoots` gate the other way (`Players.Count == 1`) and are fine.
+
+Two of this batch are worth naming for the shape they share with earlier finds:
+
+`Fiddle` is +2 cards on every hand draw **and a refusal** -- `ShouldDraw` returns false for
+any draw that is not the hand draw while it is your turn, so nothing a card or a power does
+can add to your hand. Draws on the ENEMY's turn still land. Modelling only the +2 makes it a
+strictly better Bag of Preparation, which is BloodSoakedRose's failure and InfusedCore's for
+the third time: **a relic's cost and its benefit are rarely adjacent in the source.**
+
+`WarHammer`'s room gate is extracted as `ApplyWarHammerOnVictory(state, wasElite)` rather
+than read inline, matching `CountEliteVictoryForSwordOfStone`. The gate is the interesting
+half -- an elite VICTORY, so fleeing pays nothing -- and a parameter is the only way to test
+both sides of it without driving a full elite fight to a win.
