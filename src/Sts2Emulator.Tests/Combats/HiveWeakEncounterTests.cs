@@ -406,6 +406,35 @@ public class ThievingHopperTests
     }
 
     /// <summary>
+    /// The escape ENDS the fight, and as a win. `NoPrimaryEnemyLeft` keys on `Hp > 0`, so
+    /// the same zeroing that removes the creature also terminates the combat -- without
+    /// which this fix would have produced a Hopper that leaves and a fight that never ends.
+    /// </summary>
+    /// <remarks>
+    /// A win, and a fully paid one: only `GremlinMercNormal` overrides
+    /// `CalculateGoldProportion`, so every other encounter pays 1 whether its occupants
+    /// died or ran. The player is down the stolen card and nothing else.
+    /// </remarks>
+    [Fact]
+    public void TheEscapeEndsTheFightAsAWin()
+    {
+        var fight = At(CombatFactory.ActOneEncounter.ThievingHopper);
+        var hopper = fight.State.Enemies[0];
+        fight.State.PlayerHp = 999;
+        hopper.Hp = 999;
+
+        StepResult result = default;
+        for (int turn = 0; turn < 5; turn++)
+        {
+            result = fight.EndTurn();
+        }
+
+        Assert.True(hopper.Escaped);
+        Assert.True(result.Terminal);
+        Assert.True(result.PlayerWon);
+    }
+
+    /// <summary>
     /// And it leaves WITH the card, which is what the escape is for. `SwipePower.BeforeDeath`
     /// is a death hook and an escape is not a death -- so a player who never killed the
     /// Hopper is simply down a card.
