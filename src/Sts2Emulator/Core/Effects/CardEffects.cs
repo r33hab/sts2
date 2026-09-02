@@ -4608,6 +4608,22 @@ public static class CardEffects
         // INSTANCE of unblocked damage, so a multi-hit attack wakes it faster than one
         // big one. Counting turns alone was right only for a beetle nobody hit -- and it
         // sleeps behind Plating, so hitting it is exactly what a player does.
+        // `FlutterPower.AfterDamageReceived` decrements per INSTANCE of unblocked powered
+        // damage, and at zero stuns the hopper for a turn. Same shape as Slumber below it,
+        // and the same reason a multi-hit attack strips it faster than one big one.
+        //
+        // The game also reads `GetNextState` off `MonsterAi` when it stuns -- no draw
+        // here, because the hopper's chain is linear (THIEVERY -> FLUTTER -> HAT_TRICK ->
+        // NAB -> ESCAPE) and only a RandomBranchState spends a value.
+        if (hpLoss > 0 && BuffSystem.Get(target.Buffs, BuffId.Flutter) > 0)
+        {
+            BuffSystem.Apply(target.Buffs, BuffId.Flutter, -1);
+            if (BuffSystem.Get(target.Buffs, BuffId.Flutter) <= 0)
+            {
+                BuffSystem.Apply(target.Buffs, BuffId.Stunned, 1);
+            }
+        }
+
         if (hpLoss > 0 && BuffSystem.Get(target.Buffs, BuffId.Slumber) > 0)
         {
             BuffSystem.Apply(target.Buffs, BuffId.Slumber, -1);

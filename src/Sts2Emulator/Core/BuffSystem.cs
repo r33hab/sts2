@@ -239,6 +239,15 @@ public static class BuffSystem
             dmg *= 0.70f; // negative = permanent
         }
 
+        // `FlutterPower.ModifyDamageMultiplicative` returns DamageDecrease/100 = 0.5 for
+        // its owner, and only for a POWERED attack -- which is the whole of this function,
+        // so no extra guard is needed here. Thorns, poison and relic damage go through the
+        // Unpowered helpers and never reach it, exactly as the game's prop check intends.
+        if (Get(defenderBuffs, BuffId.Flutter) > 0)
+        {
+            dmg *= 0.5f;
+        }
+
         if (Get(defenderBuffs, BuffId.Vulnerable) > 0)
         {
             float mult = 1.5f + Get(attackerBuffs, BuffId.CrueltyPower) / 100f + vulnerableDelta;

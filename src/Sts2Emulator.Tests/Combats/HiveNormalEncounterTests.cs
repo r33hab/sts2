@@ -538,6 +538,31 @@ public class ObscuraTests
     }
 
     /// <summary>
+    /// The Parafright is an ILLUSION, and `IllusionPower.AfterApplied` makes anything that
+    /// gains an Illusion a MINION too. Killing it must therefore pay no fatal bonus.
+    /// </summary>
+    /// <remarks>
+    /// Found by the sweep's first buff-aware run: block, HP, intents and pile sizes all
+    /// agreed, and only the power list differed -- `MINION_POWER` on the game's illusion
+    /// and nothing on the emulator's. `TriggersFatal` was already reading `BuffId.Minion`
+    /// correctly; the buff was simply never applied, so Feed and Hand of Greed paid max HP
+    /// and gold for a kill the game gives nothing for.
+    /// </remarks>
+    [Fact]
+    public void TheObscurasIllusionIsAlsoAMinion()
+    {
+        var fight = HiveNormal.At(CombatFactory.ActOneEncounter.Obscura);
+        var obscura = fight.State.Enemies[0];
+        fight.State.PlayerHp = 999;
+        obscura.Hp = 999;
+        fight.EndTurn();
+
+        var illusion = fight.State.Enemies.First(e => BuffSystem.Get(e.Buffs, BuffId.Illusion) > 0);
+
+        Assert.True(BuffSystem.Has(illusion.Buffs, BuffId.Minion));
+    }
+
+    /// <summary>
     /// `HardeningStrikeMove` attacks and THEN gains block -- 6 at A8, 7 at A9. Piercing
     /// Gaze, its other attack, gains nothing, so the block is what separates two intents
     /// that both read as Attack.

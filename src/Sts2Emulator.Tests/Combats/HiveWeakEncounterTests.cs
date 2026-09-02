@@ -210,6 +210,89 @@ public class ThievingHopperTests
         Assert.Equal((IntentType.Attack, 14), seen[3]);
         Assert.All(seen.Skip(4), entry => Assert.Equal((IntentType.Unknown, 0), entry));
     }
+
+    /// <summary>
+    /// FLUTTER_MOVE announces nothing -- a bare `BuffIntent` carries no number -- but it
+    /// applies `FlutterPower` at 5, which HALVES powered-attack damage against the hopper.
+    /// </summary>
+    /// <remarks>
+    /// An earlier pass removed an invented "Slippery 5" from this move and concluded it
+    /// had no power at all, which was one step too far. The live sweep settled it by
+    /// showing FLUTTER_POWER on the game's hopper against nothing on the emulator's, with
+    /// every other field on the row agreeing.
+    ///
+    /// Only POWERED damage is affected. That guard needs no code and no test: the halving
+    /// lives in `BuffSystem.IncomingDamage`, which IS the powered path -- thorns, poison
+    /// and relic damage go through the Unpowered helpers and never arrive there.
+    /// </remarks>
+    private static Fight FlutteringHopper()
+    {
+        var fight = At(CombatFactory.ActOneEncounter.ThievingHopper);
+        fight.State.PlayerHp = 999;
+        fight.State.Enemies[0].Hp = 999;
+        fight.EndTurn(); // THIEVERY
+        fight.EndTurn(); // FLUTTER
+        return fight;
+    }
+
+    private static void StrikeTheHopper(Fight fight, int times)
+    {
+        fight.State.Hand.Clear();
+        for (int card = 0; card < times; card++)
+        {
+            fight.State.Hand.Add(new CardInstance(472, Upgraded: false));
+        }
+
+        fight.State.Energy = 99;
+        for (int card = 0; card < times; card++)
+        {
+            fight.State.Enemies[0].Block = 0;
+            fight.Play(0, target: 0);
+        }
+    }
+
+    [Fact]
+    public void FlutterHalvesPoweredDamage()
+    {
+        var fight = FlutteringHopper();
+        var hopper = fight.State.Enemies[0];
+        Assert.Equal(5, BuffSystem.Get(hopper.Buffs, BuffId.Flutter));
+
+        int before = hopper.Hp;
+        StrikeTheHopper(fight, 1);
+
+        // A Strike is 6, and 6 halved is 3.
+        Assert.Equal(before - 3, hopper.Hp);
+    }
+
+    /// <summary>
+    /// It counts DOWN one per INSTANCE of unblocked powered damage, and at zero the hopper
+    /// is stunned -- so five small hits strip it where one big one would not.
+    /// </summary>
+    [Fact]
+    public void FlutterIsSpentOneHitAtATimeAndThenStuns()
+    {
+        var fight = FlutteringHopper();
+        var hopper = fight.State.Enemies[0];
+
+        StrikeTheHopper(fight, 5);
+
+        Assert.Equal(0, BuffSystem.Get(hopper.Buffs, BuffId.Flutter));
+        Assert.True(BuffSystem.Get(hopper.Buffs, BuffId.Stunned) > 0);
+    }
+
+    /// <summary>One hit spends exactly one, however large it is.</summary>
+    [Fact]
+    public void OneBigHitSpendsOnlyOneFlutter()
+    {
+        var fight = FlutteringHopper();
+        var hopper = fight.State.Enemies[0];
+
+        StrikeTheHopper(fight, 1);
+
+        Assert.Equal(4, BuffSystem.Get(hopper.Buffs, BuffId.Flutter));
+        Assert.Equal(0, BuffSystem.Get(hopper.Buffs, BuffId.Stunned));
+    }
 }
 
 public class TunnelerTests

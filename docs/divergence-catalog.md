@@ -1336,3 +1336,40 @@ like drift, and someone re-derives it every time; what it actually says is that 
 need a longer sweep and one needs a different PLAYER. The emulator's Rock matches the source
 exactly -- `% 2` alternation was the old bug, and the conditional is right -- so the gap is
 in what has been exercised, not in what was written.
+
+### E459, E460 -- what the first buff-aware sweep found
+
+Eighty rows with enemy powers compared: **four `turns:FAIL`, all four Obscura, and one new
+class of defect** -- plus three unmodelled powers NAMED rather than guessed at.
+
+**E459 -- the Obscura's illusion was not a minion.** `IllusionPower.AfterApplied` applies
+`MinionPower` to whatever just gained the Illusion. `MinionPower.ShouldOwnerDeathTriggerFatal`
+is false, and `Feed`, `HandOfGreed`, `TheHunt` and `BookRepairKnife` all gate their bonus on
+`Powers.All(p => p.ShouldOwnerDeathTriggerFatal())`. So killing an illusion pays nothing in
+the game, and the emulator paid max HP and gold for it.
+
+`TriggersFatal` was already reading `BuffId.Minion` and reading it correctly. **The gate was
+right and the buff was never applied** -- which is why nothing caught it: every test of the
+gate passed, because they all used enemies that really were minions. Illusion now grants
+Minion at both sites through one `ApplyIllusion`, since the game grants it in `AfterApplied`
+and therefore on EVERY application.
+
+**E460 -- Flutter, and an over-correction.** `FlutterMove` applies `FlutterPower` at 5,
+halving powered-attack damage against the Thieving Hopper and counting down one per instance
+of unblocked powered damage until it stuns. The emulator's comment read: *"a bare BuffIntent,
+which carries no number and no power -- the Slippery 5 this used to announce and apply was
+invented."* Half right. The Slippery WAS invented; removing the power with it was a step too
+far. **A correction can overshoot, and a confident comment then preserves the overshoot** --
+this one had been read past repeatedly, including by me when I listed it as a known gap and
+moved on. The live game showing `FLUTTER_POWER` settled in one row what re-reading had not.
+
+The halving lives in `BuffSystem.IncomingDamage`, which IS the powered path, so the game's
+`props.IsPoweredAttack()` guard needs no code: thorns, poison and relic damage go through the
+Unpowered helpers and never arrive.
+
+**Three powers the map could not resolve, reported rather than skipped.** `IMBALANCED_POWER`
+is correct to be unmappable -- the Bowlbug Rock's off-balance state is a bool on
+`EnemyState`, not a `BuffId`. `FLUTTER_POWER` was a real gap and is now E460.
+`ESCAPE_ARTIST_POWER` and `SWIPE_POWER` remain unmodelled and are now named by DATA rather
+than by reading. That is the whole argument for reporting an unresolvable power instead of
+ignoring it: the list of what the harness cannot see is the list of what to model next.

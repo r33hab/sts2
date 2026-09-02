@@ -757,6 +757,18 @@ public enum BuffId
     /// Improvement rider -- the payout is a run-side seam, which is why it sat unmodelled.
     /// </summary>
     Improvement,
+
+    /// <summary>
+    /// `FlutterPower` on the Thieving Hopper: HALVES powered-attack damage against it, and
+    /// counts DOWN one per instance of unblocked powered damage. At zero the hopper is
+    /// stunned for a turn.
+    ///
+    /// A `BuffIntent` that carries no number announces nothing, which is why this looked
+    /// like an empty move for so long -- and why an earlier pass, having correctly removed
+    /// an invented "Slippery 5", concluded the move had no power at all. It has one; it is
+    /// just not the one that was invented.
+    /// </summary>
+    Flutter,
 }
 
 public record struct BuffState(BuffId Id, int Magnitude);

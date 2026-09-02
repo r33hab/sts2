@@ -1284,9 +1284,12 @@ public static class EnemyAI
                         IntentType.Attack,
                         Ascension.Value(ascension, Ascension.DeadlyEnemies, 19, 17)
                     ),
-                    // FLUTTER_MOVE is a bare BuffIntent, which carries no number and no
-                    // power -- its IsHovering only picks sound effects and animations.
-                    // The Slippery 5 this used to announce and apply was invented.
+                    // FLUTTER_MOVE is a bare BuffIntent, so it announces no number --
+                    // but it DOES carry a power: `PowerCmd.Apply<FlutterPower>(.., 5m)`.
+                    // An earlier pass removed an invented "Slippery 5" from here and went
+                    // one step too far, concluding the move had no power at all. It has
+                    // one, and it is not the one that was invented; the live game shows
+                    // FLUTTER_POWER on the hopper from this turn on.
                     1 => new Intent(IntentType.Buff, 0),
                     // HatTrickDamage
                     2 => new Intent(
@@ -3534,7 +3537,7 @@ public static class EnemyAI
                         new Intent(IntentType.Debuff, 3),
                         state: state
                     );
-                    BuffSystem.Apply(eye.Buffs, BuffId.Illusion, 1);
+                    ApplyIllusion(eye);
                     state.Enemies.Insert(
                         state.Enemies.IndexOf(enemy),
                         Effects.RelicEffects.Spawned(state, eye)
@@ -3634,6 +3637,12 @@ public static class EnemyAI
 
             case KE.FakeMerchant:
                 BuffSystem.Apply(enemy.Buffs, BuffId.Strength, enemy.CurrentIntent.Magnitude);
+                break;
+
+            case KE.ThievingHopper:
+                // `FlutterMove` applies FlutterPower at 5. The intent announces nothing,
+                // which is what a bare BuffIntent does -- the power is real regardless.
+                BuffSystem.Apply(enemy.Buffs, BuffId.Flutter, 5);
                 break;
 
             case KE.FlailKnight:
@@ -4841,6 +4850,30 @@ public static class EnemyAI
         return moves[next];
     }
 
+    /// <summary>
+    /// `IllusionPower.AfterApplied` applies `MinionPower` to whatever just gained the
+    /// Illusion, unless it already has one. So an illusion is ALWAYS a minion, and the two
+    /// go on together wherever Illusion is granted.
+    /// </summary>
+    /// <remarks>
+    /// The Minion half is what stops `Feed`, `HandOfGreed`, `TheHunt` and
+    /// `BookRepairKnife` paying their fatal bonus for killing the thing -- `TriggersFatal`
+    /// already reads `BuffId.Minion` and was reading it correctly; the buff was simply
+    /// never put on. So the emulator paid max HP and gold for killing an illusion and the
+    /// game does not.
+    ///
+    /// Found by the sweep's first buff-aware run, on a row where block, HP, intents and
+    /// pile sizes all agreed and only the power list differed.
+    /// </remarks>
+    private static void ApplyIllusion(EnemyState creature)
+    {
+        BuffSystem.Apply(creature.Buffs, BuffId.Illusion, 1);
+        if (!BuffSystem.Has(creature.Buffs, BuffId.Minion))
+        {
+            BuffSystem.Apply(creature.Buffs, BuffId.Minion, 1);
+        }
+    }
+
     private static void SummonParafright(EnemyState enemy, CombatState state)
     {
         // Not stunned: TheObscura adds it with a plain CreatureCmd.Add.
@@ -4850,7 +4883,7 @@ public static class EnemyAI
             new Intent(IntentType.Attack, 17),
             state: state
         );
-        BuffSystem.Apply(parafright.Buffs, BuffId.Illusion, 1);
+        ApplyIllusion(parafright);
         state.Enemies.Insert(
             state.Enemies.IndexOf(enemy),
             Effects.RelicEffects.Spawned(state, parafright)
