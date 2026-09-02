@@ -477,4 +477,69 @@ public class ObscuraTests
             Assert.NotEqual(moves[i - 1], moves[i]);
         }
     }
+
+    /// <summary>
+    /// `HardeningStrikeMove` attacks and THEN gains block -- 6 at A8, 7 at A9. Piercing
+    /// Gaze, its other attack, gains nothing, so the block is what separates two intents
+    /// that both read as Attack.
+    /// </summary>
+    /// <remarks>
+    /// Found by a live sweep, not by reading: the emulator announced the right intent and
+    /// dealt the right damage, and only the enemy's BLOCK disagreed -- emu 0 against the
+    /// game's 6. An intent table can be completely right about what a monster says and
+    /// still be wrong about what the move does, which is the argument for sweeping enemy
+    /// state and not just intents.
+    /// </remarks>
+    [Theory]
+    [InlineData(8, 6)]
+    [InlineData(9, 7)]
+    public void HardeningStrikeAlsoBlocks(int ascension, int expected)
+    {
+        var fight = HiveNormal.At(CombatFactory.ActOneEncounter.Obscura, ascension);
+        var obscura = fight.State.Enemies[0];
+
+        int seen = 0;
+        for (int turn = 0; turn < 25 && seen == 0; turn++)
+        {
+            obscura.Hp = 999;
+            fight.State.PlayerHp = 999;
+            bool hardening =
+                obscura.CurrentIntent.Type == IntentType.Attack
+                && obscura.CurrentIntent.Magnitude == expected;
+            obscura.Block = 0;
+            fight.EndTurn();
+            if (hardening)
+            {
+                seen = obscura.Block;
+            }
+        }
+
+        Assert.Equal(expected, seen);
+    }
+
+    /// <summary>
+    /// And Piercing Gaze does not. Without this the test above passes just as well against
+    /// a version that blocks on every attack.
+    /// </summary>
+    [Fact]
+    public void PiercingGazeDoesNotBlock()
+    {
+        var fight = HiveNormal.At(CombatFactory.ActOneEncounter.Obscura);
+        var obscura = fight.State.Enemies[0];
+
+        for (int turn = 0; turn < 25; turn++)
+        {
+            obscura.Hp = 999;
+            fight.State.PlayerHp = 999;
+            bool gaze =
+                obscura.CurrentIntent.Type == IntentType.Attack
+                && obscura.CurrentIntent.Magnitude == 10;
+            obscura.Block = 0;
+            fight.EndTurn();
+            if (gaze)
+            {
+                Assert.Equal(0, obscura.Block);
+            }
+        }
+    }
 }

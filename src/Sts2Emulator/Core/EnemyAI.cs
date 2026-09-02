@@ -96,6 +96,24 @@ public static class EnemyAI
                     break;
                 }
 
+                // `HardeningStrikeMove` attacks and THEN gains block -- the Obscura's
+                // other attack, PIERCING_GAZE, gains nothing. Told apart by `LastBranch`
+                // rather than by damage: the Obscura's own WAIL gives Strength 3 to its
+                // teammates and `GetTeammatesOf` includes ITSELF, so its attack magnitude
+                // does not stay put and the Bowlbug's damage comparison would drift off it.
+                //
+                // Safe to read here because execution runs before the next `ChooseIntents`
+                // -- both live in `EndTurn`, execute first.
+                if (enemy.DefId == KE.TheObscura && enemy.LastBranch == 2)
+                {
+                    DealAttackDamage(enemy, state, enemy.CurrentIntent.Magnitude);
+                    enemy.Block += BuffSystem.IncomingBlock(
+                        Ascension.Value(state.AscensionLevel, Ascension.DeadlyEnemies, 7, 6),
+                        enemy.Buffs
+                    );
+                    break;
+                }
+
                 if (enemy.DefId == KE.SnappingJaxfruit)
                 {
                     // ENERGY_ORB is an attack plus StrengthPower(2), and it loops on

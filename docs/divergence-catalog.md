@@ -1196,3 +1196,28 @@ no orb slots of their own is given exactly one the first time they channel. That
 not a miscount, and it is pinned by its own test so the single orb is not read later as a
 bug. The relic is the Defect's Starter and the run is Ironclad-only -- unreachable rather
 than wrong, the same distinction the Big Hat correction turned on.
+
+### E455 -- The Obscura's Hardening Strike never gained its block
+
+`HardeningStrikeMove` attacks and then `CreatureCmd.GainBlock(HardeningStrikeBlock)` -- 6,
+or 7 at DeadlyEnemies. The emulator dealt the damage and stopped. Piercing Gaze, the
+Obscura's other attack, gains nothing, so the block is the only thing separating two
+intents that both read as `IntentType.Attack`.
+
+**Found by a live sweep, and it could not have been found any other way that was being
+run.** The emulator announced the right intent, dealt the right damage, and drew the right
+number of RNG values; the row failed on one field -- `turn 4 enemy block: emu [0, 0] vs
+live [0, 6]`. Every intent-table test the Obscura had was passing, and would have gone on
+passing, because **an intent table can be completely right about what a monster SAYS and
+still be wrong about what the move DOES**.
+
+Told apart by `LastBranch` rather than by damage, unlike the Bowlbug's Thwack next to it in
+the same switch. The Obscura's WAIL applies Strength 3 to `GetTeammatesOf`, which includes
+itself, so its attack magnitude does not stay put -- the Bowlbug's damage comparison would
+drift off it after a single Wail. Safe to read `LastBranch` at execution because both
+`ExecuteIntent` and `ChooseIntents` live in `EndTurn` and execute runs first.
+
+The earlier run of this sweep lost rows 1-66 to Python's output buffering and only the last
+buffer survived, so those rows were never actually seen. Re-run with `PYTHONUNBUFFERED=1`
+to a file. **A sweep whose output is buffered reports a clean run for encounters it never
+showed you** -- the exit code was 0 either way.
