@@ -1295,3 +1295,20 @@ keeps the run green and the gap visible, which is the only combination that stay
 Seven unit tests pin the comparator, including the zero-amount case (the game drops a spent
 power, the emulator sometimes keeps it at zero) and E458's own shape. It runs in
 `lint-and-test.sh`.
+
+### Verified: the Hive sweep is clean
+
+A full re-sweep on the same four seeds after E455, E457 and E458: **80 rows, zero
+non-coverage failures**, down from nine. Every failing row flipped to `turns:ok`.
+
+Worth recording how nearly this was over-claimed. Two of the eight Bowlbug rows -- 1 and 5
+-- passed BEFORE the fix as well, because the Weak encounter rolls one worker out of Egg
+and Nectar and those seeds drew the Nectar. Reading them as confirmation would have been
+reading a row that never exercised the egg at all. **The rows that prove E457 are 21, 41
+and 45, the three that failed before**, and all three now pass. A green row only confirms a
+fix if it was red for that fix's reason first, and the way to know is to diff against the
+failing run rather than to look at the passing one.
+
+The 27 `coverage:FAIL` rows are unchanged and are not divergences: they say an intent was
+never SEEN in four turns, which is a limit of how long the sweep drives each fight. That
+number has been stable across all three runs, so it is a known ceiling rather than drift.
