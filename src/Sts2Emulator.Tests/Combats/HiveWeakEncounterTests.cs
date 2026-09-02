@@ -373,6 +373,61 @@ public class ThievingHopperTests
         Assert.Empty(fight.State.StolenBackCards);
     }
 
+    /// <summary>
+    /// ESCAPE_MOVE is `CreatureCmd.Escape`: the Hopper LEAVES on its fifth turn. In
+    /// ThievingHopperWeak it is the only creature, so the fight ends there -- the emulator
+    /// used to stand it in the room announcing Unknown forever, and the fight only ended
+    /// when the player killed it.
+    /// </summary>
+    /// <remarks>
+    /// The sweep could not have found this: ESCAPE is the fifth move and the sweep drives
+    /// four turns. The coverage line said the Hopper's table was fully seen, because its
+    /// FIFTH move is the one that leaves and `--turns 4` never asks for it.
+    /// </remarks>
+    [Fact]
+    public void TheHopperActuallyLeavesOnItsFifthTurn()
+    {
+        var fight = At(CombatFactory.ActOneEncounter.ThievingHopper);
+        var hopper = fight.State.Enemies[0];
+        fight.State.PlayerHp = 999;
+        hopper.Hp = 999;
+
+        for (int turn = 0; turn < 4; turn++)
+        {
+            fight.EndTurn();
+            Assert.False(hopper.Escaped);
+            Assert.True(hopper.Hp > 0);
+        }
+
+        fight.EndTurn(); // ESCAPE
+
+        Assert.True(hopper.Escaped);
+        Assert.Equal(0, hopper.Hp);
+    }
+
+    /// <summary>
+    /// And it leaves WITH the card, which is what the escape is for. `SwipePower.BeforeDeath`
+    /// is a death hook and an escape is not a death -- so a player who never killed the
+    /// Hopper is simply down a card.
+    /// </summary>
+    [Fact]
+    public void AHopperThatEscapesTakesTheCardWithIt()
+    {
+        var fight = At(CombatFactory.ActOneEncounter.ThievingHopper);
+        var hopper = fight.State.Enemies[0];
+        fight.State.PlayerHp = 999;
+        hopper.Hp = 999;
+
+        for (int turn = 0; turn < 5; turn++)
+        {
+            fight.EndTurn();
+        }
+
+        Assert.True(hopper.Escaped);
+        Assert.NotNull(hopper.StolenCard);
+        Assert.Empty(fight.State.StolenBackCards);
+    }
+
     /// <summary>One hit spends exactly one, however large it is.</summary>
     [Fact]
     public void OneBigHitSpendsOnlyOneFlutter()

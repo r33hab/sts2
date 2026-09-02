@@ -669,6 +669,25 @@ public static class EnemyAI
                 break;
         }
 
+        // `ESCAPE_MOVE` is `CreatureCmd.Escape` -- the Hopper LEAVES, and in
+        // ThievingHopperWeak it is the only creature, so the fight ends there. The
+        // emulator ran its four moves and then stood the Hopper in the room announcing
+        // Unknown forever, which only ended when the player killed it.
+        //
+        // Zeroing the HP is how a creature leaves a fight here, and `Escaped` is what says
+        // it was not a kill -- the same pair the Fat Gremlin and the Battleworn Dummy use.
+        // It matters twice over for this creature: an escaped Hopper keeps the card its
+        // `SwipePower` took, which is exactly what the escape is FOR.
+        //
+        // `EscapeArtistPower` counts down to this and is otherwise inert; the move machine
+        // drives it, not the power. The counter reaching one and the Hopper leaving are the
+        // same turn by construction -- five moves, a timer that starts at five.
+        if (enemy.DefId == KE.ThievingHopper && enemy.MoveIndex >= 4 && !enemy.Escaped)
+        {
+            enemy.Hp = 0;
+            enemy.Escaped = true;
+        }
+
         if (
             enemy.DefId == KE.Nibbit
             && enemy.CurrentIntent.Type == IntentType.Attack

@@ -1423,3 +1423,36 @@ tick would have emptied it a turn early.
 `BUFF_ID_TO_LIVE` went from 209 entries to 213 with no edit, because it is derived from
 `BuffState.cs` and `Powers.g.cs` at import. That was the reason for deriving it rather than
 keeping a table, and this is the first time it has paid.
+
+### E462 -- the Thieving Hopper never actually left
+
+`ESCAPE_MOVE` is `CreatureCmd.Escape(base.Creature)`: on its fifth turn the Hopper LEAVES.
+`ThievingHopperWeak` is one Hopper, so the fight ends there. The emulator ran its four
+moves and then stood the creature in the room announcing Unknown forever -- the fight only
+ended when the player killed it.
+
+**This was found by a reader disbelieving a claim I had just made in a commit message.** I
+wrote that `EscapeArtistPower` "does nothing", which is true of the POWER -- its whole body
+is a decrement that floors at one, plus a call to `StartPulsing` -- and then treated the
+mechanic it counts toward as decoration without checking whether the escape was modelled.
+It was not. **Reading a power's implementation tells you what the power does, not whether
+the thing it refers to exists.** The class comment even says what it is a timer FOR, and I
+quoted that comment as evidence there was nothing to model.
+
+The announcement was already right: `"Escape": 4` maps to `IntentType.Unknown`, which is
+what the emulator declares. So every intent test passed, and would have gone on passing --
+this is E455's lesson a second time, one layer further out. An intent table can be right
+about what a monster SAYS, and the emulator can be right about that too, and the monster can
+still fail to DO the thing.
+
+**The sweep could not have found it either, and the reason is one I had already written
+down.** ESCAPE is the fifth move and the sweep drives four turns. The coverage line reported
+the Hopper's table as fully seen, because everything `--turns 4` can reach was reached. The
+turn-limited coverage ceiling was not merely incomplete -- it was concealing a defect, which
+is a stronger claim than "these close by raising `--turns`" and is the reason to actually
+raise them.
+
+The escape uses the `Hp = 0` plus `Escaped` pair the Fat Gremlin and the Battleworn Dummy
+already use, and it matters twice for this creature: an escaped Hopper keeps the card its
+`SwipePower` took. Losing the card is what the escape is FOR, and until now it was
+unreachable.
