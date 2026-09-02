@@ -3640,12 +3640,13 @@ public static class CardEffects
     /// of them move on upgrade.
     /// </summary>
     /// <remarks>
-    /// Three riders are NOT modelled, and are left inert rather than approximated:
-    /// Choking wants `StranglePower`, which tracks the amount at which each card was
-    /// played so it cannot trigger on itself; Curious wants a Power-card cost reduction;
-    /// and Improvement upgrades random deck cards at COMBAT END, which is a run-side seam.
-    /// The card's `Type` also follows TinkerType in the game, so a type-sensitive relic
-    /// reads it as whatever it was tinkered into -- the emulator's CardDef says Skill.
+    /// All nine riders are modelled now (O17). Choking is `StranglePower` 6, which the
+    /// emulator already had; Curious is a Power-card cost reduction; Improvement upgrades
+    /// deck cards at COMBAT END, which is the run-side seam that kept it out.
+    ///
+    /// What is still NOT modelled: the card's `Type` follows TinkerType in the game, so a
+    /// type-sensitive relic reads it as whatever it was tinkered into -- the emulator's
+    /// CardDef says Skill. That is a CardDef-shaped problem rather than a rider.
     /// </remarks>
     private static void PlayMadScience(CombatState state, CardInstance card, Random rng)
     {
@@ -3671,10 +3672,18 @@ public static class CardEffects
             case CardType.Power:
                 // ExecutePower switches on the rider, so a Power with no matching rider
                 // does nothing at all.
-                if (card.TinkerRider == TinkerRider.Expertise)
+                switch (card.TinkerRider)
                 {
-                    RelicEffects.GainPlayerStrength(state, 2);
-                    BuffSystem.Apply(state.PlayerBuffs, BuffId.Dexterity, 2);
+                    case TinkerRider.Expertise:
+                        RelicEffects.GainPlayerStrength(state, 2);
+                        BuffSystem.Apply(state.PlayerBuffs, BuffId.Dexterity, 2);
+                        break;
+                    case TinkerRider.Curious:
+                        BuffSystem.Apply(state.PlayerBuffs, BuffId.Curious, 1);
+                        break;
+                    case TinkerRider.Improvement:
+                        BuffSystem.Apply(state.PlayerBuffs, BuffId.Improvement, 1);
+                        break;
                 }
 
                 break;
@@ -3687,6 +3696,13 @@ public static class CardEffects
             case TinkerRider.Sapping:
                 ApplyEnemyDebuff(state, BuffId.Weak, 2, rng);
                 ApplyEnemyDebuff(state, BuffId.Vulnerable, 2, rng);
+                break;
+
+            case TinkerRider.Choking:
+                // `StranglePower` at ChokingDamage 6. The power already exists and is
+                // fully modelled -- it was left out here on the grounds that it "cannot
+                // trigger on itself", which the snapshot in `PlayCard` already handles.
+                ApplyEnemyDebuff(state, BuffId.Strangle, 6, rng);
                 break;
 
             case TinkerRider.Energized:

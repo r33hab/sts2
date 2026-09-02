@@ -1190,6 +1190,12 @@ public sealed class RunEngine
             }
             if (result.Terminal)
             {
+                // `ImprovementPower.AfterCombatEnd`, which fires whether or not the
+                // fight was won: upgrade its amount of UPGRADABLE deck cards, drawn
+                // off `Rng.CombatCardSelection` without replacement. Mad Science's
+                // Improvement rider, and the run-side seam that kept it unmodelled
+                // until O17. Before the sync, which is where the combat is dropped.
+                RunNonCombatEffects.ApplyImprovementUpgrades(State);
                 SyncAfterCombat();
                 if (result.PlayerWon)
                 {

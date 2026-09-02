@@ -741,6 +741,21 @@ public enum BuffId
     /// said 25.
     /// </summary>
     Tender,
+
+    /// <summary>
+    /// `CuriousPower.TryModifyEnergyCostInCombat`: POWER cards cost this much less, never
+    /// below zero, and only a card that already costs something -- `originalCost <= 0`
+    /// returns false, so it cannot make a free Power cheaper than free. Mad Science's
+    /// Curious rider, one of the three that used to be left inert.
+    /// </summary>
+    Curious,
+
+    /// <summary>
+    /// `ImprovementPower.AfterCombatEnd`: upgrade this many upgradable cards in the DECK,
+    /// picked off `Rng.CombatCardSelection` without replacement. Mad Science's
+    /// Improvement rider -- the payout is a run-side seam, which is why it sat unmodelled.
+    /// </summary>
+    Improvement,
 }
 
 public record struct BuffState(BuffId Id, int Magnitude);

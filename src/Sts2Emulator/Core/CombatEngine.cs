@@ -1991,6 +1991,14 @@ public static class CombatEngine
         // owner plays. Additive and NOT a Late hook, so it sits with Tangled rather than
         // with the zero-returns below -- a card made free is still free.
         cost += BuffSystem.Get(state.PlayerBuffs, BuffId.BorrowedTime);
+        // `CuriousPower.TryModifyEnergyCostInCombat`: POWER cards only, and it refuses a
+        // card that already costs nothing -- `if (originalCost <= 0m) return false` -- so
+        // it cannot drive a free Power below zero or fire on one at all.
+        int curious = BuffSystem.Get(state.PlayerBuffs, BuffId.Curious);
+        if (curious > 0 && def.Type == CardType.Power && cost > 0)
+        {
+            cost = Math.Max(0, cost - curious);
+        }
 
         if (
             BuffSystem.Get(state.PlayerBuffs, BuffId.Veilpiercer) > 0

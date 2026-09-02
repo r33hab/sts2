@@ -1369,4 +1369,40 @@ public class RunEngineTests
 
         Assert.Equal(expected, mask);
     }
+
+    /// <summary>
+    /// `ImprovementPower.AfterCombatEnd` upgrades its amount of upgradable DECK cards,
+    /// each drawn off `Rng.CombatCardSelection` and removed from the pool so one card is
+    /// never upgraded twice. It fires whether the fight was won or lost -- the hook is
+    /// AfterCombatEnd, not AfterCombatVictory. Mad Science's Improvement rider (O17).
+    /// </summary>
+    [Fact]
+    public void ImprovementUpgradesADeckCardAtCombatEnd()
+    {
+        var engine = new RunEngine();
+        engine.State.Deck.Clear();
+        for (int i = 0; i < 5; i++)
+        {
+            engine.State.Deck.Add(new CardInstance(IC.StrikeIronclad, false));
+        }
+
+        engine.State.ActiveCombat = new CombatState();
+        BuffSystem.Apply(engine.State.ActiveCombat.PlayerBuffs, BuffId.Improvement, 2);
+
+        RunNonCombatEffects.ApplyImprovementUpgrades(engine.State);
+
+        Assert.Equal(2, engine.State.Deck.Count(card => card.Upgraded));
+    }
+
+    /// <summary>Nothing to upgrade is not a crash, and nothing without the power.</summary>
+    [Fact]
+    public void ImprovementDoesNothingWithoutThePower()
+    {
+        var engine = new RunEngine();
+        engine.State.ActiveCombat = new CombatState();
+
+        RunNonCombatEffects.ApplyImprovementUpgrades(engine.State);
+
+        Assert.DoesNotContain(engine.State.Deck, card => card.Upgraded);
+    }
 }

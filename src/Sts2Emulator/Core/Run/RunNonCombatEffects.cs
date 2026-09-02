@@ -104,6 +104,41 @@ public static class RunNonCombatEffects
     /// Five, not three -- `DynamicVar("Elites", 5m)`. A REPLACEMENT rather than a second
     /// relic: the stone is gone, and the relic list keeps its length.
     /// </remarks>
+    /// <summary>
+    /// `ImprovementPower.AfterCombatEnd`: upgrade `Amount` upgradable cards in the DECK,
+    /// each drawn off `Rng.CombatCardSelection` and removed from the pool so one card is
+    /// never upgraded twice by the same power.
+    /// </summary>
+    /// <remarks>
+    /// Mad Science's Improvement rider. The power lives on the player IN COMBAT and pays
+    /// out against the RUN's deck once the fight is over, which is why it sat unmodelled
+    /// while the other eight riders were done -- there was nowhere in combat to put it.
+    /// It fires whether the fight was won or lost; `AfterCombatEnd` is not
+    /// `AfterCombatVictory`.
+    /// </remarks>
+    public static void ApplyImprovementUpgrades(RunState state)
+    {
+        int amount = state.ActiveCombat is null
+            ? 0
+            : BuffSystem.Get(state.ActiveCombat.PlayerBuffs, BuffId.Improvement);
+        if (amount <= 0)
+        {
+            return;
+        }
+
+        var upgradable = Enumerable
+            .Range(0, state.Deck.Count)
+            .Where(index => RunConstants.IsRunCardUpgradable(state.Deck[index]))
+            .ToList();
+        for (int i = 0; i < amount && upgradable.Count > 0; i++)
+        {
+            int pick = state.Rng.CombatCardSelection.NextInt(upgradable.Count);
+            int deckIndex = upgradable[pick];
+            upgradable.RemoveAt(pick);
+            state.Deck[deckIndex] = state.Deck[deckIndex] with { Upgraded = true };
+        }
+    }
+
     public static void CountEliteVictoryForSwordOfStone(RunState state, bool wasElite)
     {
         if (!wasElite)

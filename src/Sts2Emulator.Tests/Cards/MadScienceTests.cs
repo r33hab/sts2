@@ -130,4 +130,61 @@ public class MadScienceTests
 
         Assert.Equal(plain.Enemy0.Hp, upgraded.Enemy0.Hp);
     }
+
+    /// <summary>
+    /// `ExecuteRider` case Choking: `StranglePower` at ChokingDamage 6 on the target. The
+    /// power was already modelled; the rider was left inert on the grounds that a Strangle
+    /// "cannot trigger on itself", which the snapshot taken before the play already
+    /// handles. One of the three riders O17 recorded as missing.
+    /// </summary>
+    [Fact]
+    public void ChokingStranglesTheTarget()
+    {
+        var fight = Fight
+            .Hand(Tinkered(CardType.Attack, TinkerRider.Choking))
+            .Energy(3)
+            .Enemy(hp: 60);
+
+        fight.Play(0);
+
+        Assert.Equal(6, BuffSystem.Get(fight.Enemy0.Buffs, BuffId.Strangle));
+    }
+
+    /// <summary>
+    /// `CuriousPower.TryModifyEnergyCostInCombat`: POWER cards cost one less. It refuses a
+    /// card that already costs nothing -- `if (originalCost <= 0m) return false` -- and
+    /// never drives a cost below zero.
+    /// </summary>
+    [Fact]
+    public void CuriousMakesPowerCardsCheaper()
+    {
+        var fight = Fight.Hand(Tinkered(CardType.Power, TinkerRider.Curious)).Energy(9);
+        fight.Play(0);
+
+        Assert.Equal(1, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.Curious));
+
+        // Inflame is a 1-cost POWER, so Curious takes it to free.
+        var power = new CardInstance(IC.Inflame, false);
+        fight.State.Hand.Add(power);
+        Assert.Equal(0, CombatEngine.EffectiveCost(power, fight.State));
+
+        // An ATTACK is untouched: the hook checks the card's type.
+        var attack = new CardInstance(IC.StrikeIronclad, false);
+        Assert.Equal(1, CombatEngine.EffectiveCost(attack, fight.State));
+    }
+
+    /// <summary>
+    /// `ImprovementPower.AfterCombatEnd` upgrades an upgradable DECK card, off
+    /// `Rng.CombatCardSelection`. The payout is a run-side seam, which is why this was the
+    /// last of Mad Science's nine riders to be modelled.
+    /// </summary>
+    [Fact]
+    public void ImprovementUpgradesADeckCardWhenTheFightEnds()
+    {
+        var fight = Fight.Hand(Tinkered(CardType.Power, TinkerRider.Improvement)).Energy(9);
+
+        fight.Play(0);
+
+        Assert.Equal(1, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.Improvement));
+    }
 }
