@@ -340,6 +340,24 @@ public static class RunNonCombatEffects
             {
                 state.MaxPotionSlots += 2;
             }
+
+            // `SignetRing.AfterObtained`: GoldVar(999). Through `GainGold` rather than a
+            // bare add, because that is the run's chokepoint and Bloody Idol is listening.
+            if (relicId == Effects.RelicEffects.SignetRing)
+            {
+                GainGold(state, 999);
+            }
+
+            // `BloodSoakedRose.AfterObtained`: an Enthralled into the deck. That curse is
+            // the whole price of the relic's +1 max energy -- the energy half lives in
+            // `RelicEffects.MaxEnergyRelics`, and modelling only that made it free.
+            //
+            // Through `AddCardToDeck` so Darkstone Periapt and Bing Bong see the curse,
+            // which a direct `state.Deck.Add` would have hidden from both.
+            if (relicId == Effects.RelicEffects.BloodSoakedRose)
+            {
+                AddCardToDeck(state, new CardInstance(166, Upgraded: false));
+            }
         }
 
         // RelicCmd.Obtain strikes the relic from both grab bags unless it is stackable,

@@ -757,6 +757,43 @@ READ: dict[str, tuple[str, str]] = {
         "Pickup takes ALL the player's gold; correct. Its other half -- enchanting card REWARDS with Glam until used -- needs an enchantment the emulator does not model, and is not there.",
     ),
     "Akabeko": ("b0c13a3b38d2", "Vigor 8 on turn one; correct."),
+    "Sai": (
+        "c7c072175e9c",
+        "BlockVar(7m, Unpowered) at every turn start -- Anchor's shape with no turn guard, so it pays all fight.",
+    ),
+    "DivineDestiny": (
+        "45b255517250",
+        "StarsVar(6) at TurnNumber <= 1. A STARTER, so every Regent run opened with it doing nothing.",
+    ),
+    "SealOfGold": (
+        "2c32c7f65a94",
+        "Every turn: +1 energy for 5 gold, guarded on Gold >= 5 BEFORE the spend, so exactly five buys one last turn.",
+    ),
+    "PaelsBlood": (
+        "2d6933500da3",
+        "ModifyHandDraw CardsVar(1) with no turn guard -- Snecko Eye's shape, so it appears in both the opening hand and the per-turn draw.",
+    ),
+    "RingOfTheDrake": (
+        "9ff297f854aa",
+        "ModifyHandDraw CardsVar(2) while TurnNumber <= 3. Turn one rides the opening hand; turns two and three are `state.Turn + 1 <= 3`, the codebase's TurnNumber.",
+    ),
+    "BloodSoakedRose": (
+        "3de4a813c3cc",
+        "+1 max energy, and an Enthralled into the deck on pickup. BOTH halves -- the curse is the whole price, and the energy alone would be a free relic.",
+    ),
+    "JeweledMask": (
+        "110923d24ba1",
+        "BeforeHandDraw turn one: one Power MOVED from draw to hand off CombatCardSelection, free for the turn. Moves rather than makes, so the draw pile shortens and the turn-one reorder sees it.",
+    ),
+    "SignetRing": ("9f6083896263", "GoldVar(999) on pickup, through GainGold so Bloody Idol sees it."),
+    "DelicateFrond": (
+        "e62b7b1a2429",
+        "Fills every open potion slot at combat start off CombatPotionGeneration. Declared in RelicEffects.UnmodelledInRun: the DRAW COUNT is the risk, and the run has no before-combat hook both entry paths share.",
+    ),
+    "Driftwood": (
+        "5593efdc02ce",
+        "Sets CanReroll on every card reward. Declared in RelicEffects.UnmodelledInRun -- the run has no reroll action at all, so the flag would model a button nothing can press.",
+    ),
     "Anchor": ("2a4f263578aa", "10 unpowered block at combat start; correct."),
     "ArtOfWar": (
         "29b1793f8651",

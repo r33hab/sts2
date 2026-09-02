@@ -1106,3 +1106,38 @@ The count matters as much as the membership: 25 against Hive's 28, so the pool `
 consumed three extra draws and **every subsequent `Rng.Shuffle` in the act was reading
 from the wrong position**. This was never only an event bug. E82 was this same defect in
 Glory's *encounter* pools, which is twice now that a Glory placeholder copied Hive.
+
+### E452 -- ten relics the run could hand over and the emulator ignored
+
+Modelled 250 -> 260. Eight now work; two are declared unmodelled with the reason written
+down. Two of the eight are **Starters** -- `DivineDestiny` (6 stars on turn one) and
+`RingOfTheDrake` (+2 cards for three turns) -- so every run of those characters opened
+with a relic that was pure decoration. That is the second time a "rare and obscure" gap
+turned out to sit on the most-played path in the game; the first was the three Starter
+relics in E389.
+
+`BloodSoakedRose` is the shape worth naming. Its `ModifyMaxEnergy` is +1 and its
+`AfterObtained` is an Enthralled into the deck, and those halves live in different files --
+so the natural way to model it is to find the energy, wire it, and stop. **That makes a
+relic with a drawback into a relic without one**, which is exactly Big Mushroom's failure
+from E389 and Preserved Fog's from the relic pass before it. Three times now. The pattern
+is not "someone missed a line"; it is that a relic's cost and its benefit are rarely
+adjacent in the source, and reading to the end of the *file* is not the same as reading to
+the end of the *relic*.
+
+`RingOfTheDrake` pays while the game's `TurnNumber <= 3`. The emulator counts turns from
+zero and spells the game's number `state.Turn + 1` -- a convention the codebase already
+had at nine call sites, and which the first draft of this relic got wrong by one. Checked
+against those call sites rather than reasoned about, because reasoning about it is how it
+was got wrong.
+
+`SealOfGold` first wrote its energy with a bare add. `BlockChokepointTests` counts the
+writers of `.Energy +=` across Core and expects exactly two, so it went red immediately;
+routing through `GainEnergy` means `NoEnergyGain` can now stop it, which the bare write
+could not. **A guard that counts writers catches the write that did not think to route
+itself** -- and it caught it from a test, not a review.
+
+Not modelled, and declared rather than guessed: `Driftwood` (sets `CanReroll` on card
+rewards -- the run has no reroll ACTION, so the flag would model a button nothing can
+press) and `DelicateFrond` (fills every potion slot off `CombatPotionGeneration`, where
+guessing the draw count is precisely the E451 failure).

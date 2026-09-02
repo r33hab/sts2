@@ -497,16 +497,23 @@ public class LastingCandyTests
     }
 
     /// <summary>
-    /// One declared gap left, and it is declared for a reason that is not "nobody got to
-    /// it": Lasting Candy needs a fourth card-reward slot, which is an action-space
-    /// change. Fake Snecko Eye left the list when Confused arrived with Snecko Eye.
-    /// Pinned so the list cannot quietly become a place to park work.
+    /// Three declared gaps, each for a reason that is not "nobody got to it". Lasting
+    /// Candy needs a fourth card-reward slot and Driftwood needs a reward reroll -- both
+    /// action-space changes, not missing effects. Delicate Frond would have to guess a
+    /// draw count on `CombatPotionGeneration`, and E451 is what a wrong draw count costs.
+    /// Fake Snecko Eye left the list when Confused arrived with Snecko Eye.
+    ///
+    /// Pinned by MEMBERSHIP rather than by count, so the list cannot quietly become a
+    /// place to park work: adding a fourth goes red here and has to be argued for in this
+    /// comment, which is the whole point of the guard.
     /// </summary>
     [Fact]
-    public void LastingCandyIsTheOnlyDeclaredRunGap()
+    public void TheDeclaredRunGapsAreTheThreeThatAreArguedFor()
     {
-        Assert.Single(RelicEffects.UnmodelledInRun);
-        Assert.Equal(RelicEffects.LastingCandy, RelicEffects.UnmodelledInRun[0]);
+        Assert.Equal(
+            new[] { RelicEffects.LastingCandy, RelicEffects.Driftwood, RelicEffects.DelicateFrond },
+            RelicEffects.UnmodelledInRun
+        );
     }
 }
 

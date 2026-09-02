@@ -256,6 +256,25 @@ public static class RelicEffects
     public const int Pantograph = 186;
     public const int Planisphere = 198;
 
+    // The Ancient/Starter pass. Ten more that `Relics.g.cs` knew about and that had no id
+    // constant, so the run could hand them over and the emulator would do nothing.
+    public const int Sai = 228;
+    public const int DivineDestiny = 63;
+    public const int SealOfGold = 233;
+    public const int PaelsBlood = 175;
+    public const int RingOfTheDrake = 220;
+    public const int BloodSoakedRose = 22;
+    public const int JeweledMask = 120;
+    public const int DelicateFrond = 58;
+    public const int SignetRing = 238;
+    public const int Driftwood = 68;
+
+    /// <summary>`SealOfGold`'s GoldVar(5) -- the toll it takes for its energy.</summary>
+    private const int SealOfGoldPrice = 5;
+
+    /// <summary>`RingOfTheDrake`'s DynamicVar("Turns", 3): the last turn it still pays.</summary>
+    private const int RingOfTheDrakeTurns = 3;
+
     /// <summary>The token potion Petrified Toad procures before every combat.</summary>
     private const int PotionShapedRock = 45;
 
@@ -274,6 +293,10 @@ public static class RelicEffects
         // `PrismaticGem.ModifyMaxEnergy`: EnergyVar(1). Its OTHER half widens the card
         // reward pool -- see `WidensCardRewardsToEveryPool`.
         PrismaticGem,
+        // `BloodSoakedRose.ModifyMaxEnergy`: EnergyVar(1), and its price is an Enthralled
+        // shuffled into the deck on pickup -- a run-level cost for a combat-level gain,
+        // which is why only this half lives here.
+        BloodSoakedRose,
     ];
 
     /// <summary>The game's DynamicVar("Cards", 6) on Velvet Choker.</summary>
@@ -424,6 +447,30 @@ public static class RelicEffects
             CardEffects.AddGeneratedCardsToHand(state, 430, 3);
         }
 
+        // `JeweledMask.BeforeHandDraw` at TurnNumber <= 1: one POWER from the draw pile,
+        // chosen off `Rng.CombatCardSelection`, into HAND and free for the turn. Like
+        // Ninja Scroll it lands before the opening draw, so the hand is that power plus
+        // the usual five -- and unlike Ninja Scroll it MOVES a card rather than making
+        // one, so the draw pile is one shorter and the reorder below sees that.
+        //
+        // The guard is `list.Count != 0` around a `NextItem`, so a draw pile holding
+        // exactly one power still spends a roll on picking it.
+        if (HasRelic(state, JeweledMask))
+        {
+            var powers = Enumerable
+                .Range(0, state.DrawPile.Count)
+                .Where(i => GeneratedData.Cards.Get(state.DrawPile[i].DefId).Type == CardType.Power)
+                .ToList();
+            if (powers.Count > 0)
+            {
+                var selection = CardEffects.CardSelectionRngFor(state, rng);
+                int chosen = powers[selection.Next(powers.Count)];
+                var card = state.DrawPile[chosen];
+                state.DrawPile.RemoveAt(chosen);
+                state.Hand.Add(card with { FreeThisTurn = true });
+            }
+        }
+
         // `FuneraryMask.BeforeHandDraw` at TurnNumber == 1: CardsVar(3) Souls into the
         // DRAW pile at CardPilePosition.Random, one insert point per card off Rng.Shuffle
         // -- Blessed Antler's shape with a card the player wants.
@@ -495,6 +542,14 @@ public static class RelicEffects
         if (HasRelic(state, DivineRight))
         {
             CardEffects.GainStars(state, 3);
+        }
+
+        // `DivineDestiny.AfterSideTurnStart` at `TurnNumber <= 1`: StarsVar(6). Divine
+        // Right's mechanic at twice the size, and it is a STARTER -- every Regent run
+        // opens with it, so this was among the most-played relics doing nothing.
+        if (HasRelic(state, DivineDestiny))
+        {
+            CardEffects.GainStars(state, 6);
         }
 
         // `BoundPhylactery.BeforeCombatStart` summons Osty at `SummonVar(1)` -- one HP,
@@ -789,6 +844,26 @@ public static class RelicEffects
         // `Brimstone.AfterSideTurnStart` with NO turn guard: 2 Strength to the player and
         // 1 to every LIVING opponent, every single turn. The enemy half is the point --
         // it is a Shop relic that arms the room as fast as it arms you.
+        // `Sai.AfterSideTurnStart` with no turn guard: BlockVar(7m, ValueProp.Unpowered),
+        // so Dexterity does not raise it. Anchor's shape without Anchor's one-shot guard.
+        if (HasRelic(state, Sai))
+        {
+            CardEffects.GainUnpoweredBlock(state, 7, rng);
+        }
+
+        // `SealOfGold.AfterSideTurnStart`: energy for gold, every turn, and only while the
+        // player can still pay. The guard is `Gold >= GoldVar(5)` BEFORE the spend, so a
+        // player on exactly five buys one last turn of it and then stops.
+        if (HasRelic(state, SealOfGold) && state.PlayerGold >= SealOfGoldPrice)
+        {
+            // Through `GainEnergy` rather than a bare add, so NoEnergyGain stops it --
+            // the chokepoint test is what caught the raw write. The gold goes
+            // either way: the game's two commands are sequential and unconditional, so a
+            // turn where the energy is blocked still pays the toll.
+            CardEffects.GainEnergy(state, 1);
+            state.PlayerGold -= SealOfGoldPrice;
+        }
+
         if (HasRelic(state, Brimstone))
         {
             GainPlayerStrength(state, 2);
@@ -878,6 +953,12 @@ public static class RelicEffects
         // cards are what pays for the Confused; Fake Snecko Eye gives the Confused and no
         // cards at all.
         + (HasRelic(state, SneckoEye) ? 2 : 0)
+        // `PaelsBlood.ModifyHandDraw`: CardsVar(1), unconditionally.
+        + (HasRelic(state, PaelsBlood) ? 1 : 0)
+        // `RingOfTheDrake.ModifyHandDraw`: CardsVar(2) while `TurnNumber <= Turns`, where
+        // Turns is 3 -- so turns two and three, turn one having been paid by the opening
+        // hand above. The comparison is on the turn number the draw is FOR.
+        + (HasRelic(state, RingOfTheDrake) && state.Turn + 1 <= RingOfTheDrakeTurns ? 2 : 0)
         // `PollinousCore.ModifyHandDraw`: CardsVar(2) on the turn its counter reaches
         // `Turns` (4), and `AfterModifyingHandDraw` resets it to zero. The counter is
         // bumped in `BeforeSideTurnStart`, so this is every fourth turn.
@@ -940,6 +1021,12 @@ public static class RelicEffects
         + (HasRelic(state, RingOfTheSnake) ? 2 : 0)
         + (HasRelic(state, BagOfPreparation) ? 2 : 0)
         + (HasRelic(state, BoomingConch) && state.IsEliteCombat ? 2 : 0)
+        // `PaelsBlood.ModifyHandDraw`: CardsVar(1) with no turn guard, so like Snecko Eye
+        // it pays on turn one and every turn after and has to appear in both places.
+        + (HasRelic(state, PaelsBlood) ? 1 : 0)
+        // `RingOfTheDrake.ModifyHandDraw`: CardsVar(2) while TurnNumber <= Turns(3). Turn
+        // one is here; turns two and three are in `ExtraHandDraw`.
+        + (HasRelic(state, RingOfTheDrake) ? 2 : 0)
         // Big Mushroom's `ModifyHandDraw` SUBTRACTS its `CardsVar(2)` on turn one: the
         // opening hand is three, and that is the price of its twenty max HP. Its pickup
         // half was modelled and this one was not -- read the `AfterObtained` and stop, and
@@ -1573,7 +1660,21 @@ public static class RelicEffects
     /// modelled and pinned by <c>LastingCandyTests</c> so the remaining work is the screen
     /// alone.
     /// </remarks>
-    public static readonly int[] UnmodelledInRun = [LastingCandy];
+    public static readonly int[] UnmodelledInRun =
+    [
+        LastingCandy,
+        // `Driftwood.TryModifyRewardsLate` sets `CanReroll` on every CardReward. The run
+        // has no reroll at all -- not a missing relic effect but a missing ACTION, so
+        // wiring the flag would model a button the agent cannot press.
+        Driftwood,
+        // `DelicateFrond.BeforeCombatStart` fills every open potion slot off
+        // `Rng.CombatPotionGeneration`, one `CreateRandomPotionOutOfCombat` per slot.
+        // The draws are the problem: getting the COUNT wrong desyncs that stream for the
+        // rest of the run, and the run has no before-combat hook that both entry paths
+        // share to hang it on. Declared rather than guessed -- see E451 for what a
+        // wrong draw count costs.
+        DelicateFrond,
+    ];
 
     /// <summary>
     /// `LastingCandy.IsInTriggeringCombat`: `CombatsSeen > 0 &amp;&amp; CombatsSeen % 2 == 0`,
