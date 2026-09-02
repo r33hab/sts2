@@ -1269,3 +1269,29 @@ enemy block on a failing row, which was added for a different reason entirely.
 
 Still not covered: the sweep never compares enemy BUFFS. A move that applies a power the
 emulator does not would look exactly like these did until the buff changed a number.
+
+### The sweep now watches enemy powers
+
+Enemy BLOCK was the sweep's last unwatched field until this session, and watching it found
+three divergences in one run: E455, E457, E458. All three were on enemies whose intent
+tests passed and would have gone on passing. **Enemy BUFFS were the same blind spot one
+step over** -- a move applying a power the emulator does not would read as a clean row
+until that power moved a number -- so `enemy_buff_sets` now compares them and
+`buff_match` joins the turns verdict.
+
+The map from the emulator's `BuffId` to the game's power entry is DERIVED at import from
+`BuffState.cs` and `Powers.g.cs` rather than hand-written, because a hand-kept table is
+exactly the thing a new buff falls out of silently. `BuffId` is its own enum and shares no
+numbering with `PowerDef`, so it goes through the name: 209 of 232 members resolve, and the
+23 that do not are emulator bookkeeping with no power behind them -- counters, spent-flags,
+self-damage riders.
+
+The design decision worth recording is what happens to a live power the map cannot resolve.
+It is **named in the note and does not fail the row**. Failing would make the harness
+unusable the first time the game added a power; ignoring it would be worse, because **a
+buff the comparison cannot see is indistinguishable from a buff that agrees**. Naming it
+keeps the run green and the gap visible, which is the only combination that stays honest.
+
+Seven unit tests pin the comparator, including the zero-amount case (the game drops a spent
+power, the emulator sometimes keeps it at zero) and E458's own shape. It runs in
+`lint-and-test.sh`.

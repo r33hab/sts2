@@ -534,6 +534,90 @@ def apply_action(
     return wait_for_card_to_leave_hand(base_url, hand_size), terminated, truncated
 
 
+_REPO = Path(__file__).resolve().parent.parent
+
+
+def _buff_id_to_live_entry() -> dict[int, str]:
+    """Map the emulator's `BuffId` ordinal onto the game's power entry string.
+
+    Derived from `BuffState.cs` and `Powers.g.cs` at import rather than hand-written, so a
+    new buff cannot silently fall out of the comparison the way a hand-kept table would let
+    it. `BuffId` is its own enum and shares no numbering with `PowerDef`, which is why this
+    goes through the NAME.
+    """
+    enum_src = (_REPO / "src/Sts2Emulator/Core/BuffState.cs").read_text(encoding="utf-8")
+    body = enum_src[enum_src.index("enum BuffId") :]
+    body = body[body.index("{") + 1 : body.index("\n}")]
+    members = [m.group(1) for m in re.finditer(r"^\s*([A-Za-z][A-Za-z0-9]*)\s*(?:,|=)", body, re.MULTILINE)]
+
+    powers = set(
+        re.findall(
+            r'Name: "([A-Za-z0-9]+)"',
+            (_REPO / "src/Sts2Emulator/Generated/Powers.g.cs").read_text(encoding="utf-8"),
+        ),
+    )
+
+    def snake(name: str) -> str:
+        return re.sub(r"(?<!^)(?=[A-Z])", "_", name).upper()
+
+    mapping: dict[int, str] = {}
+    for ordinal, member in enumerate(members):
+        candidates = [member, member[:-5] + "Power"] if member.endswith("Power") else [member + "Power", member]
+        for candidate in candidates:
+            if candidate in powers:
+                mapping[ordinal] = snake(candidate)
+                break
+    return mapping
+
+
+# Twenty-three BuffId members are emulator bookkeeping with no power behind them --
+# counters, spent-flags, self-damage riders -- and are absent from this map by
+# construction. The map is keyed on what the game HAS, so anything missing is either
+# internal or new, and `unmapped_live_buffs` below is what tells the two apart.
+BUFF_ID_TO_LIVE = _buff_id_to_live_entry()
+
+
+def enemy_buff_sets(
+    live_enemies: list[dict[str, Any]],
+    emu_enemies: list[dict[str, Any]],
+) -> tuple[bool, list[str]]:
+    """Compare enemy POWERS, which nothing compared before.
+
+    Returns (agree, unmapped) where `unmapped` names live powers this map could not
+    resolve. Those are reported rather than skipped: a buff the comparison cannot see is
+    indistinguishable from a buff that agrees, and quietly ignoring it is how a blind spot
+    becomes a clean row. Only buffs the emulator can express are compared -- an amount of
+    zero on either side counts as absent, since the game drops a spent power and the
+    emulator sometimes keeps it at zero.
+    """
+    unmapped: list[str] = []
+    known = set(BUFF_ID_TO_LIVE.values())
+
+    def live_set(enemy: dict[str, Any]) -> set[tuple[str, int]]:
+        out: set[tuple[str, int]] = set()
+        for power in enemy.get("status") or []:
+            entry = power.get("id")
+            if entry not in known:
+                unmapped.append(str(entry))
+                continue
+            if power.get("amount"):
+                out.add((str(entry), int(power["amount"])))
+        return out
+
+    def emu_set(enemy: dict[str, Any]) -> set[tuple[str, int]]:
+        out: set[tuple[str, int]] = set()
+        for buff in enemy.get("status") or []:
+            entry = BUFF_ID_TO_LIVE.get(int(buff.get("id", 0)))
+            if entry is not None and buff.get("amount"):
+                out.add((entry, int(buff["amount"])))
+        return out
+
+    agree = len(live_enemies) == len(emu_enemies) and all(
+        live_set(live) == emu_set(emu) for live, emu in zip(live_enemies, emu_enemies)
+    )
+    return agree, sorted(set(unmapped))
+
+
 def living_emu_enemies(summary: dict[str, Any]) -> list[dict[str, Any]]:
     """The emulator's enemies that are still alive.
 
@@ -845,6 +929,31 @@ def drive_turns(
                     e.get("block") for e in live_summary.get("enemies") or []
                 ]
                 == [e.get("block") for e in living_emu_enemies(emu_summary)],
+                # Enemy POWERS, which nothing compared either. Block was the field that
+                # found E455, E457 and E458 -- three enemies whose intents were right and
+                # whose state was not -- and buffs are the same blind spot one step over:
+                # a move applying a power the emulator does not would read as a clean row
+                # until that power moved a number.
+                **dict(
+                    zip(
+                        ("buff_match", "unmapped_buffs"),
+                        enemy_buff_sets(
+                            live_summary.get("enemies") or [],
+                            living_emu_enemies(emu_summary),
+                        ),
+                    ),
+                ),
+                "live_enemy_buffs": [
+                    [(p.get("id"), p.get("amount")) for p in (e.get("status") or [])]
+                    for e in live_summary.get("enemies") or []
+                ],
+                "emu_enemy_buffs": [
+                    [
+                        (BUFF_ID_TO_LIVE.get(int(b.get("id", 0))), b.get("amount"))
+                        for b in (e.get("status") or [])
+                    ]
+                    for e in living_emu_enemies(emu_summary)
+                ],
                 "intents_match": len(live_intents) == len(emu_intents)
                 and all(
                     map(intents_agree, live_intents, emu_intents),
@@ -986,6 +1095,7 @@ def capture_one(
             and row["player_match"]
             and row["hand_match"]
             and row["block_match"]
+            and row["buff_match"]
             for row in turn_rows
         )
 
@@ -1002,6 +1112,16 @@ def capture_one(
     notes += turn_notes
     if missing:
         notes.append("intents never seen: " + ", ".join(missing))
+    unmapped_buffs = sorted(
+        {b for row in turn_rows for b in row.get("unmapped_buffs") or []},
+    )
+    if unmapped_buffs:
+        # Reported whether or not the row failed: a live power the map cannot resolve is
+        # invisible to the comparison, and an invisible buff and an agreeing buff look
+        # exactly alike from the outside.
+        notes.append(
+            "live enemy powers the buff map does not resolve: " + ", ".join(unmapped_buffs),
+        )
     if validate.UNMAPPED_INTENT_TYPES:
         notes.append(
             "live intent types the harness does not map: "
@@ -1017,6 +1137,7 @@ def capture_one(
             and row["player_match"]
             and row["hand_match"]
             and row["block_match"]
+            and row["buff_match"]
         )
         if failed and row["intents_match"]:
             notes.append(
@@ -1066,6 +1187,11 @@ def capture_one(
                 f"turn {row['turn']} enemy block: "
                 f"emu {[e['block'] for e in row['emu_enemies']]} "
                 f"vs live {[e['block'] for e in row['live_enemies']]}",
+            )
+        if not row["buff_match"]:
+            notes.append(
+                f"turn {row['turn']} enemy powers: "
+                f"emu {row['emu_enemy_buffs']} vs live {row['live_enemy_buffs']}",
             )
         if failed or row.get("rng_drift"):
             notes.append(
