@@ -229,7 +229,27 @@ def moves_for_live_name(live_name: str) -> list[Move] | None:
 
 DISPLAY_NAME_ALIASES = {
     "The Merchant???": "FakeMerchantMonster",
+    # A Tough Egg RENAMES itself when it hatches, so its second move -- NIBBLE, the only
+    # thing it ever does after HATCH -- arrives under a name with no move table. Coverage
+    # keys on the live name, so "Tough Egg" sat at 1/2 forever and no amount of turns or
+    # player policy could move it. It is the same creature: OvicopterNormal's
+    # AllPossibleMonsters is exactly Ovicopter and ToughEgg, and the live Hatchling carries
+    # the MinionPower the Ovicopter stamps on the eggs it lays.
+    "Hatchling": "ToughEgg",
 }
+
+
+def coverage_key(live_name: str) -> str:
+    """The bucket a live name's intents should be counted under.
+
+    A creature that RENAMES itself mid-fight otherwise splits its own move table across
+    two buckets, and neither can ever be complete. The Tough Egg becomes a "Hatchling" when
+    it hatches, so HATCH counted under one name and NIBBLE under the other -- leaving both
+    stuck at 1/2 no matter how long the fight ran or how the player played.
+
+    Aliases first, then squashed, so "Hatchling" and "Tough Egg" land on the same key.
+    """
+    return re.sub(r"[^A-Za-z0-9]", "", DISPLAY_NAME_ALIASES.get(live_name, live_name)).lower()
 
 
 def all_enemies() -> list[str]:

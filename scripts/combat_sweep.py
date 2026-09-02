@@ -910,6 +910,15 @@ def drive_turns(
                         "hp": e.get("hp"),
                         "block": e.get("block"),
                         "intent": validate.live_enemy_intent(e),
+                        # The label as shown, for the coverage count -- see `coverage_for`.
+                        "counted": (
+                            None
+                            if validate.live_enemy_intent(e) is None
+                            else (
+                                validate.live_enemy_intent(e)[0],
+                                str((e.get("intents") or [{}])[0].get("label")),
+                            )
+                        ),
                     }
                     for e in live_summary.get("enemies") or []
                 ],
@@ -1007,18 +1016,43 @@ def coverage_for(rows: list[dict[str, Any]], opening: dict[str, Any]) -> dict[st
     # "Attack", so counting types alone caps a three-move slug at 2/3 forever. The count
     # can also EXCEED the table, because a monster that buffs itself announces one move
     # at several magnitudes — so treat a shortfall as the signal and a surplus as normal.
-    seen: dict[str, set[Any]] = {}
-    for enemy in opening.get("enemies") or []:
+    # Counted on the intent as the game LABELS it, not on the multiplied total: a
+    # MultiAttack of "5x3" and a single attack of "15" are different moves that
+    # `live_intent_magnitude` folds to the same number. The Infested Prism's JAB is 15 and
+    # its WHIRLWIND is 5x3, so its four-move table could only ever count three -- a
+    # shortfall that looked exactly like a move nobody had reached, and survived both more
+    # turns and every player policy because it was never about either.
+    def counted(enemy: dict[str, Any]) -> tuple[Any, ...] | None:
         intent = validate.live_enemy_intent(enemy)
-        if intent is not None:
-            seen.setdefault(str(enemy.get("name")), set()).add(intent)
+        if intent is None:
+            return None
+        label = (enemy.get("intents") or [{}])[0].get("label")
+        return (intent[0], str(label))
+
+    # Bucketed on the CANONICAL name, so a creature that renames itself mid-fight does not
+    # split its own table across two buckets that can each only ever be partial.
+    seen: dict[str, set[Any]] = {}
+    names: dict[str, str] = {}
+
+    def bucket(live_name: str) -> str:
+        key = enemy_moves.coverage_key(live_name)
+        names.setdefault(key, live_name)
+        return key
+
+    for enemy in opening.get("enemies") or []:
+        entry = counted(enemy)
+        if entry is not None:
+            seen.setdefault(bucket(str(enemy.get("name"))), set()).add(entry)
     for row in rows:
         for enemy in row["live_enemies"]:
-            if enemy["intent"] is not None:
-                seen.setdefault(str(enemy["name"]), set()).add(tuple(enemy["intent"]))
+            if enemy.get("counted") is not None:
+                seen.setdefault(bucket(str(enemy["name"])), set()).add(
+                    tuple(enemy["counted"]),
+                )
 
     report = {}
-    for name, intents in seen.items():
+    for key, intents in seen.items():
+        name = names[key]
         declared = enemy_moves.moves_for_live_name(name)
         report[name] = {
             "seen": len(intents),

@@ -1500,3 +1500,39 @@ Longer runs also cost stability: aborted rows went from 3 at four turns to 10 at
 which four turns structurally could not reach -- but "raise `--turns` to close coverage" was
 a claim I made from reasoning about cycle lengths rather than from measurement, and the
 measurement disagrees.
+
+### The coverage ceiling, finally taken apart
+
+Every one of the six standing `coverage:FAIL` enemies is now closed or explained, and they
+were **three different things wearing the same label**. The number 27 had been read as "27
+moves nobody has verified" for as long as it has existed. It was not.
+
+**Two needed a different player, and got one.**
+- `Bowlbug (Rock) 1/2`, unseen in 12 rows of 12. Its DIZZY branch fires only when its own
+  headbutt is FULLY blocked, and the sweep's first-playable-card policy never assembles 15
+  block. `--add-card IMPERVIOUS` -- 30 block for 2 energy, on top of the hand -- reaches it
+  on all four seeds, and the Rock's off-balance behaviour AGREES with the game. Verified for
+  the first time.
+- `Rocket 4/5` and `Crusher 4/5` in kaiser-crab: the fight ended at turn 4 because the
+  player died. `--buff-max-hp 200 --turns 8` closes both.
+
+**Two were bugs in the measurement, not gaps in the coverage.**
+- `Infested Prism 3/4`. `live_intent_magnitude` folds a MultiAttack label of "5x3" into 15 --
+  and the Prism's JAB is 15. Two distinct moves counted as one pair, forever. Coverage now
+  counts the label as the game writes it; the comparison still uses the multiplied value,
+  which is right for damage and wrong for identity.
+- `Tough Egg 1/2`. A Tough Egg RENAMES itself to "Hatchling" when it hatches, so HATCH was
+  counted under one name and NIBBLE under the other, leaving both stuck at 1/2. Coverage now
+  buckets on a canonical name.
+
+That last one was checked rather than assumed, and the check mattered: wiping every power
+but Minion and re-rolling HP to full reads exactly like a creature being REPLACED, and if it
+were, the emulator's single mutating `EnemyState` would be wrong. **The live `entity_id` is
+identical across the rename** -- `TOUGH_EGG_0` before and after -- so it is one creature
+mutating in place, which is what `HatchMove` does to `base.Creature` and what the emulator
+already models.
+
+**The lesson is about the metric, not the monsters.** Two of the five gaps were the counter
+miscounting, and both survived every attempt to close them by playing differently or driving
+longer -- which was the evidence that they were not about play at all. A coverage number that
+cannot go green is worth suspecting before the thing it measures.
