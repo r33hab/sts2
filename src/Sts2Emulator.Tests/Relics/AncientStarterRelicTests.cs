@@ -116,7 +116,10 @@ public class AncientStarterRelicTests
     [Fact]
     public void PaelsBloodAddsACardToEveryHand()
     {
-        Assert.Equal(1, RelicEffects.ExtraOpeningHandDraw(FirstFight(Run(RelicEffects.PaelsBlood))));
+        Assert.Equal(
+            1,
+            RelicEffects.ExtraOpeningHandDraw(FirstFight(Run(RelicEffects.PaelsBlood)))
+        );
         Assert.Equal(1, RelicEffects.ExtraHandDraw(FirstFight(Run(RelicEffects.PaelsBlood))));
     }
 
@@ -339,9 +342,7 @@ public class CrossbowTests
         Assert.Equal(6, withBow.Hand.Count);
         Assert.Contains(
             withBow.Hand,
-            card =>
-                card.FreeThisTurn
-                && GeneratedData.Cards.Get(card.DefId).Type == CardType.Attack
+            card => card.FreeThisTurn && GeneratedData.Cards.Get(card.DefId).Type == CardType.Attack
         );
     }
 
@@ -354,7 +355,10 @@ public class CrossbowTests
     {
         var combat = Fight();
 
-        Assert.All(combat.Hand.Where(card => card.FreeThisTurn), card => Assert.True(card.FreeThisTurn));
+        Assert.All(
+            combat.Hand.Where(card => card.FreeThisTurn),
+            card => Assert.True(card.FreeThisTurn)
+        );
         Assert.Single(combat.Hand.Where(card => card.FreeThisTurn));
     }
 

@@ -1043,7 +1043,8 @@ public static class RelicEffects
     /// `InfusedCore.ModifyOrbValue`: +1 to the player's LIGHTNING orbs, passive and evoke
     /// alike. Its other half -- three Lightning on turn one -- is in `ApplyCombatStart`.
     /// </summary>
-    internal static int LightningOrbBonus(CombatState state) => HasRelic(state, InfusedCore) ? 1 : 0;
+    internal static int LightningOrbBonus(CombatState state) =>
+        HasRelic(state, InfusedCore) ? 1 : 0;
 
     /// <summary>
     /// The relics whose `BeforeHandDraw` fires on EVERY turn rather than only the first.
