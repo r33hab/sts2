@@ -111,7 +111,18 @@ DISPLAY_AMOUNT_BUFFS = {
 #
 # Asserting presence and not the number is a real weakening, so it is spelled out here and
 # each entry needs a hand-written test to cover the number instead.
-PRESENCE_ONLY_BUFFS = {"ORBIT_POWER": "Orbit"}
+PRESENCE_ONLY_BUFFS = {
+    "ORBIT_POWER": "Orbit",
+    # `AutomationPower.DisplayAmount => cardsLeft`, counting DOWN from 10 to the next
+    # payout, where the power's own amount is the ENERGY it grants. The emulator keeps the
+    # energy on `BuffId.AutomationPower` and counts UP in
+    # `CombatState.DrawnCardsSinceAutomationProc`, so the displayed number is the
+    # complement of a field that is not a buff at all.
+    "AUTOMATION_POWER": "AutomationPower",
+    # `PanachePower.DisplayAmount => CardsLeft`, down from 5, where the amount is the
+    # DAMAGE. Same shape: `CombatState.CardsPlayedSincePanacheProc` counts up.
+    "PANACHE_POWER": "PanachePower",
+}
 
 # The Defect's orbs. `ModelId.Entry` is the slugified class name, so DarkOrb reads
 # DARK_ORB.

@@ -38,4 +38,35 @@ public class PanacheTests
         Assert.Empty(fight.State.Hand);
         Assert.Empty(fight.State.DiscardPile);
     }
+
+    /// <summary>
+    /// FIVE cards played, then ten damage to everything. `PanachePower.DisplayAmount`
+    /// counts DOWN from five while the power's amount is the DAMAGE, so a capture can
+    /// only assert the power is there -- the live number is the complement of
+    /// `CombatState.CardsPlayedSincePanacheProc`. Presence-only in the generator, counted
+    /// here.
+    /// </summary>
+    [Fact]
+    public void TheDamageLandsOnTheFifthCardPlayed()
+    {
+        var fight = Fight.Hand(Card(CL.Panache)).Energy(9).Enemy(hp: 200);
+        fight.Play();
+
+        for (int i = 0; i < 5; i++)
+        {
+            fight.State.Hand.Add(new CardInstance(IC.DefendIronclad, false));
+        }
+
+        int hp = fight.Enemy0.Hp;
+        for (int i = 0; i < 4; i++)
+        {
+            fight.Play(0);
+        }
+
+        Assert.Equal(hp, fight.Enemy0.Hp);
+
+        fight.Play(0);
+
+        Assert.Equal(hp - 10, fight.Enemy0.Hp);
+    }
 }

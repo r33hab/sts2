@@ -3810,11 +3810,24 @@ public static class CombatEngine
         int panache = BuffSystem.Get(state.PlayerBuffs, BuffId.PanachePower);
         if (panache > 0)
         {
-            state.CardsPlayedSincePanacheProc++;
-            if (state.CardsPlayedSincePanacheProc >= 5)
+            // `PanachePower`'s internal `alreadyApplied` flag, whose comment in the game
+            // says why it exists: "We track this so we don't count the Panache card
+            // towards itself." `AfterCardPlayed` fires for the play that APPLIED the
+            // power, and the counter only starts on the play after it -- so the damage
+            // lands on the fifth card played AFTER Panache, not on the fourth.
+            if (BuffSystem.Get(state.PlayerBuffs, BuffId.PanacheArmed) <= 0)
             {
-                state.CardsPlayedSincePanacheProc = 0;
-                Effects.CardEffects.DealUnpoweredDamageToAll(state, panache);
+                // Arm it and count nothing: this IS the play that applied the power.
+                BuffSystem.Apply(state.PlayerBuffs, BuffId.PanacheArmed, 1);
+            }
+            else
+            {
+                state.CardsPlayedSincePanacheProc++;
+                if (state.CardsPlayedSincePanacheProc >= 5)
+                {
+                    state.CardsPlayedSincePanacheProc = 0;
+                    Effects.CardEffects.DealUnpoweredDamageToAll(state, panache);
+                }
             }
         }
 

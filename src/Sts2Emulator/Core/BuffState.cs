@@ -41,6 +41,7 @@ public enum BuffId
     CalamityPower, // player: generate N random Attacks after each played Attack
     MayhemPower, // player: auto-play N cards from the top of draw pile each turn
     PanachePower, // player: deal N damage to all enemies after every five card plays
+    PanacheArmed, // player: Panache's own play does not count towards its five
     PrepTimePower, // player: gain N Vigor at the start of each player turn
     RollingBoulderPower, // player: deal N damage to all enemies at turn start, then grow
     StratagemPower, // player: pull N cards from draw pile to hand after shuffling
