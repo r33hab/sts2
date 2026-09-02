@@ -1085,3 +1085,24 @@ turns out to be yes. It is not the answer for enemy move tables, where the same 
 found ten. **The difference is not the reading, it is what the reading has to cover**: a
 card's OnPlay is a dozen lines in one file, and a monster is a state machine whose body
 lives somewhere else entirely.
+
+### E451 -- Glory drew Hive's event pool
+
+`GenerateEventSequence` handled `ActHive || ActGlory` in one arm returning Hive's ten
+events, behind a comment admitting Glory's list "is not extracted yet" and reasoning that
+act 3 "is not reachable to be wrong about yet." Act 3 became reachable; the comment did
+not age with it. Glory's seven events are `BattlewornDummy`, `GraveOfTheForgotten`,
+`HungryForMushrooms`, `Reflections`, `RoundTeaParty`, `Trial`, `TinkerTime` -- all seven
+already fully implemented in `RunEngine`, and none of them reachable, while act 3 offered
+ten Hive events instead.
+
+**A placeholder sized to be harmless stopped being harmless when the thing it stood in for
+arrived.** The comment even names the condition under which it becomes wrong. Nothing
+re-reads a comment when its premise changes, which is the argument for a test that fails
+rather than a note that explains -- `TheActSpecificEventsDoNotOverlap` now pins it, and
+would have gone red the day act 3 shipped.
+
+The count matters as much as the membership: 25 against Hive's 28, so the pool `Shuffle`
+consumed three extra draws and **every subsequent `Rng.Shuffle` in the act was reading
+from the wrong position**. This was never only an event bug. E82 was this same defect in
+Glory's *encounter* pools, which is twice now that a Glory placeholder copied Hive.

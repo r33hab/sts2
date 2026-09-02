@@ -83,6 +83,55 @@ public class ActGenerationTests
     }
 
     /// <summary>
+    /// Glory's seven events plus the same eighteen shared ones. This pool used to be a
+    /// copy of Hive's, which is wrong in both directions at once and in a way nothing
+    /// downstream would have complained about: act 3 offered ten events it does not have
+    /// and none of the seven it does.
+    /// </summary>
+    [Fact]
+    public void GlorysEventPoolIsItsOwnPlusTheSharedBlock()
+    {
+        var state = Generated("3PFLW9XC5D");
+        var glory = state.Acts.Single(rooms => rooms.Act == RunConstants.ActGlory);
+
+        Assert.Equal(25, glory.Events.Length);
+        Assert.Equal(glory.Events.Length, glory.Events.Distinct().Count());
+        Assert.All(
+            new[]
+            {
+                RunConstants.EventBattlewornDummy,
+                RunConstants.EventGraveOfTheForgotten,
+                RunConstants.EventHungryForMushrooms,
+                RunConstants.EventReflections,
+                RunConstants.EventRoundTeaParty,
+                RunConstants.EventTrial,
+                RunConstants.EventTinkerTime,
+            },
+            eventId => Assert.Contains(eventId, glory.Events)
+        );
+    }
+
+    /// <summary>
+    /// The act-specific halves do not overlap: an event belongs to one act or to the
+    /// shared block, never to two acts. Sharing a pool between acts is the exact defect
+    /// this pins, and the size arithmetic below is what catches a pool that silently
+    /// reverts to a copy — 28 and 25 differ, so even the COUNT would drift the shuffle.
+    /// </summary>
+    [Fact]
+    public void TheActSpecificEventsDoNotOverlap()
+    {
+        var state = Generated("3PFLW9XC5D");
+        var hive = state.Acts.Single(rooms => rooms.Act == RunConstants.ActHive).Events;
+        var glory = state.Acts.Single(rooms => rooms.Act == RunConstants.ActGlory).Events;
+
+        var shared = hive.Intersect(glory).ToArray();
+
+        Assert.Equal(18, shared.Length);
+        Assert.Equal(10, hive.Except(shared).Count());
+        Assert.Equal(7, glory.Except(shared).Count());
+    }
+
+    /// <summary>
     /// The act list is the only copy: the per-act sequences are views on
     /// <c>Acts[CurrentActIndex]</c>, so pointing the index at another act swaps all of
     /// them at once. That is what the transition will do, and it is why adding a fourth

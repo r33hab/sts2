@@ -297,12 +297,10 @@ public static class RunMapGenerator
 
     private static int[] GenerateEventSequence(int act, GameRng rng)
     {
-        if (act == RunConstants.ActHive || act == RunConstants.ActGlory)
+        if (act == RunConstants.ActHive)
         {
-            // Hive.AllEvents in its own declaration order, then the same shared block
-            // every act gets. Glory has its own list, which is not extracted yet -- it
-            // reuses Hive's so the DRAW COUNT is at least an act's worth rather than
-            // nothing, and act 3 is not reachable to be wrong about yet.
+            // Hive.AllEvents in its own declaration order, then the shared block every
+            // act gets: ActModel.GenerateRooms is AllEvents.Concat(AllSharedEvents).
             int[] hivePool =
             [
                 RunConstants.EventAmalgamator,
@@ -319,6 +317,27 @@ public static class RunMapGenerator
             ];
             rng.Shuffle(hivePool);
             return hivePool.Where(eventId => eventId != 0).ToArray();
+        }
+
+        if (act == RunConstants.ActGlory)
+        {
+            // Glory.AllEvents in its own declaration order. This list used to reuse
+            // Hive's, which put ten events act 3 never offers into the pool and left
+            // out all seven it does -- and, because the pool is SHUFFLED, drew a
+            // different count and desynced every later Rng.Shuffle draw in the act.
+            int[] gloryPool =
+            [
+                RunConstants.EventBattlewornDummy,
+                RunConstants.EventGraveOfTheForgotten,
+                RunConstants.EventHungryForMushrooms,
+                RunConstants.EventReflections,
+                RunConstants.EventRoundTeaParty,
+                RunConstants.EventTrial,
+                RunConstants.EventTinkerTime,
+                .. SharedEventPool,
+            ];
+            rng.Shuffle(gloryPool);
+            return gloryPool.Where(eventId => eventId != 0).ToArray();
         }
 
         bool underdocks = act == RunConstants.ActUnderdocks;
