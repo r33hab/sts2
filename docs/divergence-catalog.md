@@ -1373,3 +1373,21 @@ is correct to be unmappable -- the Bowlbug Rock's off-balance state is a bool on
 `ESCAPE_ARTIST_POWER` and `SWIPE_POWER` remain unmodelled and are now named by DATA rather
 than by reading. That is the whole argument for reporting an unresolvable power instead of
 ignoring it: the list of what the harness cannot see is the list of what to model next.
+
+### Verified: clean with block AND powers compared
+
+A final sweep on the same four seeds, with every fix in one build and both new comparisons
+live: **80 rows, zero non-coverage failures.** All four Obscura rows flipped to `turns:ok`,
+and `FLUTTER_POWER` has left the unresolved list because it is now modelled.
+
+Three powers still cannot be resolved, and the list is worth keeping in front of us:
+`IMBALANCED_POWER` (correctly unmappable -- a bool on `EnemyState`, not a `BuffId`),
+`ESCAPE_ARTIST_POWER` and `SWIPE_POWER` (genuinely unmodelled, and the next two to do).
+
+Worth stating what this run does and does not mean. It means the Hive's twenty encounters
+agree with the game for four turns, on four seeds, at A8, on every field the harness
+compares -- deck, roster, intents, player state, hand, piles, RNG stream positions, enemy
+block and enemy powers. It does not mean the act is correct: the same 27 coverage rows say
+six enemies still have moves nobody has seen, five of them because four turns is not long
+enough and one because the sweep's policy never blocks. **A clean sweep is a statement about
+what was exercised, and the coverage line is the part that says how much that was.**
