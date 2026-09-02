@@ -373,3 +373,164 @@ public class CrossbowTests
         Assert.Equal(before + 1, combat.Hand.Count);
     }
 }
+
+/// <summary>
+/// Five more, three of them STARTERS. Infused Core and Phylactery Unbound are the Defect's
+/// and the Necrobinder's openers, so between them and Divine Destiny and Ring of the Drake
+/// this pass found four Starter relics that did nothing at all.
+/// </summary>
+public class StarterAndPaelRelicTests
+{
+    private static RunEngine Run(params int[] relicIds)
+    {
+        var engine = new RunEngine();
+        engine.Reset("NXV45HW43K");
+        foreach (int id in relicIds)
+        {
+            RunNonCombatEffects.ApplyRelicPickup(engine.State, id);
+        }
+
+        return engine;
+    }
+
+    private static CombatState Fight(params int[] relicIds)
+    {
+        var engine = Run(relicIds);
+        engine.State.Phase = RunPhase.Map;
+        for (int i = 0; i < engine.State.MapNodeTypes.Length; i++)
+        {
+            if (engine.State.MapNodeTypes[i] == RunConstants.NodeNormal)
+            {
+                engine.Step(i, -1, out _, out _, out _);
+                break;
+            }
+        }
+
+        return engine.State.ActiveCombat!;
+    }
+
+    /// <summary>
+    /// `InfusedCore` channels three Lightning on turn one -- given somewhere to put them.
+    /// </summary>
+    [Fact]
+    public void InfusedCoreChannelsThreeLightning()
+    {
+        var combat = Fight(RelicEffects.InfusedCore);
+        combat.Orbs.Clear();
+        combat.OrbCapacity = 3;
+
+        RelicEffects.ApplyCombatStart(combat, new System.Random(1));
+
+        Assert.Equal(3, combat.Orbs.Count(orb => orb.Type == OrbType.Lightning));
+    }
+
+    /// <summary>
+    /// In an actual run it channels three and KEEPS ONE, because the relic is the Defect's
+    /// Starter and the emulator's run is Ironclad-only: a character with no orb slots of
+    /// their own is given exactly one the first time they channel. Not a bug in the relic
+    /// -- the same reason Big Hat's hard-coded Ironclad pool is unreachable rather than
+    /// wrong -- and pinned here so the one orb is not read later as a miscount.
+    /// </summary>
+    [Fact]
+    public void AnIroncladHoldingInfusedCoreKeepsExactlyOneOrb()
+    {
+        var combat = Fight(RelicEffects.InfusedCore);
+
+        Assert.Equal(0, combat.BaseOrbSlots);
+        Assert.Single(combat.Orbs);
+    }
+
+    /// <summary>
+    /// And its other half: +1 to every Lightning orb the player owns, passive and evoke.
+    /// Wiring only the channel would have made the Defect's Starter half a relic, which is
+    /// Blood Soaked Rose's failure in the opposite direction.
+    /// </summary>
+    [Fact]
+    public void InfusedCoreRaisesLightningValue()
+    {
+        Assert.Equal(0, RelicEffects.LightningOrbBonus(Fight()));
+        Assert.Equal(1, RelicEffects.LightningOrbBonus(Fight(RelicEffects.InfusedCore)));
+    }
+
+    /// <summary>
+    /// `PhylacteryUnbound` summons on BOTH hooks -- 5 before combat and 2 at every turn
+    /// start, turn one included. Bound Phylactery skips turn one because its combat-start
+    /// summon already ran; this one does not, so turn one is seven.
+    /// </summary>
+    [Fact]
+    public void PhylacteryUnboundSummonsOnBothHooks()
+    {
+        var combat = Fight(RelicEffects.PhylacteryUnbound);
+
+        Assert.True(combat.OstyHp >= 7);
+    }
+
+    /// <summary>
+    /// `PaelsTears` pays two energy for having left energy on the table LAST turn. The
+    /// flag is written at end of turn and read at the next start, so the relic never pays
+    /// on the turn that earned it.
+    /// </summary>
+    [Fact]
+    public void PaelsTearsPaysForLastTurnsThrift()
+    {
+        var combat = Fight(RelicEffects.PaelsTears);
+        combat.Energy = 2;
+
+        RelicEffects.ApplyBeforeEndOfPlayerTurnShared(combat, new System.Random(1));
+        int banked = combat.Energy;
+        RelicEffects.ApplyStartOfPlayerTurn(combat, new System.Random(1));
+
+        Assert.Equal(banked + 2, combat.Energy);
+    }
+
+    /// <summary>A turn that spent everything earns nothing.</summary>
+    [Fact]
+    public void PaelsTearsPaysNothingForASpentTurn()
+    {
+        var combat = Fight(RelicEffects.PaelsTears);
+        combat.Energy = 0;
+
+        RelicEffects.ApplyBeforeEndOfPlayerTurnShared(combat, new System.Random(1));
+        RelicEffects.ApplyStartOfPlayerTurn(combat, new System.Random(1));
+
+        Assert.Equal(0, combat.Energy);
+    }
+
+    /// <summary>`RadiantPearl`: one Luminesce in the opening hand.</summary>
+    [Fact]
+    public void RadiantPearlOpensWithALuminesce()
+    {
+        Assert.Contains(Fight(RelicEffects.RadiantPearl).Hand, card => card.DefId == 289);
+    }
+
+    /// <summary>
+    /// `ToastyMittens` exhausts the top of the draw pile and gives Strength 1, EVERY turn.
+    /// On turn one it skips Innate cards, which is the branch the game writes out and the
+    /// one that keeps an Innate opener intact.
+    /// </summary>
+    [Fact]
+    public void ToastyMittensExhaustsAndStrengthensOnTurnOne()
+    {
+        var combat = Fight(RelicEffects.ToastyMittens);
+
+        Assert.Equal(1, BuffSystem.Get(combat.PlayerBuffs, BuffId.Strength));
+        Assert.Single(combat.ExhaustPile);
+    }
+
+    /// <summary>
+    /// And again next turn -- the hook is wired into BOTH draw sites. Turn one's hand is
+    /// dealt by `CombatFactory` and every later one by `EndTurn`, so a relic wired into
+    /// only one of them works for exactly half the fight.
+    /// </summary>
+    [Fact]
+    public void ToastyMittensFiresOnEveryTurnNotJustTheFirst()
+    {
+        var combat = Fight(RelicEffects.ToastyMittens);
+        int exhausted = combat.ExhaustPile.Count;
+
+        RelicEffects.ApplyBeforeHandDraw(combat, 2, new System.Random(1));
+
+        Assert.Equal(exhausted + 1, combat.ExhaustPile.Count);
+        Assert.Equal(2, BuffSystem.Get(combat.PlayerBuffs, BuffId.Strength));
+    }
+}

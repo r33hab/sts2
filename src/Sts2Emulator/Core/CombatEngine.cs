@@ -1605,6 +1605,10 @@ public static class CombatEngine
             Effects.CardEffects.AddEtherealPoolCardToHand(state, rng);
         }
 
+        // Every-turn `BeforeHandDraw` relics. Turn one's visit is in
+        // `ApplyBeforeOpeningHand`, because that hand is dealt by `CombatFactory`.
+        Effects.RelicEffects.ApplyBeforeHandDraw(state, state.Turn + 1, rng);
+
         // `SentryModePower.BeforeHandDraw` -- BEFORE the hand is drawn, so the Gazes are
         // at the bottom of the new hand rather than the top, and they count against the
         // hand cap the draw then runs into.

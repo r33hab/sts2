@@ -1170,3 +1170,29 @@ the same overload, so the day a character selection arrives both are one edit ea
 The first draft of this entry called Big Hat's pool "wrong for the other four characters
 and known to be". That was wrong: it is unreachable, not incorrect. The check that settled
 it was reading `Reset`'s signature, which takes no character at all.
+
+### E454 -- four Starter relics did nothing
+
+267/296 modelled. This batch added `PaelsTears`, `RadiantPearl`, `InfusedCore`,
+`PhylacteryUnbound`, `ToastyMittens`.
+
+**Counting the pass so far: Divine Destiny, Ring of the Drake, Infused Core and Phylactery
+Unbound are all STARTERS.** Four relics that every run of their character opens with, and
+all four were inert. The relic audit's `--reachable` flag has been asking the wrong
+question the whole time -- it filters by which POOL a relic comes from, and a Starter comes
+from no pool at all. That is the third distinct way `--reachable` has under-reported (see
+E389 for the first two), and the pattern is that "reachable" was only ever implemented as
+"in a pool the run draws from".
+
+`ToastyMittens` is the shape worth keeping. Its `BeforeHandDraw` has no turn guard, and the
+emulator deals turn one's hand in `CombatFactory` and every later hand in `EndTurn` -- two
+sites, no shared hook. **A relic wired into one of them works for exactly half the fight**,
+and nothing about the code makes that visible from either side. It now goes through
+`ApplyBeforeHandDraw`, called from both, and there is a test at each site rather than one
+test that could pass against a half-wiring.
+
+`InfusedCore` channels three Lightning and an Ironclad keeps ONE, because a character with
+no orb slots of their own is given exactly one the first time they channel. That is right,
+not a miscount, and it is pinned by its own test so the single orb is not read later as a
+bug. The relic is the Defect's Starter and the run is Ironclad-only -- unreachable rather
+than wrong, the same distinction the Big Hat correction turned on.

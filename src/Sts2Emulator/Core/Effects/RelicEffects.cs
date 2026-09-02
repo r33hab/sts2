@@ -270,6 +270,11 @@ public static class RelicEffects
     public const int Driftwood = 68;
     public const int ThrowingAxe = 263;
     public const int Crossbow = 53;
+    public const int PaelsTears = 182;
+    public const int RadiantPearl = 211;
+    public const int InfusedCore = 116;
+    public const int PhylacteryUnbound = 197;
+    public const int ToastyMittens = 266;
 
     /// <summary>`SealOfGold`'s GoldVar(5) -- the toll it takes for its energy.</summary>
     private const int SealOfGoldPrice = 5;
@@ -457,6 +462,16 @@ public static class RelicEffects
         //
         // The guard is `list.Count != 0` around a `NextItem`, so a draw pile holding
         // exactly one power still spends a roll on picking it.
+        // Every-turn `BeforeHandDraw` relics, turn one's visit.
+        ApplyBeforeHandDraw(state, 1, rng);
+
+        // `RadiantPearl.BeforeHandDraw` at TurnNumber == 1: CardsVar(1) Luminesce into
+        // hand. Ninja Scroll's shape with a different card.
+        if (HasRelic(state, RadiantPearl))
+        {
+            CardEffects.AddGeneratedCardsToHand(state, 289, 1);
+        }
+
         if (HasRelic(state, JeweledMask))
         {
             var powers = Enumerable
@@ -559,6 +574,25 @@ public static class RelicEffects
         // the axe is once per COMBAT, not once per turn, and relic counters travel into
         // the fight from the run rather than starting fresh.
         SetCounter(state, ThrowingAxe, 0);
+
+        // `InfusedCore.AfterSideTurnStart` at TurnNumber <= 1: three Lightning. A STARTER,
+        // and its OTHER half -- `ModifyOrbValue` +1 on the player's Lightning orbs -- is
+        // in `CardEffects`, which is exactly the split that made Blood Soaked Rose look
+        // finished when only one half was wired.
+        if (HasRelic(state, InfusedCore))
+        {
+            for (int i = 0; i < 3; i++)
+            {
+                CardEffects.ChannelOrb(state, OrbType.Lightning, rng);
+            }
+        }
+
+        // `PhylacteryUnbound.BeforeCombatStart`: SummonVar("StartOfCombat", 5). Bound
+        // Phylactery's shape at five HP instead of one, and a Starter rather than a Rare.
+        if (HasRelic(state, PhylacteryUnbound))
+        {
+            CardEffects.SummonOsty(state, 5);
+        }
 
         // `BoundPhylactery.BeforeCombatStart` summons Osty at `SummonVar(1)` -- one HP,
         // which is a body to soak one hit rather than a wall.
@@ -859,6 +893,23 @@ public static class RelicEffects
             CardEffects.GainUnpoweredBlock(state, 7, rng);
         }
 
+        // `PaelsTears`: EnergyVar(2) at turn start, but only if `BeforeSideTurnEnd` saw
+        // energy left over LAST turn. The counter is that flag -- it is written at end of
+        // turn and read here, so the relic pays for thrift one turn late.
+        if (HasRelic(state, PaelsTears) && GetCounter(state, PaelsTears) > 0)
+        {
+            CardEffects.GainEnergy(state, 2);
+        }
+
+        // `PhylacteryUnbound.AfterSideTurnStart`: SummonVar("StartOfTurn", 2), EVERY turn
+        // including the first -- unlike Bound Phylactery, whose turn-start summon skips
+        // turn one because `BeforeCombatStart` already did it. This one does both, so
+        // turn one is five plus two.
+        if (HasRelic(state, PhylacteryUnbound))
+        {
+            CardEffects.SummonOsty(state, 2);
+        }
+
         // `Crossbow.AfterSideTurnStart` with no turn guard: one ATTACK from the player's
         // own pool into hand, free for the turn, every turn. The game returns early when
         // the pool has no Attack in it, which no character's does -- but the guard is
@@ -987,6 +1038,48 @@ public static class RelicEffects
                 ? 2
                 : 0
         );
+
+    /// <summary>
+    /// `InfusedCore.ModifyOrbValue`: +1 to the player's LIGHTNING orbs, passive and evoke
+    /// alike. Its other half -- three Lightning on turn one -- is in `ApplyCombatStart`.
+    /// </summary>
+    internal static int LightningOrbBonus(CombatState state) => HasRelic(state, InfusedCore) ? 1 : 0;
+
+    /// <summary>
+    /// The relics whose `BeforeHandDraw` fires on EVERY turn rather than only the first.
+    /// Called from both draw sites, because turn one's hand is dealt by `CombatFactory`
+    /// and every later one by `EndTurn` -- a relic wired into only one of them works for
+    /// exactly half the fight.
+    /// </summary>
+    internal static void ApplyBeforeHandDraw(CombatState state, int turnNumber, Random? rng)
+    {
+        if (!HasRelic(state, ToastyMittens))
+        {
+            return;
+        }
+
+        // `ToastyMittens.BeforeHandDraw`: EXHAUST the top card of the draw pile, then
+        // Strength 1. On turn one it takes the first NON-Innate card and falls back to the
+        // first if every card is Innate -- the game writes both branches, and the fallback
+        // is what stops an all-Innate opener from skipping the exhaust.
+        //
+        // The Strength is applied whether or not a card was found, because the game's
+        // `PowerCmd.Apply` sits outside the null check.
+        if (state.DrawPile.Count > 0)
+        {
+            int index = turnNumber == 1 ? state.DrawPile.FindIndex(card => !card.IsInnate()) : 0;
+            if (index < 0)
+            {
+                index = 0;
+            }
+
+            var doomed = state.DrawPile[index];
+            state.DrawPile.RemoveAt(index);
+            CardEffects.ExhaustCard(state, doomed, rng: rng);
+        }
+
+        GainPlayerStrength(state, 1);
+    }
 
     /// <summary>
     /// `ThrowingAxe.ModifyCardPlayCount`: `playCount + 1` for the FIRST card played in a
@@ -1605,6 +1698,14 @@ public static class RelicEffects
         if (HasRelic(state, RippleBasin) && state.AttackCardsPlayedThisTurn == 0)
         {
             CardEffects.GainUnpoweredBlock(state, 4, rng);
+        }
+
+        // `PaelsTears.BeforeSideTurnEnd` records whether energy was left over; the
+        // turn-start half reads it and pays two. The counter IS that flag, written every
+        // turn so a spendthrift turn clears what a thrifty one set.
+        if (HasRelic(state, PaelsTears))
+        {
+            SetCounter(state, PaelsTears, state.Energy > 0 ? 1 : 0);
         }
     }
 

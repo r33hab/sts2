@@ -9391,10 +9391,16 @@ public static class CardEffects
         Math.Max(0, orb.PassiveValue + BuffSystem.Get(state.PlayerBuffs, BuffId.Focus));
 
     private static int LightningPassiveValue(CombatState state) =>
-        Math.Max(0, 3 + BuffSystem.Get(state.PlayerBuffs, BuffId.Focus));
+        Math.Max(
+            0,
+            3 + BuffSystem.Get(state.PlayerBuffs, BuffId.Focus) + RelicEffects.LightningOrbBonus(state)
+        );
 
     private static int LightningEvokeValue(CombatState state) =>
-        Math.Max(0, 8 + BuffSystem.Get(state.PlayerBuffs, BuffId.Focus));
+        Math.Max(
+            0,
+            8 + BuffSystem.Get(state.PlayerBuffs, BuffId.Focus) + RelicEffects.LightningOrbBonus(state)
+        );
 
     private static int FrostPassiveValue(CombatState state) =>
         Math.Max(0, 2 + BuffSystem.Get(state.PlayerBuffs, BuffId.Focus));

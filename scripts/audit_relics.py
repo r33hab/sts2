@@ -786,6 +786,23 @@ READ: dict[str, tuple[str, str]] = {
         "BeforeHandDraw turn one: one Power MOVED from draw to hand off CombatCardSelection, free for the turn. Moves rather than makes, so the draw pile shortens and the turn-one reorder sees it.",
     ),
     "SignetRing": ("9f6083896263", "GoldVar(999) on pickup, through GainGold so Bloody Idol sees it."),
+    "PaelsTears": (
+        "cb9b701cad0a",
+        "Two energy at turn start IF last turn ended with energy left. The counter is the flag: written in BeforeSideTurnEnd, read at the next turn start, so it never pays on the turn that earned it.",
+    ),
+    "RadiantPearl": ("cba43767b632", "One Luminesce into hand on turn one. Ninja Scroll's shape with a different card."),
+    "InfusedCore": (
+        "eac62514ba64",
+        "BOTH halves: three Lightning on turn one, and ModifyOrbValue +1 on the player's Lightning orbs, passive and evoke. The Defect's Starter -- in an Ironclad-only run it channels three and keeps one, since a slotless character is given exactly one slot.",
+    ),
+    "PhylacteryUnbound": (
+        "3cf1d6a83510",
+        "Osty 5 before combat AND 2 at every turn start, turn one included -- unlike Bound Phylactery, whose turn-start summon skips turn one. Turn one is seven.",
+    ),
+    "ToastyMittens": (
+        "5b813f80ce8e",
+        "Every turn: exhaust the top of the draw pile, then Strength 1. Turn one skips Innate cards and falls back to the first if all are Innate. Wired into BOTH draw sites -- turn one's hand comes from CombatFactory and later ones from EndTurn.",
+    ),
     "Crossbow": (
         "640f4d6e8e26",
         "Every turn: one distinct ATTACK from the player's own pool into hand, FREE for the turn, off CombatCardGeneration. Written against the Ironclad pool like Big Hat, and correct for the same reason -- RunEngine.Reset takes no character and every run reward pool is Ironclad's.",
