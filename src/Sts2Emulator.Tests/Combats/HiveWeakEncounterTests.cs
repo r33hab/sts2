@@ -317,3 +317,53 @@ public class TunnelerTests
         );
     }
 }
+
+/// <summary>
+/// `BowlbugEgg.BITE_MOVE` is a `SingleAttackIntent` beside a `DefendIntent`: it bites and
+/// then gains `ProtectBlock`, which is ascension-gated exactly as its damage is.
+/// </summary>
+public class BowlbugEggProtectTests
+{
+    /// <summary>
+    /// The worker is a coin flip between Egg and Nectar, so the seed is searched rather
+    /// than assumed -- a fixed seed here would silently start testing the Nectar the day
+    /// the roll changed.
+    /// </summary>
+    private static EnemyState BiteAndBlock(int ascension)
+    {
+        for (int seed = 0; seed < 50; seed++)
+        {
+            var fight = Fight.Encounter(
+                CombatFactory.ActOneEncounter.BowlbugsWeak,
+                ascension,
+                seed
+            );
+            var egg = fight.State.Enemies.FirstOrDefault(e => e.DefId == KE.BowlbugEgg);
+            if (egg is null)
+            {
+                continue;
+            }
+
+            egg.Block = 0;
+            fight.State.PlayerHp = 999;
+            fight.EndTurn();
+            return egg;
+        }
+
+        throw new Xunit.Sdk.XunitException("no seed in 0..49 rolled a Bowlbug Egg");
+    }
+
+    /// <summary>
+    /// `ProtectBlock` is `GetValueIfAscension(DeadlyEnemies, 8, 7)`, so 7 below A9 and 8
+    /// at or above it. The 8 was hardcoded, which gave the egg the DEADLY block at every
+    /// ascension beneath it -- found by a live sweep reading `enemy block: emu [0, 8] vs
+    /// live [0, 7]` on four separate rows before anything else disagreed.
+    /// </summary>
+    [Theory]
+    [InlineData(8, 7)]
+    [InlineData(9, 8)]
+    public void TheEggsProtectBlockFollowsDeadlyEnemies(int ascension, int expected)
+    {
+        Assert.Equal(expected, BiteAndBlock(ascension).Block);
+    }
+}

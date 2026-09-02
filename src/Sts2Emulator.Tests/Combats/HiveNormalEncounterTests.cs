@@ -385,6 +385,65 @@ public class SlumberingBeetleTests
     }
 
     /// <summary>
+    /// Waking SHEDS the Plating. `WakeUpMove` calls `PowerCmd.Remove` on it outright -- the
+    /// armour does not decay away, it stops existing -- so a woken beetle blocks nothing.
+    /// </summary>
+    /// <remarks>
+    /// Found by a live sweep: `turn 5 enemy block: emu [0, 15] vs live [0, 0]`. The
+    /// emulator kept ticking the Plating down and granting the remainder as block for the
+    /// rest of the fight, so a beetle the player had already woken went on soaking hits
+    /// the game let through. Intents agreed the whole way; only the block disagreed.
+    /// </remarks>
+    [Fact]
+    public void WakingTheBeetleShedsItsPlating()
+    {
+        var fight = HiveNormal.At(CombatFactory.ActOneEncounter.SlumberingBeetle);
+        var beetle = fight.State.Enemies[2];
+        Assert.True(BuffSystem.Get(beetle.Buffs, BuffId.Plating) > 0);
+
+        // Three enemy turns of sleep, then it is awake.
+        for (int turn = 0; turn < 4; turn++)
+        {
+            beetle.Hp = 999;
+            fight.State.PlayerHp = 999;
+            fight.EndTurn();
+        }
+
+        Assert.Equal(0, BuffSystem.Get(beetle.Buffs, BuffId.Slumber));
+        Assert.Equal(0, BuffSystem.Get(beetle.Buffs, BuffId.Plating));
+        Assert.Equal(0, beetle.Block);
+    }
+
+    /// <summary>
+    /// And it sheds it just the same when the player wakes it EARLY with damage. The game
+    /// wakes from either path, so a wake wired into only the turn-end one leaves a beetle
+    /// the player hit armoured for the rest of the fight.
+    /// </summary>
+    [Fact]
+    public void WakingTheBeetleWithDamageAlsoShedsThePlating()
+    {
+        var fight = HiveNormal.At(CombatFactory.ActOneEncounter.SlumberingBeetle);
+        var beetle = fight.State.Enemies[2];
+
+        // Block zeroed but the POWER kept: three Strikes land unblocked, and the third
+        // takes the sleep to zero.
+        beetle.Block = 0;
+        fight.State.Hand.Clear();
+        for (int card = 0; card < 3; card++)
+        {
+            fight.State.Hand.Add(new CardInstance(472, Upgraded: false));
+        }
+
+        fight.State.Energy = 9;
+        fight.Play(0, target: 2);
+        fight.Play(0, target: 2);
+        fight.Play(0, target: 2);
+
+        Assert.Equal(0, BuffSystem.Get(beetle.Buffs, BuffId.Slumber));
+        Assert.Equal(0, BuffSystem.Get(beetle.Buffs, BuffId.Plating));
+    }
+
+    /// <summary>
     /// Its OTHER decrement: every instance of unblocked damage it takes. Hitting it is
     /// the obvious play against something asleep behind Plating, and the emulator used to
     /// count turns alone — so a beetle under attack woke late here and on time in game.

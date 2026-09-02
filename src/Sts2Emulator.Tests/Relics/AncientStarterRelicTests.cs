@@ -695,9 +695,7 @@ public class IronClubTests
     public void EveryFourthCardDrawsOne()
     {
         var combat = Fight();
-        combat.DrawPile.AddRange(
-            Enumerable.Repeat(new CardInstance(472, false), 20)
-        );
+        combat.DrawPile.AddRange(Enumerable.Repeat(new CardInstance(472, false), 20));
 
         Assert.Equal(0, PlayAndCountDraws(combat, 3));
         Assert.Equal(1, PlayAndCountDraws(combat, 1));

@@ -1239,3 +1239,33 @@ constant against `Relics.g.cs` rather than by any test, because an id off by one
 silently to the neighbouring relic and every test still passes -- against the wrong relic.
 The check is now run over every id in the batch, not the new one; the final pass verified
 all twenty-two.
+
+### E457, E458 -- two more block divergences, from the sweep that was actually seen
+
+The re-run with `PYTHONUNBUFFERED` covered all 80 rows. Nine `turns:FAIL`, on three
+encounters: the Obscura (E455, already fixed), the Bowlbug Egg, and the Slumbering Beetle.
+**Every one of the nine is a block disagreement.** Intents agreed, damage agreed, pile
+sizes agreed, RNG positions agreed; the only field that ever differed was enemy block.
+
+**E457 -- the Bowlbug Egg's Protect block ignored ascension.** `BITE_MOVE` is a
+`SingleAttackIntent(BiteDamage)` beside a `DefendIntent`, and `ProtectBlock` is
+`GetValueIfAscension(DeadlyEnemies, 8, 7)` -- gated exactly as its damage is. The emulator
+hardcoded 8, so the egg carried the DEADLY block at every ascension below it. Off by one,
+on four separate rows, forever.
+
+**E458 -- the Slumbering Beetle never shed its Plating.** `WakeUpMove` calls
+`PowerCmd.Remove` on the `PlatingPower` outright; the armour does not decay, it stops
+existing. The emulator kept ticking it down and granting the remainder for the rest of the
+fight -- `turn 5 enemy block: emu [0, 15] vs live [0, 0]`. The wake is reachable from BOTH
+of `SlumberPower`'s decrements, turn end and unblocked damage, so it goes through one
+shared `WakeSlumberingBeetleIfDone` called from both; a wake wired into only one leaves a
+beetle the player HIT armoured all fight, which is the more common case of the two.
+
+The lesson these three share is worth stating once. **An intent table can be completely
+right about what a monster says and wrong about what the move does.** All three enemies
+had passing intent tests, and all three would have kept passing indefinitely. What found
+them was a sweep comparing enemy STATE -- and it found them only because the sweep prints
+enemy block on a failing row, which was added for a different reason entirely.
+
+Still not covered: the sweep never compares enemy BUFFS. A move that applies a power the
+emulator does not would look exactly like these did until the buff changed a number.

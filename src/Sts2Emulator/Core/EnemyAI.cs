@@ -680,7 +680,14 @@ public static class EnemyAI
 
         if (enemy.DefId == KE.BowlbugEgg && enemy.CurrentIntent.Type == IntentType.Attack)
         {
-            enemy.Block += BuffSystem.IncomingBlock(8, enemy.Buffs);
+            // `BITE_MOVE` is `SingleAttackIntent(BiteDamage)` beside a `DefendIntent`, and
+            // `ProtectBlock` is ascension-gated exactly as the damage is:
+            // `GetValueIfAscension(DeadlyEnemies, 8, 7)`. The 8 was hardcoded, so the egg
+            // carried the DEADLY block at every ascension below it.
+            enemy.Block += BuffSystem.IncomingBlock(
+                Ascension.Value(ascension, Ascension.DeadlyEnemies, 8, 7),
+                enemy.Buffs
+            );
         }
 
         if (enemy.DefId == KE.TwoTailedRat && enemy.CurrentIntent.Type != IntentType.Buff)
@@ -4714,6 +4721,24 @@ public static class EnemyAI
 
     /// <summary>`FabricatorNormal.Slots`: bot1 and bot2 stand ahead of the fabricator.</summary>
     private const int FabricatorFrontSlots = 2;
+
+    /// <summary>
+    /// `SlumberPower` reaching zero runs `WakeUpMove`, which REMOVES the beetle's
+    /// `PlatingPower` outright. Called from both decrement paths -- turn end and unblocked
+    /// damage -- because the game wakes from either and a wake wired into one of them
+    /// leaves the other beetle armoured for the rest of the fight.
+    /// </summary>
+    internal static void WakeSlumberingBeetleIfDone(EnemyState enemy)
+    {
+        if (
+            enemy.DefId == KE.SlumberingBeetle
+            && BuffSystem.Get(enemy.Buffs, BuffId.Slumber) <= 0
+            && BuffSystem.Get(enemy.Buffs, BuffId.Plating) > 0
+        )
+        {
+            BuffSystem.Remove(enemy.Buffs, BuffId.Plating);
+        }
+    }
 
     /// <summary>`SlumberingBeetle`'s ROLL_OUT: the Strength it takes with every roll.</summary>
     private const int BeetleRolloutStrength = 2;

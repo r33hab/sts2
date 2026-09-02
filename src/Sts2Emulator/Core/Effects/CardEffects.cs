@@ -4611,6 +4611,10 @@ public static class CardEffects
         if (hpLoss > 0 && BuffSystem.Get(target.Buffs, BuffId.Slumber) > 0)
         {
             BuffSystem.Apply(target.Buffs, BuffId.Slumber, -1);
+            // Waking sheds the Plating -- `WakeUpMove` removes the power, it does not let
+            // it decay. Without this the beetle keeps a shrinking wall of block for the
+            // whole fight and the live game shows none.
+            EnemyAI.WakeSlumberingBeetleIfDone(target);
         }
 
         if (hpLoss > 0)

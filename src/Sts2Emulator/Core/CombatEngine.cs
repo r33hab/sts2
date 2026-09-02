@@ -2705,6 +2705,10 @@ public static class CombatEngine
         foreach (var enemy in state.Enemies.ToArray())
         {
             BuffSystem.TickEndOfTurn(enemy.Buffs);
+            // `SlumberPower.AfterSideTurnEnd` decrements and, at zero, runs `WakeUpMove` --
+            // which sheds the beetle's Plating. The tick above is the decrement; this is
+            // the wake that has to follow it.
+            EnemyAI.WakeSlumberingBeetleIfDone(enemy);
         }
 
         BuffSystem.TickEndOfTurn(state.PlayerBuffs, state.PlayerDebuffsAtRoundStart);
