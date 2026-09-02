@@ -1221,3 +1221,21 @@ The earlier run of this sweep lost rows 1-66 to Python's output buffering and on
 buffer survived, so those rows were never actually seen. Re-run with `PYTHONUNBUFFERED=1`
 to a file. **A sweep whose output is buffered reports a clean run for encounters it never
 showed you** -- the exit code was 0 either way.
+
+### E456 -- Iron Club's counter belongs to the run, not the fight
+
+Every fourth card played draws one. The count is a `[SavedProperty]` and **nothing resets
+it** -- not `AfterCombatEnd`, not combat start -- so it runs the length of the run and a
+fight can inherit a club three cards from paying out. It joins `RunCounterRelics` with the
+teas, which is the mechanism the emulator already had for exactly this.
+
+The failure this avoids is the quiet kind: a club that restarts at zero each combat still
+draws a card every fourth play *within* a fight and looks entirely correct in isolation. It
+just pays out strictly less often than the game's over a run, and no single fight shows it.
+
+**Three of the twenty-two ids added in this pass were wrong** -- ThrowingAxe (262 for 263),
+Crossbow (51 for 53), IronClub (117 for 118). All three were caught by checking the
+constant against `Relics.g.cs` rather than by any test, because an id off by one binds
+silently to the neighbouring relic and every test still passes -- against the wrong relic.
+The check is now run over every id in the batch, not the new one; the final pass verified
+all twenty-two.

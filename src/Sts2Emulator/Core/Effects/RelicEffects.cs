@@ -279,6 +279,10 @@ public static class RelicEffects
     public const int WhisperingEarring = 289;
     public const int TanxsWhistle = 258;
     public const int JewelryBox = 121;
+    public const int IronClub = 118;
+
+    /// <summary>`IronClub`'s CardsVar(4): every fourth card played draws one.</summary>
+    private const int IronClubCards = 4;
 
     /// <summary>`SealOfGold`'s GoldVar(5) -- the toll it takes for its energy.</summary>
     private const int SealOfGoldPrice = 5;
@@ -1207,6 +1211,20 @@ public static class RelicEffects
             CardEffects.GainUnpoweredBlock(state, 1, rng);
         }
 
+        // `IronClub.AfterCardPlayed`: every FOURTH card played draws one. The count is a
+        // `[SavedProperty]` with no reset anywhere -- not in `AfterCombatEnd`, not at
+        // combat start -- so it runs the length of the RUN and a fight can inherit a club
+        // three cards from paying out.
+        if (HasRelic(state, IronClub))
+        {
+            int played = GetCounter(state, IronClub) + 1;
+            SetCounter(state, IronClub, played % IronClubCards);
+            if (played % IronClubCards == 0)
+            {
+                CardEffects.DrawCards(state, 1, DrawRng(state, rng));
+            }
+        }
+
         // `LostWisp.AfterCardPlayed`: 8 unpowered damage to every hittable enemy whenever
         // a POWER is played. The wisp is a Power-deck relic and does nothing else.
         if (def.Type == CardType.Power && HasRelic(state, LostWisp))
@@ -1872,6 +1890,10 @@ public static class RelicEffects
         TeaOfDiscourtesy,
         VenerableTeaSet,
         FakeVenerableTeaSet,
+        // Iron Club's count is a `[SavedProperty]` that nothing resets, so it has to
+        // survive the fight the way the teas' remaining-combats do. Without this the club
+        // restarts at zero every combat and pays out strictly less often than the game's.
+        IronClub,
     ];
 
     /// <summary>Writes the combat's remaining counts back onto the run's relics.</summary>

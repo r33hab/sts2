@@ -786,6 +786,10 @@ READ: dict[str, tuple[str, str]] = {
         "BeforeHandDraw turn one: one Power MOVED from draw to hand off CombatCardSelection, free for the turn. Moves rather than makes, so the draw pile shortens and the turn-one reorder sees it.",
     ),
     "SignetRing": ("9f6083896263", "GoldVar(999) on pickup, through GainGold so Bloody Idol sees it."),
+    "IronClub": (
+        "fae09b192c3f",
+        "Every FOURTH card played draws one. The count is a [SavedProperty] nothing resets -- not AfterCombatEnd, not combat start -- so it runs the length of the RUN and is in RunCounterRelics. Restarting it each combat would pay out strictly less often than the game.",
+    ),
     "TanxsWhistle": ("2f72338cf1c8", "A Whistle into the deck on pickup, through AddCardToDeck so Bing Bong and Fresnel Lens see it."),
     "JewelryBox": ("61278e1566bf", "An Apotheosis into the deck on pickup, same one line as Tanx's Whistle with a different card."),
     "PaelsFlesh": (

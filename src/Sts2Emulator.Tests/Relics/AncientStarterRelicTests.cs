@@ -651,3 +651,89 @@ public class DeckGrantingRelicTests
         Assert.Equal(2, engine.State.Deck.Count(card => card.DefId == 539));
     }
 }
+
+/// <summary>
+/// `IronClub`: every FOURTH card played draws one, and the count is a `[SavedProperty]`
+/// that nothing resets -- so it runs the length of the RUN, not the fight.
+/// </summary>
+public class IronClubTests
+{
+    private static CombatState Fight()
+    {
+        var engine = new RunEngine();
+        engine.Reset("NXV45HW43K");
+        RunNonCombatEffects.ApplyRelicPickup(engine.State, RelicEffects.IronClub);
+        engine.State.Phase = RunPhase.Map;
+        for (int i = 0; i < engine.State.MapNodeTypes.Length; i++)
+        {
+            if (engine.State.MapNodeTypes[i] == RunConstants.NodeNormal)
+            {
+                engine.Step(i, -1, out _, out _, out _);
+                break;
+            }
+        }
+
+        return engine.State.ActiveCombat!;
+    }
+
+    private static int PlayAndCountDraws(CombatState combat, int cards)
+    {
+        var def = GeneratedData.Cards.Get(472);
+        int drawn = 0;
+        for (int i = 0; i < cards; i++)
+        {
+            int before = combat.Hand.Count;
+            RelicEffects.ApplyAfterCardPlayed(combat, def, new System.Random(i + 1));
+            drawn += combat.Hand.Count - before;
+        }
+
+        return drawn;
+    }
+
+    /// <summary>Three cards draw nothing; the fourth draws one.</summary>
+    [Fact]
+    public void EveryFourthCardDrawsOne()
+    {
+        var combat = Fight();
+        combat.DrawPile.AddRange(
+            Enumerable.Repeat(new CardInstance(472, false), 20)
+        );
+
+        Assert.Equal(0, PlayAndCountDraws(combat, 3));
+        Assert.Equal(1, PlayAndCountDraws(combat, 1));
+        Assert.Equal(1, PlayAndCountDraws(combat, 4));
+    }
+
+    /// <summary>
+    /// The count survives the fight. Iron Club is in `RunCounterRelics` so the combat's
+    /// remainder is written back onto the run's relic -- without that the club restarts at
+    /// zero every combat and pays out strictly less often than the game's does, which is
+    /// the kind of wrong that looks like nothing at all.
+    /// </summary>
+    [Fact]
+    public void TheCountCarriesBackToTheRun()
+    {
+        var engine = new RunEngine();
+        engine.Reset("NXV45HW43K");
+        RunNonCombatEffects.ApplyRelicPickup(engine.State, RelicEffects.IronClub);
+        engine.State.Phase = RunPhase.Map;
+        for (int i = 0; i < engine.State.MapNodeTypes.Length; i++)
+        {
+            if (engine.State.MapNodeTypes[i] == RunConstants.NodeNormal)
+            {
+                engine.Step(i, -1, out _, out _, out _);
+                break;
+            }
+        }
+
+        var combat = engine.State.ActiveCombat!;
+        PlayAndCountDraws(combat, 2);
+
+        RelicEffects.CarryRunCountersBack(combat, engine.State.Relics);
+
+        Assert.Equal(
+            2,
+            engine.State.Relics.First(relic => relic.DefId == RelicEffects.IronClub).Counter
+        );
+    }
+}
