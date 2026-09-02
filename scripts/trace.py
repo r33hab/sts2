@@ -25,6 +25,12 @@ def summarize_observation(obs: np.ndarray) -> dict:
         for i in range(native.OBS_MAX_HAND)
         if int(obs[native.OBS_HAND_OFFSET + i * card]) != 0
     ]
+    # A slot is occupied when EITHER field is non-zero. Filtering on the id alone drops
+    # `BuffId.Strength`, whose ordinal is 0 -- the same value an unwritten slot carries --
+    # so every Strength on every creature was invisible here. Found when the sweep's new
+    # enemy-power comparison reported a live monster at Strength 15 against an emulator
+    # holding no buffs at all, while both announced the same 18 damage: the emulator had
+    # the Strength, and this summary could not see it.
     player_buffs = [
         {
             "id": int(obs[native.OBS_PLAYER_BUFF_OFFSET + i * 2]),
@@ -32,6 +38,7 @@ def summarize_observation(obs: np.ndarray) -> dict:
         }
         for i in range(native.OBS_MAX_PLAYER_BUFFS)
         if int(obs[native.OBS_PLAYER_BUFF_OFFSET + i * 2]) != 0
+        or int(obs[native.OBS_PLAYER_BUFF_OFFSET + i * 2 + 1]) != 0
     ]
     # Defect's ring, in order. Each slot is (type + 1, passive, evoke) with 0 for empty,
     # and the two values already carry Focus -- a Dark orb's evoke is what it has banked
@@ -57,10 +64,11 @@ def summarize_observation(obs: np.ndarray) -> dict:
         max_hp = int(obs[base + 1])
         if hp == 0 and max_hp == 0:
             continue
+        # Same rule as the player's above: id 0 is Strength, not an empty slot.
         buffs = [
             {"id": int(obs[base + 5 + i * 2]), "amount": int(obs[base + 6 + i * 2])}
             for i in range(native.OBS_MAX_ENEMY_BUFFS)
-            if int(obs[base + 5 + i * 2]) != 0
+            if int(obs[base + 5 + i * 2]) != 0 or int(obs[base + 6 + i * 2]) != 0
         ]
         enemies.append(
             {
