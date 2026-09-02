@@ -160,42 +160,57 @@ public class DecimillipedeTests
 
     /// <summary>
     /// REATTACH_MOVE's FollowUpState is the machine's RandomBranchState, not the cycle, so
-    /// a segment that comes back ROLLS its next move — and every branch is CannotRepeat,
-    /// so it cannot roll the one it last performed. The emulator resumed the cycle where
-    /// the segment fell, which is both the wrong move and a draw on the AI stream the
-    /// game makes and it did not.
+    /// a segment that comes back ROLLS its next move rather than resuming where it fell --
+    /// and it rolls over ALL THREE, including the move it was performing when it died.
     /// </summary>
-    [Theory]
-    [InlineData(0)]
-    [InlineData(1)]
-    [InlineData(2)]
-    [InlineData(3)]
-    public void AReattachedSegmentRollsRatherThanResuming(int seed)
+    /// <remarks>
+    /// `RandomBranchState.GetStateWeight` zeroes a CannotRepeat branch only when it EQUALS
+    /// `StateLog[^1]`, and after a reattach that last entry is REATTACH_MOVE -- which is
+    /// none of the three. This test used to assert the opposite, excluding the pre-death
+    /// move, which is the rule for an ORDINARY turn and not for this one.
+    ///
+    /// A live sweep is what exposed it: with E464's Strength retention fixed, the segment's
+    /// announced damage still disagreed on three seeds of four -- emu 6 (BULK) against the
+    /// game's 8 (CONSTRICT) with powers agreeing, which can only be a different MOVE. The
+    /// draw count is one `NextFloat(total)` either way, so the streams stayed in step and
+    /// the RNG-drift check saw nothing.
+    /// </remarks>
+    [Fact]
+    public void AReattachedSegmentRollsOverAllThreeMoves()
     {
-        var fight = Fight.EncounterWithStream(RunConstants.DecimillipedeEncounterId, seed);
-        var segment = fight.State.Enemies[0];
-        fight.State.PlayerHp = 999;
+        var rolls = new List<(int Performed, int Rolled)>();
+        for (int seed = 0; seed < 8; seed++)
+        {
+            var fight = Fight.EncounterWithStream(RunConstants.DecimillipedeEncounterId, seed);
+            var segment = fight.State.Enemies[0];
+            fight.State.PlayerHp = 999;
 
-        // One whole turn first, so the segment has actually PERFORMED a move: the repeat
-        // rule is scored against that, not against the announcement it dies holding.
-        fight.EndTurn();
-        fight.State.PlayerHp = 999;
-        int performed = (segment.MoveIndex - 1 + 3) % 3;
+            // One whole turn first, so the segment has actually PERFORMED a move.
+            fight.EndTurn();
+            fight.State.PlayerHp = 999;
+            int performed = (segment.MoveIndex - 1 + 3) % 3;
 
-        fight.State.Hand.Clear();
-        fight.State.Hand.Add(new CardInstance(472, Upgraded: false));
-        fight.State.Energy = 5;
-        segment.Hp = 1;
-        segment.Block = 0;
-        fight.Play(0, target: 0);
-        fight.EndTurn(); // the phase it spends dead
-        fight.State.PlayerHp = 999;
-        fight.EndTurn(); // the reattach turn
+            fight.State.Hand.Clear();
+            fight.State.Hand.Add(new CardInstance(472, Upgraded: false));
+            fight.State.Energy = 5;
+            segment.Hp = 1;
+            segment.Block = 0;
+            fight.Play(0, target: 0);
+            fight.EndTurn(); // the phase it spends dead
+            fight.State.PlayerHp = 999;
+            fight.EndTurn(); // the reattach turn
+            fight.State.PlayerHp = 999;
+            fight.EndTurn(); // and the roll it announces afterwards
 
-        fight.State.PlayerHp = 999;
-        fight.EndTurn(); // and the roll it announces afterwards
+            rolls.Add((performed, (segment.MoveIndex - 1 + 3) % 3));
+        }
 
-        Assert.NotEqual(performed, (segment.MoveIndex - 1 + 3) % 3);
+        // The roll is real: it does not always land on the cycle's next move.
+        Assert.Contains(rolls, r => r.Rolled != (r.Performed + 1) % 3);
+
+        // And nothing is excluded: across these seeds a segment DOES come back on the very
+        // move it died performing, which the old exclusion made impossible.
+        Assert.Contains(rolls, r => r.Rolled == r.Performed);
     }
 
     /// <summary>

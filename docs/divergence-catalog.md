@@ -1555,3 +1555,38 @@ added earlier the same day.
 That is three separate pieces of harness work compounding: the powers comparison to see it,
 the survival flag to reach it, and the turn count to let it happen twice. None of them found
 anything alone.
+
+### E465, E466 -- two more on the same creature, each hidden by the last
+
+Fixing E464 did not close the Decimillipede. It went from four failing seeds to one, and
+what remained were two further defects in the reattach roll that E464 had been masking.
+
+**E465 -- the roll excluded a move it should not.** A segment coming back rolls the
+machine's `RandomBranchState`, and the emulator excluded the move it was performing when it
+died. `GetStateWeight` zeroes a CannotRepeat branch only when it EQUALS `StateLog[^1]`, and
+after a reattach that entry is `REATTACH_MOVE` -- none of the three. So all three are
+eligible, including the one it died on. The emulator was applying the ORDINARY turn's rule
+to a turn that is not ordinary.
+
+**E466 -- the branch list is permuted against the cycle.** `AddBranch` is called WRITHE,
+BULK, CONSTRICT and `GetNextState` walks `States` in that order; `MoveIndex` numbers the
+CYCLE, where 1 is CONSTRICT and 2 is BULK. Passing `[0, 1, 2]` handed the game's second
+branch to the emulator's second MOVE, so the same roll produced a different creature. It is
+`[0, 2, 1]` now.
+
+**Three defects on one creature, and each was only visible once the one above it was gone.**
+E464's spare Strength made a wrong move read as the right move with the wrong buff; E465's
+exclusion changed which branches were candidates, so E466's permutation could not be
+isolated until the candidate set was right. A partial fix that takes four failures to two is
+easy to read as "nearly there" -- it was two more bugs.
+
+**None of the three could ever show as RNG drift.** Every version draws exactly one
+`NextFloat(total)`; only the modulus and the mapping change. The stream-position diff stayed
+clean across all of it while the outcomes diverged, which is worth remembering the next time
+a clean drift check is read as evidence of agreement. What actually caught them was enemy
+POWERS on one and announced DAMAGE on the other two -- state, not streams.
+
+E466 also explains why a permutation bug looks flaky: seeds whose draw lands where the two
+orderings happen to agree pass. Two of four did.
+
+All four seeds now pass: `deck:ok enemies:ok intent:ok player:ok turns:ok coverage:ok`.

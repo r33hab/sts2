@@ -2026,21 +2026,32 @@ public static class EnemyAI
                     // last move LOGGED -- the last one the segment actually performed, not
                     // the one it was announcing when it fell, since that turn never
                     // happened. MoveIndex is the announcement; MoveIndex - 1 is the
-                    // performance.
-                    int lastPerformed = ((enemy.MoveIndex - 1) % 3 + 3) % 3;
-                    var reattached = new List<int>();
-                    for (int candidate = 0; candidate < 3; candidate++)
-                    {
-                        if (candidate != lastPerformed)
-                        {
-                            reattached.Add(candidate);
-                        }
-                    }
-
+                    // performance -- and after a reattach that is REATTACH_MOVE, which is
+                    // none of the three. `RandomBranchState.GetStateWeight` zeroes a
+                    // CannotRepeat branch only when it EQUALS `StateLog[^1]`, so a segment
+                    // coming back rolls over ALL THREE moves, including the one it was
+                    // performing when it died.
+                    //
+                    // This used to exclude the last cycle move, which is the rule for an
+                    // ordinary turn and not for this one. The draw count is the same either
+                    // way -- one `NextFloat(total)` -- so the streams stayed in step and
+                    // only the outcome differed, which is why it survived the RNG-drift
+                    // check and showed up as a segment announcing the wrong move.
+                    //
                     // MoveIndex IS the cycle position here, so writing the rolled move
                     // into it both announces that move and leaves ExecuteIntent to walk
                     // the ordinary cycle on from it.
-                    enemy.MoveIndex = PickBranch(reattached, rng);
+                    //
+                    // In the branch's OWN order, which is not the cycle's. `AddBranch` is
+                    // called WRITHE, BULK, CONSTRICT, and `GetNextState` walks `States` in
+                    // that order subtracting weights -- while MoveIndex numbers the CYCLE,
+                    // where 1 is CONSTRICT and 2 is BULK. Passing [0, 1, 2] therefore gave
+                    // the game's second branch (BULK) the emulator's second move
+                    // (CONSTRICT), so the same roll produced a different creature.
+                    //
+                    // Both sides draw exactly one value, so nothing here shows as stream
+                    // drift; only the move does.
+                    enemy.MoveIndex = PickBranch([0, 2, 1], rng);
                 }
 
                 return (enemy.MoveIndex % 3) switch
