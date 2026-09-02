@@ -269,6 +269,7 @@ public static class RelicEffects
     public const int SignetRing = 238;
     public const int Driftwood = 68;
     public const int ThrowingAxe = 263;
+    public const int Crossbow = 53;
 
     /// <summary>`SealOfGold`'s GoldVar(5) -- the toll it takes for its energy.</summary>
     private const int SealOfGoldPrice = 5;
@@ -856,6 +857,16 @@ public static class RelicEffects
         if (HasRelic(state, Sai))
         {
             CardEffects.GainUnpoweredBlock(state, 7, rng);
+        }
+
+        // `Crossbow.AfterSideTurnStart` with no turn guard: one ATTACK from the player's
+        // own pool into hand, free for the turn, every turn. The game returns early when
+        // the pool has no Attack in it, which no character's does -- but the guard is
+        // transcribed rather than dropped, because Big Hat's identical guard is the
+        // difference between two cards and none for an Ironclad.
+        if (HasRelic(state, Crossbow))
+        {
+            CardEffects.AddFreeAttackCardToHand(state, 1, DrawRng(state, rng));
         }
 
         // `SealOfGold.AfterSideTurnStart`: energy for gold, every turn, and only while the

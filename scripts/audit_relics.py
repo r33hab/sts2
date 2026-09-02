@@ -786,6 +786,10 @@ READ: dict[str, tuple[str, str]] = {
         "BeforeHandDraw turn one: one Power MOVED from draw to hand off CombatCardSelection, free for the turn. Moves rather than makes, so the draw pile shortens and the turn-one reorder sees it.",
     ),
     "SignetRing": ("9f6083896263", "GoldVar(999) on pickup, through GainGold so Bloody Idol sees it."),
+    "Crossbow": (
+        "640f4d6e8e26",
+        "Every turn: one distinct ATTACK from the player's own pool into hand, FREE for the turn, off CombatCardGeneration. Written against the Ironclad pool like Big Hat, and correct for the same reason -- RunEngine.Reset takes no character and every run reward pool is Ironclad's.",
+    ),
     "ThrowingAxe": (
         "8ac30cbef967",
         "ModifyCardPlayCount +1 for the FIRST card played in a combat, once per fight. Consumed where Burst and Echo Form are read, because all three settle when the play is SET UP. The flag is per-COMBAT, so it clears in ApplyCombatStart and not beside the per-turn ones.",

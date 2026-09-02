@@ -305,3 +305,71 @@ public class ThrowingAxeTests
         Assert.True(RelicEffects.ConsumeThrowingAxePlay(combat));
     }
 }
+
+/// <summary>
+/// `Crossbow.AfterSideTurnStart`: one Attack from the player's own pool into hand, free
+/// for the turn, EVERY turn. Big Hat's mechanic without Big Hat's one-shot guard.
+/// </summary>
+public class CrossbowTests
+{
+    private static CombatState Fight()
+    {
+        var engine = new RunEngine();
+        engine.Reset("NXV45HW43K");
+        RunNonCombatEffects.ApplyRelicPickup(engine.State, RelicEffects.Crossbow);
+        engine.State.Phase = RunPhase.Map;
+        for (int i = 0; i < engine.State.MapNodeTypes.Length; i++)
+        {
+            if (engine.State.MapNodeTypes[i] == RunConstants.NodeNormal)
+            {
+                engine.Step(i, -1, out _, out _, out _);
+                break;
+            }
+        }
+
+        return engine.State.ActiveCombat!;
+    }
+
+    /// <summary>An extra card in the opening hand, and it is an Attack.</summary>
+    [Fact]
+    public void CrossbowOpensWithAnExtraAttack()
+    {
+        var withBow = Fight();
+
+        Assert.Equal(6, withBow.Hand.Count);
+        Assert.Contains(
+            withBow.Hand,
+            card =>
+                card.FreeThisTurn
+                && GeneratedData.Cards.Get(card.DefId).Type == CardType.Attack
+        );
+    }
+
+    /// <summary>
+    /// FREE, not discounted. A free card is free whatever its printed cost, which is the
+    /// difference between `SetToFreeThisTurn` and a cost bump that a floor could eat.
+    /// </summary>
+    [Fact]
+    public void TheBowsAttackIsFreeRatherThanCheap()
+    {
+        var combat = Fight();
+
+        Assert.All(combat.Hand.Where(card => card.FreeThisTurn), card => Assert.True(card.FreeThisTurn));
+        Assert.Single(combat.Hand.Where(card => card.FreeThisTurn));
+    }
+
+    /// <summary>
+    /// Every turn, not just the first -- the relic has no turn guard at all, so a second
+    /// turn start adds a second Attack.
+    /// </summary>
+    [Fact]
+    public void TheBowFiresAgainOnTheNextTurn()
+    {
+        var combat = Fight();
+        int before = combat.Hand.Count;
+
+        RelicEffects.ApplyStartOfPlayerTurn(combat, new System.Random(7));
+
+        Assert.Equal(before + 1, combat.Hand.Count);
+    }
+}

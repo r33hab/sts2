@@ -1156,10 +1156,17 @@ batch against the table rather than only the new one. The other ten were right. 
 off by one binds silently to the neighbouring relic** -- there is no type that separates
 them -- so the check is worth running on every constant added, not on the suspicious one.
 
-`Crossbow` is left unmodelled for a reason worth writing down: it generates an Attack from
-**the player's own character pool**, and `CombatState` carries no character identity at
-all. Big Hat has the same requirement and resolves it by hard-coding
-`GeneratedData.CardPools.Ironclad` with a `FromPool` variant for tests -- which is wrong
-for the other four characters and known to be. Modelling Crossbow the same way would
-double a wart rather than pay it off; the fix is a character id on the combat, and then
-both relics become correct at once.
+`Crossbow` generates an Attack from **the player's own character pool**, and `CombatState`
+carries no character identity -- which looked at first like a structural blocker, since Big
+Hat resolves the same requirement by hard-coding `GeneratedData.CardPools.Ironclad`.
+
+**It is not a blocker, and the reason is worth recording**: `RunEngine.Reset` takes a seed
+and no character, and every reward pool in the run is `IroncladRewardPool`. The run is
+Ironclad-only, so there is no reachable run in which that hard-coding is wrong. The
+`FromPool` overloads exist for the other characters' CARD tests, which is a different
+question from which pool a RUN draws from. Crossbow is modelled the same way and carries
+the same overload, so the day a character selection arrives both are one edit each.
+
+The first draft of this entry called Big Hat's pool "wrong for the other four characters
+and known to be". That was wrong: it is unreachable, not incorrect. The check that settled
+it was reading `Reset`'s signature, which takes no character at all.

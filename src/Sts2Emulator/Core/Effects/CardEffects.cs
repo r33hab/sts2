@@ -3066,6 +3066,57 @@ public static class CardEffects
     }
 
     /// <summary>
+    /// `Crossbow.AfterSideTurnStart`, every turn: one distinct ATTACK from the player's
+    /// own pool into hand, free for the turn, off `Rng.CombatCardGeneration`.
+    /// </summary>
+    /// <remarks>
+    /// Written against the Ironclad pool for the same reason Big Hat is, and correct for
+    /// the same reason: `RunEngine.Reset` takes a seed and no character, and every reward
+    /// pool in the run is `IroncladRewardPool`. There is no reachable run where this is
+    /// the wrong pool. The `FromPool` overload is what the other characters' tests use.
+    ///
+    /// The cards are FREE for the turn rather than discounted -- `SetToFreeThisTurn`, not
+    /// a cost bump -- so a cost floor of zero cannot make them cost anything.
+    /// </remarks>
+    internal static void AddFreeAttackCardToHand(CombatState state, int count, Random rng) =>
+        AddFreeAttackCardToHandFromPool(state, GeneratedData.CardPools.Ironclad, count, rng);
+
+    /// <summary>As above, over a named character pool.</summary>
+    internal static void AddFreeAttackCardToHandFromPool(
+        CombatState state,
+        ReadOnlySpan<int> characterPool,
+        int count,
+        Random rng
+    )
+    {
+        var pool = CombatGenerationPool(characterPool)
+            .Where(id => GeneratedData.Cards.Get(id).Type == CardType.Attack)
+            .ToList();
+        if (pool.Count == 0 || count <= 0)
+        {
+            return;
+        }
+
+        var stream = CardGenerationRng(state, rng);
+        for (int i = pool.Count - 1; i > 0; i--)
+        {
+            int j = stream.Next(i + 1);
+            (pool[i], pool[j]) = (pool[j], pool[i]);
+        }
+
+        foreach (int id in pool.Take(count))
+        {
+            if (state.Hand.Count >= MaxCardsInHand)
+            {
+                return;
+            }
+
+            state.Hand.Add(new CardInstance(id, false) { FreeThisTurn = true });
+            NoteGeneratedCard(state);
+        }
+    }
+
+    /// <summary>
     /// Power Cell's two: zero-cost cards MOVED out of the draw pile and into hand.
     /// </summary>
     /// <remarks>
