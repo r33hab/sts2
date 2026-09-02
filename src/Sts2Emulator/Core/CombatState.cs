@@ -439,6 +439,13 @@ public sealed class CombatState
     public int ExtraCardRewards;
 
     /// <summary>
+    /// Cards a Thieving Hopper stole and then died holding. `SwipePower.BeforeDeath` puts
+    /// them straight back in the deck and shows a row saying so; carried here for the same
+    /// reason `StolenBackGold` is, because a combat cannot reach the run's deck.
+    /// </summary>
+    public List<CardInstance> StolenBackCards = [];
+
+    /// <summary>
     /// The enemy an auto-play was given EXPLICITLY, or -1 when it has to pick its own.
     /// </summary>
     /// <remarks>

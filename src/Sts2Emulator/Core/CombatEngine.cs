@@ -2709,6 +2709,15 @@ public static class CombatEngine
             // which sheds the beetle's Plating. The tick above is the decrement; this is
             // the wake that has to follow it.
             EnemyAI.WakeSlumberingBeetleIfDone(enemy);
+
+            // `EscapeArtistPower.AfterSideTurnEnd` decrements only while `Amount > 1`, so
+            // the timer FLOORS at one and never reaches zero -- at one it starts pulsing
+            // instead. A plain duration tick would have removed it a turn early and left
+            // the hopper's last turn showing nothing.
+            if (BuffSystem.Get(enemy.Buffs, BuffId.EscapeArtist) > 1)
+            {
+                BuffSystem.Apply(enemy.Buffs, BuffId.EscapeArtist, -1);
+            }
         }
 
         BuffSystem.TickEndOfTurn(state.PlayerBuffs, state.PlayerDebuffsAtRoundStart);
@@ -2805,6 +2814,16 @@ public static class CombatEngine
                 // claimed, the way it is for the fight's ordinary gold.
                 state.StolenBackGold += state.Enemies[i].HeistGold;
                 state.Enemies[i].HeistGold = 0;
+            }
+
+            // `SwipePower.BeforeDeath` gives the stolen card back -- but only on DEATH.
+            // A Hopper that reaches ESCAPE leaves with it, which is why `Escaped` is
+            // checked here exactly as it is for the Heist above.
+            if (state.Enemies[i].StolenCard is { } swiped && !state.Enemies[i].Escaped)
+            {
+                state.StolenBackCards.Add(swiped);
+                state.Enemies[i].StolenCard = null;
+                BuffSystem.Remove(state.Enemies[i].Buffs, BuffId.Swipe);
             }
 
             if (state.Enemies[i].DefId == KE.SlitheringStrangler)

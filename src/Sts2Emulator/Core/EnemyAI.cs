@@ -300,7 +300,7 @@ public static class EnemyAI
 
                 if (enemy.DefId == KE.ThievingHopper && enemy.MoveIndex == 0)
                 {
-                    StealDrawOrDiscardCard(state, rng);
+                    StealDrawOrDiscardCard(state, rng, enemy);
                 }
 
                 // WEB_CANNON_MOVE's Frail, and only its: POUNCE_MOVE is
@@ -4324,7 +4324,11 @@ public static class EnemyAI
     /// `CardPile.GetCards(player, PileType.Draw, PileType.Discard)` yields, and the index
     /// the roll returns is an index into that.
     /// </remarks>
-    private static void StealDrawOrDiscardCard(CombatState state, Random rng)
+    private static void StealDrawOrDiscardCard(
+        CombatState state,
+        Random rng,
+        EnemyState? thief = null
+    )
     {
         var candidates = new List<(bool FromDraw, int Index)>();
         for (int i = 0; i < state.DrawPile.Count; i++)
@@ -4370,6 +4374,7 @@ public static class EnemyAI
 
         var selection = state.CardGenerationRng ?? rng;
         var picked = candidates[selection.Next(candidates.Count)];
+        var stolen = Card(picked);
         if (picked.FromDraw)
         {
             state.RemoveFromDrawPileAt(picked.Index);
@@ -4377,6 +4382,15 @@ public static class EnemyAI
         else
         {
             state.DiscardPile.RemoveAt(picked.Index);
+        }
+
+        // `ThieveryMove` builds a `SwipePower` around the card it took and applies it to
+        // the thief. The card was simply dropped here, so killing the Hopper never gave it
+        // back -- the whole reason the fight is worth winning rather than surviving.
+        if (thief is not null)
+        {
+            thief.StolenCard = stolen;
+            BuffSystem.Apply(thief.Buffs, BuffId.Swipe, 1);
         }
     }
 

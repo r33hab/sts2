@@ -162,6 +162,13 @@ public sealed class EnemyState
     public int StolenGold;
     public int HeistGold;
 
+    /// <summary>
+    /// The card a Thieving Hopper's THIEVERY took, held by its `SwipePower` instance.
+    /// `SwipePower.BeforeDeath` gives it back, so killing the hopper recovers it and
+    /// letting it ESCAPE does not.
+    /// </summary>
+    public CardInstance? StolenCard;
+
     /// <summary>This creature left the fight rather than dying; see CombatState.FatGremlinEscaped.</summary>
     public bool Escaped;
 

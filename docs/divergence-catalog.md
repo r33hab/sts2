@@ -1391,3 +1391,35 @@ block and enemy powers. It does not mean the act is correct: the same 27 coverag
 six enemies still have moves nobody has seen, five of them because four turns is not long
 enough and one because the sweep's policy never blocks. **A clean sweep is a statement about
 what was exercised, and the coverage line is the part that says how much that was.**
+
+### E461 -- the three powers the harness could not see
+
+The sweep's unresolved list was `IMBALANCED_POWER`, `ESCAPE_ARTIST_POWER` and
+`SWIPE_POWER`. All three are now modelled, and they were three different KINDS of gap --
+which is the argument for having reported them as one list rather than triaging them by
+guess.
+
+**`SwipePower` was a real defect.** `ThieveryMove` wraps the card it steals in a
+`SwipePower`, and `SwipePower.BeforeDeath` gives it back: into the deck, with a reward row
+saying so. The emulator picked the card, removed it from the pile, and **dropped it on the
+floor** -- so killing the Hopper recovered nothing, which is the entire reason that fight is
+worth winning rather than surviving. The card now rides `EnemyState.StolenCard` and returns
+through `CombatState.StolenBackCards`, the same combat-to-run seam a Heist's gold uses. The
+`Escaped` guard is what separates the outcomes: a Hopper that reaches ESCAPE keeps it.
+
+**`ImbalancedPower` was a representation gap, not a behaviour one.** The rule it carries was
+already modelled -- `EnemyState.OffBalance` is the turn a Bowlbug Rock owes after a fully
+blocked headbutt. What was missing is the marker itself. **The state and the marker are
+different things**: one says what happens next turn, the other says the creature has the
+rule at all, and only the second is visible to the agent and to the sweep.
+
+**`EscapeArtistPower` does nothing.** The game's own summary calls it "just a visual timer
+for when the Thieving Hopper will escape". Modelled anyway, because the observation shows
+enemy powers to the agent and the sweep compares them: **a power the game has and the
+emulator does not is a permanent disagreement whether or not it does anything.** Its one
+subtlety is that it decrements only while above 1, so it FLOORS at one -- a plain duration
+tick would have emptied it a turn early.
+
+`BUFF_ID_TO_LIVE` went from 209 entries to 213 with no edit, because it is derived from
+`BuffState.cs` and `Powers.g.cs` at import. That was the reason for deriving it rather than
+keeping a table, and this is the first time it has paid.

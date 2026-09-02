@@ -281,6 +281,98 @@ public class ThievingHopperTests
         Assert.True(BuffSystem.Get(hopper.Buffs, BuffId.Stunned) > 0);
     }
 
+    /// <summary>
+    /// `EscapeArtistPower` is applied at 5 and counts down at each of the hopper's
+    /// side-turn ends -- but only while above 1, so it FLOORS at one and never hits zero.
+    /// </summary>
+    /// <remarks>
+    /// The game calls it "just a visual timer" and it has no gameplay effect. Modelled
+    /// because the observation shows enemy powers to the agent and the sweep compares
+    /// them: a power the game has and the emulator does not is a permanent disagreement
+    /// whether or not it does anything. A plain duration tick would floor at zero and be
+    /// wrong on the hopper's last two turns.
+    /// </remarks>
+    [Fact]
+    public void TheEscapeTimerCountsDownAndFloorsAtOne()
+    {
+        var fight = At(CombatFactory.ActOneEncounter.ThievingHopper);
+        var hopper = fight.State.Enemies[0];
+        fight.State.PlayerHp = 999;
+        hopper.Hp = 999;
+
+        var seen = new List<int> { BuffSystem.Get(hopper.Buffs, BuffId.EscapeArtist) };
+        for (int turn = 0; turn < 6; turn++)
+        {
+            fight.EndTurn();
+            seen.Add(BuffSystem.Get(hopper.Buffs, BuffId.EscapeArtist));
+        }
+
+        Assert.Equal([5, 4, 3, 2, 1, 1, 1], seen);
+    }
+
+    /// <summary>
+    /// THIEVERY builds a `SwipePower` around the card it took, and `SwipePower.BeforeDeath`
+    /// gives it back. The emulator dropped the card on the floor, so killing the Hopper
+    /// recovered nothing -- which is the whole reason the fight is worth WINNING rather
+    /// than surviving.
+    /// </summary>
+    [Fact]
+    public void KillingTheHopperReturnsTheStolenCard()
+    {
+        var fight = At(CombatFactory.ActOneEncounter.ThievingHopper);
+        var hopper = fight.State.Enemies[0];
+        fight.State.PlayerHp = 999;
+        // Every pile, because ending the turn also draws -- counting only draw and discard
+        // makes the hand look like a second theft.
+        int Cards() =>
+            fight.State.DrawPile.Count
+            + fight.State.DiscardPile.Count
+            + fight.State.Hand.Count
+            + fight.State.ExhaustPile.Count;
+        int deckBefore = Cards();
+
+        fight.EndTurn(); // THIEVERY
+
+        Assert.NotNull(hopper.StolenCard);
+        Assert.True(BuffSystem.Get(hopper.Buffs, BuffId.Swipe) > 0);
+        Assert.Equal(deckBefore - 1, Cards());
+
+        // Killed with real damage: the death path only runs for a creature that was ALIVE
+        // when the turn's HP snapshot was taken, so zeroing HP by hand skips it entirely.
+        var swiped = hopper.StolenCard!.Value;
+        hopper.Hp = 3;
+        hopper.Block = 0;
+        StrikeTheHopper(fight, 1);
+
+        Assert.Equal(0, hopper.Hp);
+        Assert.Contains(fight.State.StolenBackCards, card => card.DefId == swiped.DefId);
+    }
+
+    /// <summary>
+    /// And a hopper that ESCAPES keeps it. `BeforeDeath` is a death hook, and the routine
+    /// ends in ESCAPE precisely so a slow player loses the card -- so the `Escaped` guard
+    /// is what separates the two outcomes, exactly as it does for a Heist's gold.
+    /// </summary>
+    [Fact]
+    public void AnEscapedHopperKeepsTheCard()
+    {
+        var fight = At(CombatFactory.ActOneEncounter.ThievingHopper);
+        var hopper = fight.State.Enemies[0];
+        fight.State.PlayerHp = 999;
+        hopper.Hp = 999;
+
+        fight.EndTurn(); // THIEVERY
+        Assert.NotNull(hopper.StolenCard);
+
+        hopper.Escaped = true;
+        hopper.Hp = 3;
+        hopper.Block = 0;
+        StrikeTheHopper(fight, 1);
+
+        Assert.Equal(0, hopper.Hp);
+        Assert.Empty(fight.State.StolenBackCards);
+    }
+
     /// <summary>One hit spends exactly one, however large it is.</summary>
     [Fact]
     public void OneBigHitSpendsOnlyOneFlutter()
@@ -397,6 +489,53 @@ public class TunnelerTests
         Assert.Equal(
             (IntentType.Attack, 13),
             (tunneler.CurrentIntent.Type, tunneler.CurrentIntent.Magnitude)
+        );
+    }
+}
+
+/// <summary>
+/// `ImbalancedPower`, which `BowlbugRock.AfterAddedToRoom` applies at 1 and the Rock keeps
+/// for the whole fight.
+/// </summary>
+/// <remarks>
+/// The rule it carries was already modelled -- `EnemyState.OffBalance` is the turn the Rock
+/// owes after a fully-blocked headbutt. What was missing is the POWER itself, so the live
+/// game showed IMBALANCED_POWER on the Rock and the emulator showed nothing, and the sweep
+/// could only report it as unresolvable. The state and the marker are different things: one
+/// says what happens next turn, the other says the creature has the rule at all.
+/// </remarks>
+public class BowlbugRockImbalancedTests
+{
+    [Fact]
+    public void TheRockCarriesImbalancedForTheWholeFight()
+    {
+        var fight = Fight.Encounter(CombatFactory.ActOneEncounter.BowlbugsWeak);
+        var rock = fight.State.Enemies.First(e => e.DefId == KE.BowlbugRock);
+        fight.State.PlayerHp = 999;
+        rock.Hp = 999;
+
+        Assert.Equal(1, BuffSystem.Get(rock.Buffs, BuffId.Imbalanced));
+
+        for (int turn = 0; turn < 4; turn++)
+        {
+            fight.EndTurn();
+        }
+
+        Assert.Equal(1, BuffSystem.Get(rock.Buffs, BuffId.Imbalanced));
+    }
+
+    /// <summary>
+    /// And nothing else in the encounter has it -- the marker belongs to the Rock, not to
+    /// Bowlbugs generally, which is what makes it a per-monster `AfterAddedToRoom`.
+    /// </summary>
+    [Fact]
+    public void TheWorkerDoesNotCarryIt()
+    {
+        var fight = Fight.Encounter(CombatFactory.ActOneEncounter.BowlbugsWeak);
+
+        Assert.All(
+            fight.State.Enemies.Where(e => e.DefId != KE.BowlbugRock),
+            e => Assert.Equal(0, BuffSystem.Get(e.Buffs, BuffId.Imbalanced))
         );
     }
 }

@@ -769,6 +769,37 @@ public enum BuffId
     /// just not the one that was invented.
     /// </summary>
     Flutter,
+
+    /// <summary>
+    /// `EscapeArtistPower` on the Thieving Hopper, applied at 5 in `AfterAddedToRoom` and
+    /// counting down at each of its side-turn ends -- but only while above 1, so it FLOORS
+    /// at one rather than reaching zero.
+    ///
+    /// The game calls it "just a visual timer for when the Hopper will escape" and it has
+    /// no gameplay effect at all. Modelled anyway, because the observation shows enemy
+    /// powers to the agent and the sweep compares them: a power that exists in the game and
+    /// not here is a permanent disagreement, whether or not it does anything.
+    /// </summary>
+    EscapeArtist,
+
+    /// <summary>
+    /// `ImbalancedPower`, which the Bowlbug Rock carries from `AfterAddedToRoom`. Its
+    /// `AfterDamageGiven` fires when the owner's attack is FULLY BLOCKED: the Rock goes
+    /// off balance, and anything else carrying it is stunned outright.
+    ///
+    /// The off-balance STATE is `EnemyState.OffBalance` and stays there -- this is the
+    /// marker power that says the creature has the behaviour, which is what the live game
+    /// shows and what the emulator had no way to express.
+    /// </summary>
+    Imbalanced,
+
+    /// <summary>
+    /// `SwipePower`, one instance per card the Thieving Hopper has stolen. Its
+    /// `BeforeDeath` hands the card back: into the deck, and onto the reward screen.
+    /// The card itself rides `EnemyState.StolenCard`, the way Heist's gold rides
+    /// `HeistGold`.
+    /// </summary>
+    Swipe,
 }
 
 public record struct BuffState(BuffId Id, int Magnitude);

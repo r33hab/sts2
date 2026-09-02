@@ -1903,6 +1903,21 @@ public static class CombatFactory
             BuffSystem.Apply(enemy.Buffs, BuffId.Stock, 2);
         }
 
+        // `ThievingHopper.AfterAddedToRoom` applies EscapeArtistPower at 5 -- the timer
+        // that counts down to its ESCAPE. Purely visual in the game; carried here so the
+        // observation and the sweep see what the live creature has.
+        if (enemy.DefId == KE.ThievingHopper)
+        {
+            BuffSystem.Apply(enemy.Buffs, BuffId.EscapeArtist, 5);
+        }
+
+        // `BowlbugRock.AfterAddedToRoom` applies ImbalancedPower at 1. The Rock's
+        // off-balance TURN is `OffBalance`; this is the marker that says it has the rule.
+        if (enemy.DefId == KE.BowlbugRock)
+        {
+            BuffSystem.Apply(enemy.Buffs, BuffId.Imbalanced, 1);
+        }
+
         if (enemy.DefId == KE.TerrorEel)
         {
             // TerrorEel.AfterAddedToRoom applies ShriekPower(ShriekAmount) — 75 at A8,

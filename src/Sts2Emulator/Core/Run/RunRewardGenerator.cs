@@ -222,6 +222,19 @@ public static class RunRewardGenerator
             state.ActiveCombat.StolenBackGold = 0;
         }
 
+        // `SwipePower.BeforeDeath` calls `runState.AddCard` -- the card goes straight back
+        // into the DECK, and the reward row beside it only says so. So this restores the
+        // card rather than offering it, and a Hopper that escaped never got here.
+        if (state.ActiveCombat is { StolenBackCards.Count: > 0 } combat)
+        {
+            foreach (var card in combat.StolenBackCards)
+            {
+                RunNonCombatEffects.AddCardToDeck(state, card);
+            }
+
+            combat.StolenBackCards.Clear();
+        }
+
         // `RoyaltiesPower.AfterCombatEnd` adds a GoldReward the same way, so it is another
         // row rather than more gold on the fight's own.
         if (state.ActiveCombat?.RoyaltiesGold > 0)
