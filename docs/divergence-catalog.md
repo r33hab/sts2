@@ -1141,3 +1141,25 @@ Not modelled, and declared rather than guessed: `Driftwood` (sets `CanReroll` on
 rewards -- the run has no reroll ACTION, so the flag would model a button nothing can
 press) and `DelicateFrond` (fills every potion slot off `CombatPotionGeneration`, where
 guessing the draw count is precisely the E451 failure).
+
+### E453 -- Throwing Axe, and the one that needs a structural change first
+
+`ThrowingAxe.ModifyCardPlayCount` gives the FIRST card played in a combat an extra play.
+Consumed where Burst and Echo Form are read, because all three are settled when the play
+is SET UP rather than when the card resolves -- the reason a Burst does not double itself.
+Its flag is per-COMBAT, so it clears in `ApplyCombatStart`; Mini Regent's and Demon
+Tongue's identical-looking flags clear in `ApplyStartOfPlayerTurn` and are per-TURN, and
+putting the axe beside them would have rearmed it every turn.
+
+The id was declared as 262 and `Relics.g.cs` says 263, caught by checking every id in the
+batch against the table rather than only the new one. The other ten were right. **An id
+off by one binds silently to the neighbouring relic** -- there is no type that separates
+them -- so the check is worth running on every constant added, not on the suspicious one.
+
+`Crossbow` is left unmodelled for a reason worth writing down: it generates an Attack from
+**the player's own character pool**, and `CombatState` carries no character identity at
+all. Big Hat has the same requirement and resolves it by hard-coding
+`GeneratedData.CardPools.Ironclad` with a `FromPool` variant for tests -- which is wrong
+for the other four characters and known to be. Modelling Crossbow the same way would
+double a wart rather than pay it off; the fix is a character id on the combat, and then
+both relics become correct at once.

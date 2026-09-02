@@ -255,6 +255,12 @@ public static class CombatEngine
         int echoFormPlays =
             state.CardPlaysThisTurn < BuffSystem.Get(state.PlayerBuffs, BuffId.EchoForm) ? 1 : 0;
 
+        // `ThrowingAxe.ModifyCardPlayCount` doubles the first card played in the combat.
+        // Read HERE, with Burst and Echo Form, because all three are settled when the play
+        // is set up -- and consumed here too, since the game's
+        // `AfterModifyingCardPlayCount` fires at that same moment.
+        int throwingAxePlays = Effects.RelicEffects.ConsumeThrowingAxePlay(state) ? 1 : 0;
+
         int serpentFormBefore = BuffSystem.Get(state.PlayerBuffs, BuffId.SerpentForm);
 
         // `MonologuePower.BeforeCardPlayed` records the power's amount for THIS card, and
@@ -299,6 +305,7 @@ public static class CombatEngine
         // Hidden Gem's Replay rides on the copy it was granted to, the same way.
         extraPlays += card.ReplayCount;
         extraPlays += burstPlays;
+        extraPlays += throwingAxePlays;
         int signalBoost = BuffSystem.Get(state.PlayerBuffs, BuffId.SignalBoost);
         if (def.Type == CardType.Power && signalBoost > 0)
         {

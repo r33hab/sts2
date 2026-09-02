@@ -217,3 +217,91 @@ public class AncientStarterRelicTests
         Assert.Contains(RelicEffects.DelicateFrond, RelicEffects.UnmodelledInRun);
     }
 }
+
+/// <summary>
+/// `ThrowingAxe.ModifyCardPlayCount`: the FIRST card played in a combat plays twice, once
+/// per fight, any card. Its own class because the flag is per-COMBAT state and these tests
+/// have to cross a turn boundary to prove it.
+/// </summary>
+public class ThrowingAxeTests
+{
+    private static CombatState Fight()
+    {
+        var engine = new RunEngine();
+        engine.Reset("NXV45HW43K");
+        RunNonCombatEffects.ApplyRelicPickup(engine.State, RelicEffects.ThrowingAxe);
+        engine.State.Phase = RunPhase.Map;
+        for (int i = 0; i < engine.State.MapNodeTypes.Length; i++)
+        {
+            if (engine.State.MapNodeTypes[i] == RunConstants.NodeNormal)
+            {
+                engine.Step(i, -1, out _, out _, out _);
+                break;
+            }
+        }
+
+        return engine.State.ActiveCombat!;
+    }
+
+    /// <summary>The axe is armed at the top of the fight and spent by the first play.</summary>
+    [Fact]
+    public void TheFirstPlayIsDoubledAndTheAxeIsThenSpent()
+    {
+        var combat = Fight();
+
+        Assert.True(RelicEffects.ConsumeThrowingAxePlay(combat));
+        Assert.False(RelicEffects.ConsumeThrowingAxePlay(combat));
+        Assert.False(RelicEffects.ConsumeThrowingAxePlay(combat));
+    }
+
+    /// <summary>
+    /// A player without the relic never gets the extra play, which is the check that the
+    /// counter's zero means "armed" only when the axe is actually held -- `GetCounter`
+    /// returns 0 for a relic that is not there at all.
+    /// </summary>
+    [Fact]
+    public void NoAxeMeansNoExtraPlay()
+    {
+        var engine = new RunEngine();
+        engine.Reset("NXV45HW43K");
+        engine.State.Phase = RunPhase.Map;
+        for (int i = 0; i < engine.State.MapNodeTypes.Length; i++)
+        {
+            if (engine.State.MapNodeTypes[i] == RunConstants.NodeNormal)
+            {
+                engine.Step(i, -1, out _, out _, out _);
+                break;
+            }
+        }
+
+        Assert.False(RelicEffects.ConsumeThrowingAxePlay(engine.State.ActiveCombat!));
+    }
+
+    /// <summary>
+    /// Once per COMBAT, not once per turn: ending the turn does not rearm it. This is the
+    /// test that would have caught the flag being cleared in `ApplyStartOfPlayerTurn`
+    /// beside Mini Regent's and Demon Tongue's, which are per-turn and look identical.
+    /// </summary>
+    [Fact]
+    public void EndingATurnDoesNotRearmTheAxe()
+    {
+        var combat = Fight();
+        Assert.True(RelicEffects.ConsumeThrowingAxePlay(combat));
+
+        RelicEffects.ApplyStartOfPlayerTurn(combat, new System.Random(1));
+
+        Assert.False(RelicEffects.ConsumeThrowingAxePlay(combat));
+    }
+
+    /// <summary>But a NEW combat does, because `AfterRoomEntered(CombatRoom)` clears it.</summary>
+    [Fact]
+    public void ANewCombatRearmsTheAxe()
+    {
+        var combat = Fight();
+        Assert.True(RelicEffects.ConsumeThrowingAxePlay(combat));
+
+        RelicEffects.ApplyCombatStart(combat, new System.Random(1));
+
+        Assert.True(RelicEffects.ConsumeThrowingAxePlay(combat));
+    }
+}

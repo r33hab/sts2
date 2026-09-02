@@ -268,6 +268,7 @@ public static class RelicEffects
     public const int DelicateFrond = 58;
     public const int SignetRing = 238;
     public const int Driftwood = 68;
+    public const int ThrowingAxe = 263;
 
     /// <summary>`SealOfGold`'s GoldVar(5) -- the toll it takes for its energy.</summary>
     private const int SealOfGoldPrice = 5;
@@ -551,6 +552,12 @@ public static class RelicEffects
         {
             CardEffects.GainStars(state, 6);
         }
+
+        // `ThrowingAxe.AfterRoomEntered(CombatRoom)` sets `UsedThisCombat = false`. The
+        // counter IS that flag, and it has to be cleared HERE rather than at turn start:
+        // the axe is once per COMBAT, not once per turn, and relic counters travel into
+        // the fight from the run rather than starting fresh.
+        SetCounter(state, ThrowingAxe, 0);
 
         // `BoundPhylactery.BeforeCombatStart` summons Osty at `SummonVar(1)` -- one HP,
         // which is a body to soak one hit rather than a wall.
@@ -969,6 +976,25 @@ public static class RelicEffects
                 ? 2
                 : 0
         );
+
+    /// <summary>
+    /// `ThrowingAxe.ModifyCardPlayCount`: `playCount + 1` for the FIRST card played in a
+    /// combat, and `AfterModifyingCardPlayCount` spends it. Once per fight, any card.
+    ///
+    /// Reads AND consumes, because the game's two hooks fire together: the count is
+    /// settled when the play is SET UP, so the axe is spent at setup too. That is the same
+    /// reason Burst does not double itself -- see the comment at the call site.
+    /// </summary>
+    internal static bool ConsumeThrowingAxePlay(CombatState state)
+    {
+        if (!HasRelic(state, ThrowingAxe) || GetCounter(state, ThrowingAxe) != 0)
+        {
+            return false;
+        }
+
+        SetCounter(state, ThrowingAxe, 1);
+        return true;
+    }
 
     /// <summary>Pollinous Core's per-turn tick, and the reset once it has paid.</summary>
     internal static void TickPollinousCore(CombatState state)
