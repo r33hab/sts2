@@ -152,6 +152,10 @@ BUFF_ALIASES = {
     # emulator keeps those as separate numbers because a BuffState is an id and ONE value.
     # The mod reports the power's Amount, which is the block half.
     "CRIMSON_MANTLE_POWER": "CrimsonMantleBlock",
+    # `AccuracyPower.ModifyDamageAdditive` adds its amount to any POWERED attack from a
+    # card tagged `CardTag.Shiv`. The emulator names the buff after what it does rather
+    # than after the card that grants it, because Accuracy is not the only source.
+    "ACCURACY_POWER": "ShivDamage",
     "DRAW_CARDS_NEXT_TURN_POWER": "NextTurnDraw",
     # Every `: TemporaryStrengthPower` subclass. They add nothing but a sign, and the
     # emulator models them all as the base power -- thirteen classes in the game and one

@@ -159,6 +159,15 @@
   through a loop that restarts the game after any failure, and do it in the background:
   a restart plus twenty captures runs well past ten minutes.
 
+  **Cards the harness cannot stage**, as opposed to cards nobody has got to yet:
+
+  - `GrandFinale` -- `IsPlayable => Draw.Cards.Count == 0`, and a staged capture always
+    has a full draw pile, so the game refuses the play. The emulator agrees with the
+    source exactly (`"GrandFinale" => state.DrawPile.Count == 0`), so it is read rather
+    than captured until the harness can empty a pile.
+  - The 21 `MultiplayerOnly` cards, which cannot appear in a singleplayer run at all.
+    `Ignition` is one; it is why the Defect pool reads 86/86 and not 87.
+
   `--select` answers the selection screens a card raises, in the order they appear:
 
   ```
