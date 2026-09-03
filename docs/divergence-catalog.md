@@ -1788,3 +1788,22 @@ that turn. Nothing had noticed, because no test stunned one.
 Two existing tests asserted the old placement by calling `ExecuteIntent` directly. They now
 call `ApplyEndOfEnemySideTurn`, and a third was added for the case that matters -- a creature
 that never acted at all still gains.
+
+### The aborts were a harness bug, and they were hiding divergences
+
+Seventeen of Glory's 72 rows aborted with "live game never played the card", and the same
+six encounters aborted at `--buff-max-hp` 200 and 600 alike -- identical counts, so it was
+never about act 3 damage, which is what I had assumed and written down.
+
+`wait_for_card_to_leave_hand` waited for the HAND TO SHRINK. That is the wrong signal for
+any play that also puts a card in hand, and the Slimed Berserker and Aeonglass both do: the
+hand came back the same length, the wait ran its full twenty seconds, and the row died. It
+now waits on `battle.history.cards_played`, the game's own count, which moves on exactly one
+play whatever the play does to the hand.
+
+**An abort is not a pass, and it had been reading as one.** All six test rows now produce a
+verdict -- and two of the three encounters immediately FAIL on real comparisons. Aeonglass
+and the Fabricator had been diverging for as long as this sweep has existed, and the only
+reason they showed up as harness noise is that the harness never got far enough to compare
+anything. The abort count is the number that should have been suspicious: a stable 17 across
+two configurations is a bug, not a symptom.

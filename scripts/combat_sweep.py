@@ -473,8 +473,18 @@ def action_is_legal_for_emulator(env: Any, action: int) -> bool:
     return bool(action < len(mask) and mask[action])
 
 
+def cards_played_so_far(state: dict[str, Any]) -> int | None:
+    """`battle.history.cards_played`, the game's own count of plays this combat."""
+    history = (state.get("battle") or {}).get("history") or {}
+    played = history.get("cards_played")
+    return int(played) if played is not None else None
+
+
 def wait_for_card_to_leave_hand(
-    base_url: str, hand_size_before: int, timeout: float = 20.0
+    base_url: str,
+    hand_size_before: int,
+    played_before: int | None = None,
+    timeout: float = 20.0,
 ):
     """Wait until the live game has actually PLAYED the card that was just posted.
 
@@ -483,14 +493,25 @@ def wait_for_card_to_leave_hand(
     indexes into a hand the live game has already moved on from, and the two sides drift
     apart within one turn — which reads as the emulator playing cards the game would not
     allow. Same trap as `wait_for_next_round`, one level down.
+
+    Waits on `battle.history.cards_played` rather than the hand SHRINKING. Hand size is
+    the wrong signal for any play that also puts a card in hand: the Slimed Berserker and
+    Aeonglass both do, so the hand came back the same length, the wait ran its full twenty
+    seconds and the row aborted with "never played the card" — 17 of Glory's 72 rows, the
+    same six encounters at every ascension and HP, because it was never about damage. The
+    count is the game's own and moves on exactly one play.
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         state = start_real_game_run.get_state(base_url)
         if state.get("state_type") not in COMBAT_STATE_TYPES:
             return state
-        hand = (state.get("player") or {}).get("hand") or []
-        if len(hand) < hand_size_before:
+        if played_before is not None:
+            played = cards_played_so_far(state)
+            if played is not None and played > played_before:
+                return state
+        elif len((state.get("player") or {}).get("hand") or []) < hand_size_before:
+            # No count available: fall back to the old signal rather than hang.
             return state
         time.sleep(0.2)
     raise RuntimeError("live game never played the card")
@@ -513,6 +534,7 @@ def apply_action(
     card each side is about to play is compared here, at the action that would cause it.
     """
     hand_size = len((live_state.get("player") or {}).get("hand") or [])
+    played_before = cards_played_so_far(live_state)
     live_hand = (live_state.get("player") or {}).get("hand") or []
     if notes is not None and action < hand_size:
         norm = compare_draw_pile.normalize
@@ -531,7 +553,11 @@ def apply_action(
         base_url, trace_real_game.action_payload_from_index(live_state, action)
     )
     _obs, _reward, terminated, truncated, _info = env.step(action)
-    return wait_for_card_to_leave_hand(base_url, hand_size), terminated, truncated
+    return (
+        wait_for_card_to_leave_hand(base_url, hand_size, played_before),
+        terminated,
+        truncated,
+    )
 
 
 _REPO = Path(__file__).resolve().parent.parent
