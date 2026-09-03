@@ -123,6 +123,52 @@ class SweepBuffMapTests(unittest.TestCase):
         self.assertTrue(agree)
         self.assertEqual(unmapped, ["NOT_A_REAL_POWER"])
 
+    def test_display_amount_powers_are_compared_by_presence(self) -> None:
+        """A dozen powers report a DISPLAY value, not their stack.
+
+        `TenderPower.DisplayAmount` is `CardsPlayedThisTurn`, so the game says 0 on a turn
+        nobody has acted while the emulator holds the power at 1 and counts the cards in
+        `CombatState`. Neither side is wrong -- the numbers are not the same quantity -- so
+        only presence is comparable. The full-sweep run that added the player comparison
+        reported this on six rows before the rule existed.
+        """
+        tender = next(
+            key for key, value in combat_sweep.BUFF_ID_TO_LIVE.items() if value == "TENDER_POWER"
+        )
+        live = {"status": [{"id": "TENDER_POWER", "amount": 0}]}
+        emu = {"status": [{"id": tender, "amount": 1}]}
+
+        self.assertIn("TENDER_POWER", combat_sweep.PRESENCE_ONLY_POWERS)
+        self.assertEqual(combat_sweep.player_buff_sets(live, emu), (True, []))
+
+    def test_surrounded_is_compared_by_presence(self) -> None:
+        """The emulator stores the Kaiser Crab's FACING in Surrounded's magnitude.
+
+        `FacingRight` is 1 and `FacingLeft` is 2, while the game keeps facing in its own
+        field and reports a `StackType.Single` presence of 1 -- so the two agree by accident
+        facing right and disagree facing left.
+        """
+        surrounded = next(
+            key
+            for key, value in combat_sweep.BUFF_ID_TO_LIVE.items()
+            if value == "SURROUNDED_POWER"
+        )
+        live = {"status": [{"id": "SURROUNDED_POWER", "amount": 1}]}
+        emu = {"status": [{"id": surrounded, "amount": 2}]}
+
+        self.assertEqual(combat_sweep.player_buff_sets(live, emu), (True, []))
+
+    def test_presence_only_still_catches_a_missing_power(self) -> None:
+        """Presence-only is not no-comparison: absent against present still disagrees."""
+        tender = next(
+            key for key, value in combat_sweep.BUFF_ID_TO_LIVE.items() if value == "TENDER_POWER"
+        )
+        live: dict[str, object] = {"status": []}
+        emu = {"status": [{"id": tender, "amount": 1}]}
+
+        agree, _ = combat_sweep.player_buff_sets(live, emu)
+        self.assertFalse(agree)
+
     def test_a_roster_length_mismatch_disagrees(self) -> None:
         live = [{"status": []}, {"status": []}]
         emu = [{"status": []}]

@@ -1664,3 +1664,32 @@ than no check, because it reads as coverage.
 That closes the last field either creature exposes. The harness now compares deck, roster,
 intents, player HP and max HP, hand, all three pile sizes, RNG positions on eight streams,
 enemy block, enemy powers, and player powers.
+
+### The player-power comparison's first run found only itself
+
+Eighty rows with the player's powers compared: **eight failures, and all eight were the
+comparison being wrong about the emulator.** Zero enemy-power, zero enemy-block, zero
+coverage failures. Two representation differences, one per encounter, on every seed:
+
+- `TENDER_POWER`, emu 1 against live 0. `TenderPower.DisplayAmount` is `CardsPlayedThisTurn`,
+  so the mod reports what the power SHOWS rather than its stack: the game says 0 on a turn
+  nobody has acted while the emulator holds the power at 1 and counts the cards in
+  `CombatState`. **Neither side is wrong -- the numbers are not the same quantity.**
+- `SURROUNDED_POWER`, emu 2 against live 1. The emulator stores the Kaiser Crab's FACING in
+  that magnitude (`FacingRight` 1, `FacingLeft` 2) while the game keeps facing in its own
+  field and reports a `StackType.Single` presence. They agree by accident facing right.
+
+Rather than special-case the two that happened to come up, an audit found **twelve powers
+override `DisplayAmount`** -- every one of them would have produced the same false positive
+in turn. The presence-only set is now derived from the decompiled sources at import,
+`SURROUNDED_POWER` added explicitly, for the same reason the `BuffId` map is derived.
+
+The rule was checked for over-breadth, because "compare less" is an easy way to make a
+comparison stop finding things: a power the emulator holds and the game does not still
+FAILS, and a wrong amount -- E463's Vulnerable 2 against 1 -- still fails. **Presence-only is
+not no-comparison.**
+
+Worth naming the pattern. Weak and Frail agreed exactly on all eight rows, which is what
+said the amount comparison was working and the two outliers were special. **A new comparison's
+first contact is most likely to find the comparison's own bugs**, and the useful signal is
+which fields agree around the ones that do not.

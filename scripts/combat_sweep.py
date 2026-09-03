@@ -577,6 +577,35 @@ def _buff_id_to_live_entry() -> dict[int, str]:
 BUFF_ID_TO_LIVE = _buff_id_to_live_entry()
 
 
+def _presence_only_powers() -> set[str]:
+    """Powers whose live `amount` is not a stack, and so cannot be compared as a number.
+
+    Two sources, both derived rather than listed by hand -- a hand-kept table is what a new
+    power falls out of silently.
+
+    `DisplayAmount` overrides: the mod reports what the power SHOWS, and for a dozen powers
+    that is a derived readout rather than the stack. `TenderPower.DisplayAmount` is
+    `CardsPlayedThisTurn`, so the game says 0 on a turn nobody has acted while the emulator
+    holds the power at 1 and counts the cards in `CombatState`. Neither side is wrong; the
+    numbers are not the same quantity.
+
+    And `SurroundedPower`, which the emulator uses to store the Kaiser Crab's FACING --
+    `FacingRight` is 1 and `FacingLeft` is 2 -- while the game keeps facing in its own field
+    and reports a `StackType.Single` presence of 1. Those agree by accident facing right and
+    disagree facing left.
+    """
+    powers = _REPO / "decompiled" / "MegaCrit.Sts2.Core.Models.Powers"
+    derived = {
+        re.sub(r"(?<!^)(?=[A-Z])", "_", path.stem).upper()
+        for path in powers.glob("*.cs")
+        if "override int DisplayAmount" in path.read_text(encoding="utf-8")
+    }
+    return derived | {"SURROUNDED_POWER"}
+
+
+PRESENCE_ONLY_POWERS = _presence_only_powers()
+
+
 def _live_powers(creature: dict[str, Any], unmapped: list[str]) -> set[tuple[str, int]]:
     """Collect the game's powers on one creature, as (entry, amount).
 
@@ -592,6 +621,11 @@ def _live_powers(creature: dict[str, Any], unmapped: list[str]) -> set[tuple[str
         if entry not in known:
             unmapped.append(str(entry))
             continue
+        # A power whose live amount is a display value carries no comparable number, so
+        # only its PRESENCE is recorded -- see `_presence_only_powers`.
+        if entry in PRESENCE_ONLY_POWERS:
+            out.add((str(entry), -1))
+            continue
         # An amount of zero counts as ABSENT on both sides: the game drops a spent power
         # and the emulator sometimes keeps it at zero.
         if power.get("amount"):
@@ -604,7 +638,12 @@ def _emu_powers(creature: dict[str, Any]) -> set[tuple[str, int]]:
     out: set[tuple[str, int]] = set()
     for buff in creature.get("status") or []:
         entry = BUFF_ID_TO_LIVE.get(int(buff.get("id", 0)))
-        if entry is not None and buff.get("amount"):
+        if entry is None:
+            continue
+        if entry in PRESENCE_ONLY_POWERS:
+            out.add((entry, -1))
+            continue
+        if buff.get("amount"):
             out.add((entry, int(buff["amount"])))
     return out
 
