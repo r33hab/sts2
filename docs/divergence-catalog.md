@@ -1614,3 +1614,29 @@ the third time: **a relic's cost and its benefit are rarely adjacent in the sour
 than read inline, matching `CountEliteVictoryForSwordOfStone`. The gate is the interesting
 half -- an elite VICTORY, so fleeing pays nothing -- and a parameter is the only way to test
 both sides of it without driving a full elite fight to a win.
+
+### The Hive agrees with the game
+
+A full sweep at `--turns 8 --play --ascension 8 --count 4 --buff-max-hp 200 --add-card
+IMPERVIOUS`, with every fix of this session in one build:
+
+**71 of 71 completed rows ALL MATCH. Zero divergences, zero coverage gaps, zero unresolved
+powers.** Nine rows aborted before producing a verdict ("live game never played the card"),
+which is the harness, not the emulator.
+
+What that statement covers is worth being exact about, because a clean sweep invites reading
+more into it than it says. Across the Hive's twenty encounters on four seeds, for eight
+turns each, with a player kept alive and given block, the emulator agreed with the live game
+on: the deck, the roster, every enemy's announced intent, player HP and max HP, hand
+contents, all three pile sizes, RNG positions on eight streams, enemy block, and enemy
+powers.
+
+It does not say act 2 is correct. It says every field this harness compares agreed on every
+state these seeds reached. The gap between those two sentences is the whole reason the
+coverage line exists, and the reason it took three separate kinds of work -- a blocking
+player, a surviving player, and two fixes to the counter -- before that line could read zero.
+
+**Six of this session's defects were found by the sweep and could not have been found by
+reading**: E455, E457 and E458 on enemy block; E459 and E460 on enemy powers; E463 through a
+third creature's arithmetic. Three more -- E464, E465, E466 -- came from one row and needed
+each other removed to become visible.
