@@ -1351,6 +1351,17 @@ def capture_one(
                 f"turn {row['turn']} player powers: "
                 f"emu {row['emu_player_buffs']} vs live {row['live_player_buffs']}",
             )
+        if failed:
+            # WHICH creatures, by the game's own names. The emulator's observation carries
+            # no def id, so a roster that differs by one is otherwise a list of numbers --
+            # and on a fight whose roster changes every turn, like the Fabricator's, the
+            # numbers alone do not say whether a bot was added, replaced or never spawned.
+            notes.append(
+                f"turn {row['turn']} live roster: "
+                + ", ".join(
+                    f"{e.get('name')}({e.get('hp')})" for e in row["live_enemies"]
+                ),
+            )
         if failed or row.get("rng_drift"):
             notes.append(
                 f"turn {row['turn']} enemy hp: "

@@ -1838,3 +1838,38 @@ instead of participants, this one, and both found on the Fabricator. The shape i
 each time: something the game does ONCE for the side, done per-creature inside the loop. It is
 worth auditing what else lives in `ExecuteIntent` that the game hangs off `AfterSideTurnEnd`
 or `BeforeSideTurnStart`.
+
+### The Fabricator, still open -- but now diagnosable
+
+Failing rows now print the live ROSTER BY NAME. The emulator's observation carries no def
+id, so a roster that differs by one was otherwise a list of numbers -- and on a fight whose
+roster changes every turn that does not say whether a bot was added, replaced, or never
+spawned. With names it does:
+
+```
+turn 3: Guardbot(9), Stabbot(20), Fabricator(143), Zapbot(22)
+turn 4: Stabbot(8), Fabricator(143), Zapbot(22)                  <- Guardbot died, NO spawn
+turn 5: Noisebot(20), Stabbot(19), Fabricator(143), Zapbot(22)   <- refilled slot 0
+```
+
+**The game leaves the gap open for a turn and refills it on the next one, into the freed
+front slot.** The emulator refills immediately, so it carries an extra bot from turn 4 and
+never recovers. The slot CHOICE is right -- E441's fix put the replacement at the front,
+which is where the game puts it -- and the TIMING is not.
+
+Two things ruled out on the way, both worth recording so they are not re-investigated:
+
+- **Not the branch announcing the same number.** FABRICATING_STRIKE is 18 at A8 and
+  DISINTEGRATE is 11; they are distinguishable, and the turn-3 intents genuinely agreed on
+  disintegrate. An earlier note here claimed they collided -- they do not.
+- **Not the Frail or the slots.** A direct probe of the encounter shows `FrailPower` applied
+  and surviving its grace tick, and slots assigned 0,1,2,3,4 in roster order.
+
+What remains is the moment `CanFabricate` is evaluated relative to a death the PLAYER caused.
+`CombatManager` rolls every enemy's move in `PrepareForNextTurn` at the start of the player's
+turn; the emulator rolls in `ChooseIntents` at the end of the enemy turn. Those look like the
+same instant and are not obviously so once a mid-player-turn death sits between them.
+
+Settling it needs the emulator's per-turn roster through the same driven actions, which the
+sweep does not yet record -- the live half is now named and the emulator half is still
+anonymous. That is the next piece of harness work rather than more reading.
