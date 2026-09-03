@@ -2133,3 +2133,48 @@ only ever a way to reach it.
 This closes the Fabricator. It had failed all session through E441, E469, E471, E472, E473
 and E474 -- every one a real defect -- and the corpses were the last of it. Eight rows across
 four spawner-heavy encounters now pass on both seeds.
+
+### Full-run integration tests: the ground truths existed and nothing ran them
+
+The strongest check available was already sitting in the repo unused. `tests/fixtures/run_trace/`
+holds **32 complete runs captured from the live game** -- a fixed seed, 121 steps each, and
+the game's ENTIRE state after every one. The actions are stored semantically
+(`{"action": "play_card", "card_index": 0, "target": "TWIG_SLIME_S_0"}`), targeting by entity
+id rather than by index, so they replay exactly. `replay_full_run_trace.py` already drove them
+through `Sts2RunEnv`.
+
+**Nothing ran it.** Not `lint-and-test.sh`, not `patch_update.sh`. Thirty-two full-run ground
+truths, and no gate.
+
+It now runs in both, through `check_run_traces.py`, and the fidelity went from 10 compared
+fields per step to 15. The four added are the ones that matter:
+
+- `player.status` -- the PLAYER's powers. E463 lived exactly here and could only be seen as
+  arithmetic on a third creature's intent.
+- `player.potions`, and the three pile counts.
+
+**Raising fidelity found five divergences immediately**, and getting there meant fixing four
+COMPARISON defects first -- which is the part worth remembering, because each one had been
+reading as agreement:
+
+- `player.status` was not in the emulator's snapshot AT ALL. The missing key read as an empty
+  list, so every power the player held looked like a match. The first "finding" it produced --
+  a missing Shrink -- was this bug, not an emulator gap.
+- Potions were compared as numeric ids against the game's names.
+- `TemporaryStrengthPower` is ABSTRACT: the game reports one of thirteen subclasses and the
+  emulator models one buff, so every one of them read as a divergence.
+- `CrimsonMantleBlock` and friends resolve to no `PowerDef`, so the derived map had no name
+  for them and the emulator's status silently omitted the power.
+
+The last two were already solved once, in `generate_card_capture_tests.BUFF_ALIASES`. That
+table is now shared through `buff_map.py` rather than copied, because two tables answering the
+same question drift.
+
+**What the five real divergences are**, recorded in a manifest so the count can only fall
+without someone noticing: the Stone Humidifier's `SMOGGY_POWER` is unmodelled; a Crimson
+Mantle the emulator does not hold; and three potion divergences -- a Shaped Rock and a Fairy
+in a Bottle the emulator keeps, and a Fire Potion it never gains.
+
+The manifest fails BOTH ways. A fixture that starts diverging is a regression; a fixture that
+stops is a fix, and the run fails asking for the entry to be removed. It proved itself on the
+first run by catching a fifth divergence I had seen and not recorded.

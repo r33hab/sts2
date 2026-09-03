@@ -17,5 +17,11 @@ bash "$REPO_ROOT/scripts/build.sh"
 
 echo "=== Step 5: Test ==="
 dotnet test "$REPO_ROOT/src/Sts2Emulator.Tests/"
+echo "=== Step 6: Full-run ground truths ==="
+# These are the runs captured from the PREVIOUS build. A divergence here after a patch is
+# either a real behaviour change in the game -- in which case re-capture with
+# trace_real_game_run.py and the fixture diff IS the patch's behavioural changelog -- or a
+# genuine emulator regression. The manifest in check_run_traces.py says which are expected.
+python "$REPO_ROOT/scripts/check_run_traces.py"
 
 echo "=== Done ==="

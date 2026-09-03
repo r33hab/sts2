@@ -614,44 +614,7 @@ def apply_action(
 _REPO = Path(__file__).resolve().parent.parent
 
 
-def _buff_id_to_live_entry() -> dict[int, str]:
-    """Map the emulator's `BuffId` ordinal onto the game's power entry string.
-
-    Derived from `BuffState.cs` and `Powers.g.cs` at import rather than hand-written, so a
-    new buff cannot silently fall out of the comparison the way a hand-kept table would let
-    it. `BuffId` is its own enum and shares no numbering with `PowerDef`, which is why this
-    goes through the NAME.
-    """
-    enum_src = (_REPO / "src/Sts2Emulator/Core/BuffState.cs").read_text(encoding="utf-8")
-    body = enum_src[enum_src.index("enum BuffId") :]
-    body = body[body.index("{") + 1 : body.index("\n}")]
-    members = [m.group(1) for m in re.finditer(r"^\s*([A-Za-z][A-Za-z0-9]*)\s*(?:,|=)", body, re.MULTILINE)]
-
-    powers = set(
-        re.findall(
-            r'Name: "([A-Za-z0-9]+)"',
-            (_REPO / "src/Sts2Emulator/Generated/Powers.g.cs").read_text(encoding="utf-8"),
-        ),
-    )
-
-    def snake(name: str) -> str:
-        return re.sub(r"(?<!^)(?=[A-Z])", "_", name).upper()
-
-    mapping: dict[int, str] = {}
-    for ordinal, member in enumerate(members):
-        candidates = [member, member[:-5] + "Power"] if member.endswith("Power") else [member + "Power", member]
-        for candidate in candidates:
-            if candidate in powers:
-                mapping[ordinal] = snake(candidate)
-                break
-    return mapping
-
-
-# Twenty-three BuffId members are emulator bookkeeping with no power behind them --
-# counters, spent-flags, self-damage riders -- and are absent from this map by
-# construction. The map is keyed on what the game HAS, so anything missing is either
-# internal or new, and `unmapped_live_buffs` below is what tells the two apart.
-BUFF_ID_TO_LIVE = _buff_id_to_live_entry()
+from buff_map import BUFF_ID_TO_LIVE  # noqa: E402 -- shared with the run replay
 
 
 def _presence_only_powers() -> set[str]:

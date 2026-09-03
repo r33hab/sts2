@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import compare_traces
+from buff_map import BUFF_ID_TO_LIVE, canonical_power
 
 from sts2_gym import Sts2RunEnv, native
 from sts2_gym.commands import (
@@ -131,6 +132,21 @@ def is_boundary_transition(
 # a Neow bonus the emulator never offered showed up 20 steps later as a floor-2 combat
 # that would not end, and the first four fields agreed the whole way there. The deck is
 # absent because the mod does not report it — see the note in HANDOFF.md.
+# Fields the ground truth carries that the emulator cannot yet answer, each with the reason.
+# This list is the BACKLOG, and it is printed on every run so it cannot quietly grow: a field
+# is either compared or it is here saying why not. Silence is the failure mode -- a field
+# that is neither compared nor declared looks exactly like a field that agrees.
+NOT_YET_COMPARABLE = {
+    "battle.turn": "the emulator's observation carries no turn marker; the live payload "
+    "reports whose side it is ('player'/'enemy')",
+    "battle.round": "no round counter in the observation, only the combat's own Turn "
+    "which is not exposed to the run env",
+    "player.max_potion_slots": "the emulator does not model the slot COUNT. The live run "
+    "reports 2, the run env's potion buffer is 3 and RunConstants.PotionSlotCapacity is 6 "
+    "-- three different numbers, so this needs reading rather than guessing",
+}
+
+
 DEFAULT_PER_STEP_FIELDS = [
     "state_type",
     "player.hp",
@@ -147,6 +163,17 @@ DEFAULT_PER_STEP_FIELDS = [
     "player.deck",
     "player.relics",
     "battle.enemies",
+    # The PLAYER's powers. E463 -- the Ovicopter applying Vulnerable on the wrong turns --
+    # lived exactly here, and could only be seen as arithmetic on a third creature's intent
+    # because nothing compared the player's own status.
+    "player.status",
+    # Potions, which nothing compared at all.
+    "player.potions",
+    # The piles as COUNTS. Their contents are compared through `player.hand` and
+    # `player.deck`; the counts catch a card that went to the wrong pile.
+    "player.draw_pile_count",
+    "player.discard_pile_count",
+    "player.exhaust_pile_count",
 ]
 
 
@@ -161,6 +188,24 @@ def apply_debug_buff(env: Any, payload: dict[str, Any]) -> tuple[Any, dict[str, 
     if payload["action"] == "debug_enter_next_act":
         return env.debug_enter_next_act()
     return env.debug_upgrade_deck()
+
+
+@functools.cache
+def potion_name_by_id() -> dict[str, str]:
+    """The emulator's numeric potion ids, in the game's own entry vocabulary.
+
+    The live payload names potions (`BLESSING_OF_THE_FORGE`) and the emulator numbers them,
+    exactly as it does for cards -- so a comparison that does not translate reports every
+    potion as a divergence and drowns the real ones.
+    """
+    text = (
+        Path(__file__).resolve().parents[1]
+        / "src/Sts2Emulator/Generated/Potions.g.cs"
+    ).read_text(encoding="utf-8")
+    return {
+        m.group(1): re.sub(r"(?<!^)(?=[A-Z])", "_", m.group(2)).upper()
+        for m in re.finditer(r'new PotionDef\(Id: (\d+), Name: "([A-Za-z0-9]+)"', text)
+    }
 
 
 def normalise_for_compare(field: str, value: Any) -> Any:
@@ -181,6 +226,24 @@ def normalise_for_compare(field: str, value: Any) -> Any:
             )
             for card in value or []
         ]
+    if field == "player.potions":
+        names = potion_name_by_id()
+        return sorted(
+            names.get(str(item.get("id")), str(item.get("id")))
+            if isinstance(item, dict)
+            else names.get(str(item), str(item))
+            for item in value or []
+        )
+    if field == "player.status":
+        # An unordered multiset of (power, amount), each power reduced to the name both
+        # sides use -- the game reports thirteen different temporary-strength powers where
+        # the emulator models one.
+        return sorted(
+            (canonical_power(str(item.get("id"))), item.get("amount"))
+            if isinstance(item, dict)
+            else (canonical_power(str(item)), None)
+            for item in value or []
+        )
     if field in {"player.deck", "player.relics"}:
         # A deck or relic list compared as an unordered multiset: both sides agree on
         # WHAT the run holds, but not on the order it is stored in.
@@ -663,7 +726,29 @@ def summarize_player(
             if int(potion_id) != 0
         ],
         "hand": summarize_hand(obs) if in_combat else [],
+        # The player's POWERS, in the game's vocabulary. Absent entirely until now, which is
+        # worse than wrong: the comparison read the missing key as an empty list and every
+        # buff the player held looked like a divergence rather than a gap.
+        "status": summarize_player_status(obs) if in_combat else [],
     }
+
+
+def summarize_player_status(obs: np.ndarray) -> list[dict[str, Any]]:
+    """The player's powers, named as the mod names them.
+
+    A slot counts as occupied when EITHER field is non-zero: `BuffId.Strength` is ordinal 0
+    and so is an unwritten slot, so filtering on the id alone drops every Strength.
+    """
+    out: list[dict[str, Any]] = []
+    for i in range(native.OBS_MAX_PLAYER_BUFFS):
+        base = native.OBS_PLAYER_BUFF_OFFSET + i * 2
+        buff_id, amount = int(obs[base]), int(obs[base + 1])
+        if buff_id == 0 and amount == 0:
+            continue
+        entry = BUFF_ID_TO_LIVE.get(buff_id)
+        if entry is not None:
+            out.append({"id": entry, "amount": amount})
+    return out
 
 
 def summarize_hand(obs: np.ndarray) -> list[dict[str, Any]]:
@@ -842,7 +927,12 @@ def main() -> None:
     if diffs or early:
         raise SystemExit(1)
 
-    print("Full-run snapshots match on every configured field.")
+    print(
+        f"Full-run snapshots match on every compared field "
+        f"({len(DEFAULT_PER_STEP_FIELDS)} per step).",
+    )
+    for field, reason in sorted(NOT_YET_COMPARABLE.items()):
+        print(f"  not yet comparable: {field} -- {reason}")
 
 
 if __name__ == "__main__":

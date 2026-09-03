@@ -51,6 +51,10 @@ fi
 "$UV" run python -m unittest tests/python/test_sweep_buff_map.py
 "$UV" run python -m unittest tests/python/test_trace_buff_slots.py
 "$UV" run python -m unittest tests/python/test_observation_layout.py
+
+# The full-run ground truths: every retained live run replayed through the emulator and
+# compared snapshot for snapshot. Fails on any divergence not recorded in the manifest.
+"$UV" run python scripts/check_run_traces.py
 "$UV" run python scripts/train.py --check --run-env
 "$UV" run python scripts/evaluate.py --episodes 2 --run-env --policy first-valid --max-episode-steps 20
 
