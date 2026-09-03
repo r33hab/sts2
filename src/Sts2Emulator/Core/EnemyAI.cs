@@ -326,7 +326,20 @@ public static class EnemyAI
                     BuffSystem.Apply(state.PlayerBuffs, BuffId.Vulnerable, 2);
                 }
 
-                if (enemy.DefId == KE.Fabricator)
+                // Only FABRICATING_STRIKE, which is `SingleAttackIntent` beside a
+                // `SummonIntent`. The Fabricator's OTHER attack is DISINTEGRATE, which
+                // carries nothing -- and this summoned on both, so every disintegrate put
+                // a bot on the board the game does not. That also feeds itself: the extra
+                // bot keeps `CanFabricate` false, so the emulator disintegrates again and
+                // spawns again while the game fabricates once and stops.
+                //
+                // Told apart by damage, the same way the Obscura's HARDENING_STRIKE is told
+                // from its PIERCING_GAZE: 18 against 11 at A8, 21 against 13 at A9.
+                if (
+                    enemy.DefId == KE.Fabricator
+                    && enemy.CurrentIntent.Magnitude
+                        == Ascension.Value(ascension, Ascension.DeadlyEnemies, 21, 18)
+                )
                 {
                     SummonFabricatorBots(enemy, state, rng, includeDefensive: false);
                 }

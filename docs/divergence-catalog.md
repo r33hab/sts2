@@ -1873,3 +1873,37 @@ same instant and are not obviously so once a mid-player-turn death sits between 
 Settling it needs the emulator's per-turn roster through the same driven actions, which the
 sweep does not yet record -- the live half is now named and the emulator half is still
 anonymous. That is the next piece of harness work rather than more reading.
+
+### E472 -- DISINTEGRATE summoned a bot it should not have
+
+The Fabricator has two attacks. `FABRICATING_STRIKE_MOVE` is a `SingleAttackIntent` beside a
+`SummonIntent`; `DISINTEGRATE_MOVE` is a bare `SingleAttackIntent`. The emulator's attack
+branch summoned for `KE.Fabricator` unconditionally, so **every disintegrate put a bot on the
+board the game does not have**.
+
+The error fed itself, which is why the rosters never reconciled: the extra bot keeps
+`CanFabricate` false, so the emulator disintegrates again and spawns again, while the game
+fabricates once and stops. Told apart by damage -- 18 against 11 at A8, 21 against 13 at A9 --
+exactly as the Obscura's HARDENING_STRIKE is told from its PIERCING_GAZE (E455).
+
+With it fixed the rosters and intents agree where they had not: `turn 4 [8, 143, 22]` on both
+sides, and both spawn the Noisebot into the freed front slot on turn 5.
+
+**What is still open, and what has been ruled out.** Two symptoms remain on this encounter and
+both are consistent with ONE cause: the emulator spawning a turn later than the game.
+
+- Turn 3: the Guardbot's 15 block and the Stabbot's Frail are missing. A probe of the real
+  summon path shows the emulator's mechanism is sound -- a spawned Guardbot grants block on
+  every turn after the one it arrived on -- so the block is not lost, it starts a turn late.
+- Turns 7 and 9: the emulator is one bot SHORT, the opposite of the old over-spawn, which is
+  what a turn's lag looks like once the fight is long enough.
+
+Ruled out by direct checks rather than reasoning: the two attacks are distinguishable (18 vs
+11, they do not collide); `FrailPower` applies and survives its grace tick; slots are assigned
+0..4 in roster order; both sides snapshot their enemy list before the turn loop, so neither
+lets a mid-turn spawn act that turn; and FABRICATE spawns two bots against
+FABRICATING_STRIKE's one, which the emulator already matches.
+
+The next thing to measure is WHEN the first bot is spawned on each side, which needs the
+emulator's per-turn roster recorded alongside the live one. The live half is named now; the
+emulator half is still anonymous, and the observation carries no def id to name it with.

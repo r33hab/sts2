@@ -668,6 +668,37 @@ public class FabricatorTests
     }
 
     /// <summary>
+    /// DISINTEGRATE summons NOTHING. It is a bare `SingleAttackIntent`, where
+    /// FABRICATING_STRIKE is one beside a `SummonIntent` -- and the emulator summoned on
+    /// both, so every disintegrate put a bot on the board the game does not have.
+    /// </summary>
+    /// <remarks>
+    /// The error fed itself: the extra bot keeps `CanFabricate` false, so the emulator
+    /// disintegrates again and spawns again, while the game fabricates once and stops. That
+    /// is why the rosters diverged by one and never reconciled.
+    ///
+    /// Told apart by damage, exactly as the Obscura's HARDENING_STRIKE is told from its
+    /// PIERCING_GAZE (E455): 18 against 11 at A8, 21 against 13 at A9.
+    /// </remarks>
+    [Theory]
+    [InlineData(8, 11, 18)]
+    [InlineData(9, 13, 21)]
+    public void OnlyFabricatingStrikeSummons(int ascension, int disintegrate, int strike)
+    {
+        var fight = Shop(ascension);
+        var fabricator = fight.State.Enemies[0];
+
+        fabricator.CurrentIntent = new Intent(IntentType.Attack, disintegrate);
+        fight.State.PlayerHp = 999;
+        EnemyAI.ExecuteIntent(fabricator, fight.State, new Random(0));
+        Assert.Single(fight.State.Enemies);
+
+        fabricator.CurrentIntent = new Intent(IntentType.Attack, strike);
+        EnemyAI.ExecuteIntent(fabricator, fight.State, new Random(0));
+        Assert.Equal(2, fight.State.Enemies.Count);
+    }
+
+    /// <summary>
     /// A ConditionalBranchState on CanFabricate — fewer than four living teammates — and
     /// only then a roll between FABRICATE and FABRICATING_STRIKE. With the bench full it
     /// DISINTEGRATES, a move the emulator never reached: it rolled the pair
