@@ -1743,3 +1743,28 @@ Strength 4. That is E441, already catalogued as partial ("fabricated bots all st
 of the Fabricator"), now with live evidence and a second symptom. It needs slots modelled on
 `EnemyState` rather than inferred from list position, which is a larger change than this
 pass.
+
+### E441 closed -- the Fabricator's bots stand where the game puts them
+
+`FabricatorNormal.Slots` is `[bot1, bot2, fabricator, bot3, bot4]`: the Fabricator stands in
+the MIDDLE, two bots ahead of it and two behind. `SpawnBot` places each new bot with
+`Encounter.GetNextSlot`, which is **the first slot no LIVING creature stands in**.
+
+The emulator counted list POSITIONS instead -- insert ahead of the Fabricator while it sat
+below index 2, append after that. That is right for a fight where nothing dies, and wrong
+the moment one does: **a dead bot frees its slot and the game refills it at the front, while
+the emulator went on appending to the back.** The roster then reads in a different order, and
+because the bots differ, the powers and Strength land on different creatures.
+
+Slots now live on `EnemyState.Slot` -- the field the Two-Tailed Rats already use -- with the
+Fabricator taking slot 2 at construction and each bot taking the first slot no living
+creature holds, inserted into the roster in slot order. The full-bench case falls out for
+free: no free slot means `GetNextSlot` returns null and `SpawnBot` adds nothing.
+
+Read off the LIVING, deliberately. The emulator keeps a corpse at 0 HP so an agent's
+observation has stable indices, and that corpse must not hold its place in the game's slot
+list -- the one difference between the two representations that this code has to bridge.
+
+Glory's sweep is what closed it. E441 had been catalogued as partial since it was written,
+with the front-slot half fixed and the refill half described but unmodelled; nothing was
+going to find the second half by reading, because the code reads correctly until a bot dies.

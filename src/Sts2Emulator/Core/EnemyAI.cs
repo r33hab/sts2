@@ -4542,7 +4542,7 @@ public static class EnemyAI
         }
     }
 
-    private static void SummonFabricatorBots(
+    internal static void SummonFabricatorBots(
         EnemyState enemy,
         CombatState state,
         Random rng,
@@ -4612,21 +4612,58 @@ public static class EnemyAI
     /// never has: `[19, 21, 23, 149]` where the game reads `[21, 19, 149, 23]`. Intents
     /// are compared by position, and the player's "first enemy" is a position too.
     /// </remarks>
+    /// <summary>
+    /// Puts a spawned bot in the slot `Encounter.GetNextSlot` would give it: the FIRST
+    /// slot of `[bot1, bot2, fabricator, bot3, bot4]` with no living creature standing in
+    /// it, and then into the roster in slot order.
+    /// </summary>
+    /// <remarks>
+    /// The old rule counted list POSITIONS -- insert ahead of the Fabricator while it sat
+    /// below index 2, append after that. That is right for a fight where nothing dies, and
+    /// wrong the moment one does: a dead bot frees its slot and the game refills it, in
+    /// FRONT, while the emulator went on appending to the back. Glory's first sweep showed
+    /// it as a roster in a different order with the Strength on the wrong creature.
+    ///
+    /// Slots are read off the LIVING, because that is what `GetNextSlot` asks -- a corpse
+    /// the emulator keeps at 0 HP for its observation slot does not hold its place in the
+    /// game.
+    /// </remarks>
     private static void InsertFabricatorBot(
         CombatState state,
         EnemyState fabricator,
         EnemyState bot
     )
     {
-        int fabricatorIndex = state.Enemies.IndexOf(fabricator);
-        var spawned = Effects.RelicEffects.Spawned(state, bot);
-        if (fabricatorIndex < FabricatorFrontSlots)
+        int slot = -1;
+        for (int candidate = 0; candidate < CombatFactory.FabricatorSlotCount; candidate++)
         {
-            state.Enemies.Insert(fabricatorIndex, spawned);
+            if (!state.Enemies.Any(other => other.Hp > 0 && other.Slot == candidate))
+            {
+                slot = candidate;
+                break;
+            }
+        }
+
+        var spawned = Effects.RelicEffects.Spawned(state, bot);
+        if (slot < 0)
+        {
+            // Every slot taken. The game's `GetNextSlot` returns null and `SpawnBot` adds
+            // nothing, so neither does this.
             return;
         }
 
-        state.Enemies.Add(spawned);
+        spawned.Slot = slot;
+
+        // Into the roster in slot order, so the list reads front-to-back the way the
+        // game's does. A creature with no slot (there should be none here) sorts last.
+        int at = state.Enemies.FindIndex(other => other.Slot > slot);
+        if (at < 0)
+        {
+            state.Enemies.Add(spawned);
+            return;
+        }
+
+        state.Enemies.Insert(at, spawned);
     }
 
     /// <summary>
@@ -4789,9 +4826,6 @@ public static class EnemyAI
         // The stunned turn increments MoveIndex on its way past, so -1 lands on BITE.
         enemy.MoveIndex = -1;
     }
-
-    /// <summary>`FabricatorNormal.Slots`: bot1 and bot2 stand ahead of the fabricator.</summary>
-    private const int FabricatorFrontSlots = 2;
 
     /// <summary>
     /// `SlumberPower` reaching zero runs `WakeUpMove`, which REMOVES the beetle's

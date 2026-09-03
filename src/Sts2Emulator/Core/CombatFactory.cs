@@ -902,7 +902,7 @@ public static class CombatFactory
                 // A placeholder, like every opening intent here: ChooseIntents overwrites
                 // it as soon as the roster is built, and it is the branch in SelectIntent
                 // that actually rolls.
-                CreateEnemy(KE.Fabricator, rng, new Intent(IntentType.Buff, 0)),
+                FabricatorInItsSlot(rng),
             ],
 
             ActOneEncounter.FrogKnight => [CreateFrogKnight(rng)],
@@ -1890,6 +1890,28 @@ public static class CombatFactory
         ApplyIntrinsicEnemyPowers(enemy);
         return enemy;
     }
+
+    /// <summary>
+    /// `FabricatorNormal.Slots` is `[bot1, bot2, fabricator, bot3, bot4]` -- the Fabricator
+    /// stands in the MIDDLE with two bots in front of it and two behind. It takes slot 2,
+    /// and `SpawnBot` fills the rest through `GetNextSlot`, which is the first FREE slot
+    /// and therefore refills one a dead bot vacated.
+    /// </summary>
+    private static EnemyState FabricatorInItsSlot(Random rng)
+    {
+        // A placeholder intent, like every opening intent here: ChooseIntents overwrites
+        // it as soon as the roster is built, and it is the branch in SelectIntent that
+        // actually rolls.
+        var fabricator = CreateEnemy(KE.Fabricator, rng, new Intent(IntentType.Buff, 0));
+        fabricator.Slot = FabricatorOwnSlot;
+        return fabricator;
+    }
+
+    /// <summary>The Fabricator's own index in `FabricatorNormal.Slots`.</summary>
+    public const int FabricatorOwnSlot = 2;
+
+    /// <summary>How many slots that encounter has in all.</summary>
+    public const int FabricatorSlotCount = 5;
 
     private static void ApplyIntrinsicEnemyPowers(EnemyState enemy)
     {

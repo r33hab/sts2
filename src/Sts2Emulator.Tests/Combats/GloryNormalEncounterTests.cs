@@ -563,6 +563,78 @@ public class FabricatorTests
         Fight.Encounter(CombatFactory.ActOneEncounter.Fabricator, ascension);
 
     /// <summary>
+    /// `FabricatorNormal.Slots` is `[bot1, bot2, fabricator, bot3, bot4]`: the Fabricator
+    /// stands in the MIDDLE, so its first two bots appear in FRONT of it and the next two
+    /// behind.
+    /// </summary>
+    [Fact]
+    public void ItsFirstTwoBotsStandInFrontOfIt()
+    {
+        var fight = Shop();
+        var fabricator = fight.State.Enemies[0];
+        Assert.Equal(CombatFactory.FabricatorOwnSlot, fabricator.Slot);
+
+        for (int spawn = 0; spawn < 4; spawn++)
+        {
+            EnemyAI.SummonFabricatorBots(
+                fabricator,
+                fight.State,
+                new Random(spawn),
+                includeDefensive: true
+            );
+        }
+
+        var slots = fight.State.Enemies.Select(e => e.Slot).ToList();
+        Assert.Equal([0, 1, 2, 3, 4], slots);
+        Assert.Equal(CombatFactory.FabricatorOwnSlot, fight.State.Enemies.IndexOf(fabricator));
+    }
+
+    /// <summary>
+    /// A dead bot FREES its slot, and the next one fills it -- in front, if that is where
+    /// the gap is. `Encounter.GetNextSlot` is the first slot with no LIVING creature in it.
+    /// </summary>
+    /// <remarks>
+    /// The old rule counted list positions instead: insert ahead of the Fabricator while
+    /// it sat below index 2, append after that. Right for a fight where nothing dies, and
+    /// wrong the moment one does -- the emulator went on appending to the back while the
+    /// game refilled the front. Glory's first sweep showed it as a roster in a different
+    /// ORDER with the Strength on the wrong creature; the intents and HP all agreed.
+    /// </remarks>
+    [Fact]
+    public void ADeadBotsSlotIsRefilledWhereItFell()
+    {
+        var fight = Shop();
+        var fabricator = fight.State.Enemies[0];
+        for (int spawn = 0; spawn < 2; spawn++)
+        {
+            EnemyAI.SummonFabricatorBots(
+                fabricator,
+                fight.State,
+                new Random(spawn),
+                includeDefensive: true
+            );
+        }
+
+        // The front bot falls.
+        var front = fight.State.Enemies.First(e => e.Slot == 0);
+        front.Hp = 0;
+
+        EnemyAI.SummonFabricatorBots(
+            fabricator,
+            fight.State,
+            new Random(9),
+            includeDefensive: true
+        );
+
+        var replacement = fight.State.Enemies.Single(e => e.Hp > 0 && e.Slot == 0);
+        Assert.NotSame(front, replacement);
+        // And it is in FRONT of the Fabricator in the roster, not appended behind it.
+        Assert.True(
+            fight.State.Enemies.IndexOf(replacement) < fight.State.Enemies.IndexOf(fabricator)
+        );
+    }
+
+    /// <summary>
     /// A ConditionalBranchState on CanFabricate — fewer than four living teammates — and
     /// only then a roll between FABRICATE and FABRICATING_STRIKE. With the bench full it
     /// DISINTEGRATES, a move the emulator never reached: it rolled the pair
