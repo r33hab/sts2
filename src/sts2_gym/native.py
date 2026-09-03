@@ -12,7 +12,7 @@ _LIB_NAMES = {
     "darwin": "Sts2Emulator.dylib",
 }
 _ALLOW_STALE_ENV = "STS2_ALLOW_STALE_NATIVE"
-_REQUIRED_NATIVE_API_VERSION = 26
+_REQUIRED_NATIVE_API_VERSION = 27
 _REQUIRED_RUN_NATIVE_API_VERSION = 19
 
 
@@ -177,6 +177,12 @@ _lib.Sts2_ObsMaxSelectionCandidates.argtypes = []
 
 _lib.Sts2_ObsOrbCapacityOffset.restype = ctypes.c_int
 _lib.Sts2_ObsOrbCapacityOffset.argtypes = []
+
+_lib.Sts2_ObsIncomingOffset.restype = ctypes.c_int
+_lib.Sts2_ObsIncomingOffset.argtypes = []
+
+_lib.Sts2_ObsMaxIncomingCards.restype = ctypes.c_int
+_lib.Sts2_ObsMaxIncomingCards.argtypes = []
 
 _lib.Sts2_ObsOrbOffset.restype = ctypes.c_int
 _lib.Sts2_ObsOrbOffset.argtypes = []
@@ -347,6 +353,13 @@ _lib.Sts2_GetPile.argtypes = [
     ctypes.c_int,
 ]
 
+_lib.Sts2_GetEnemies.restype = ctypes.c_int
+_lib.Sts2_GetEnemies.argtypes = [
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.c_int,
+]
+
 _lib.Sts2_Destroy.restype = None
 _lib.Sts2_Destroy.argtypes = [ctypes.c_int]
 
@@ -504,6 +517,8 @@ OBS_MAX_SELECTION_CANDIDATES: int = _lib.Sts2_ObsMaxSelectionCandidates()
 # it has left; neither is derivable from the type.
 OBS_ORB_CAPACITY_OFFSET: int = _lib.Sts2_ObsOrbCapacityOffset()
 OBS_ORB_OFFSET: int = _lib.Sts2_ObsOrbOffset()
+OBS_INCOMING_OFFSET: int = _lib.Sts2_ObsIncomingOffset()
+OBS_MAX_INCOMING_CARDS: int = _lib.Sts2_ObsMaxIncomingCards()
 OBS_MAX_ORBS: int = _lib.Sts2_ObsMaxOrbs()
 OBS_ORB_SLOT_SIZE: int = _lib.Sts2_ObsOrbSlotSize()
 RUN_OBS_SIZE: int = _lib.Sts2Run_ObsSize()
@@ -855,6 +870,25 @@ def get_pile(handle: int, pile: int | str = PILE_DRAW) -> list[tuple[int, bool]]
             raise ValueError(f"native rejected pile id {pile_id}")
         if count <= capacity:
             return [(buf[i * 2], bool(buf[i * 2 + 1])) for i in range(count)]
+        capacity = count
+
+
+def get_enemies(handle: int) -> list[tuple[int, int, int]]:
+    """The living enemy roster as (def_id, slot, hp) triples, in roster order.
+
+    The observation carries no def id -- an agent sees HP, block, intent and buffs, not
+    WHICH creature it faces. That is right for learning and useless for a differential
+    sweep, where a roster differing by one is a list of numbers until the creatures can be
+    named.
+    """
+    capacity = 16
+    while True:
+        buf = (ctypes.c_int * (capacity * 3))()
+        count = _lib.Sts2_GetEnemies(handle, buf, capacity)
+        if count <= capacity:
+            return [
+                (buf[i * 3], buf[i * 3 + 1], buf[i * 3 + 2]) for i in range(count)
+            ]
         capacity = count
 
 

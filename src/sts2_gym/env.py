@@ -291,6 +291,15 @@ class Sts2CombatEnv(gym.Env):
         assert self._handle is not None, "Call reset() before get_pile()"
         return native.get_pile(self._handle, pile)
 
+    def get_enemies(self) -> list[tuple[int, int, int]]:
+        """The living enemy roster as (def_id, slot, hp), in roster order.
+
+        Introspection for differential testing: the observation carries HP, block, intent
+        and buffs but no def id, so it cannot say WHICH creature stands in a slot.
+        """
+        assert self._handle is not None, "Call reset() before get_enemies()"
+        return native.get_enemies(self._handle)
+
     def close(self):
         if self._handle is not None:
             native.destroy(self._handle)

@@ -37,7 +37,7 @@ public static class NativeExports
 
     // v17: observation carries an open card selection (kind, count, candidates).
     // v23: the selection block's own offsets are exported, so a reader can decode it.
-    public const int NATIVE_API_VERSION = 26;
+    public const int NATIVE_API_VERSION = 27;
     private static ReadOnlySpan<int> StarterDeckIds =>
         [472, 472, 472, 472, 472, 131, 131, 131, 131, 30, 10001];
 
@@ -308,6 +308,17 @@ public static class NativeExports
 
     [UnmanagedCallersOnly(EntryPoint = "Sts2_ObsMaxOrbs")]
     public static int Sts2_ObsMaxOrbs() => CombatObservation.MaxOrbs;
+
+    /// <summary>
+    /// The incoming-cards block, which E449 appended AFTER the orb ring. Exposed because
+    /// the layout test asserted the orbs were last and silently stopped meaning anything
+    /// when they were not -- Python could not see this block to check it.
+    /// </summary>
+    [UnmanagedCallersOnly(EntryPoint = "Sts2_ObsIncomingOffset")]
+    public static int Sts2_ObsIncomingOffset() => CombatObservation.IncomingOffset;
+
+    [UnmanagedCallersOnly(EntryPoint = "Sts2_ObsMaxIncomingCards")]
+    public static int Sts2_ObsMaxIncomingCards() => CombatObservation.MaxIncomingCards;
 
     [UnmanagedCallersOnly(EntryPoint = "Sts2_ObsOrbSlotSize")]
     public static int Sts2_ObsOrbSlotSize() => CombatObservation.OrbSlotSize;
@@ -692,6 +703,35 @@ public static class NativeExports
     /// the first <paramref name="maxCards"/> are written, so callers can size and retry.
     /// Returns -1 for an unknown <paramref name="pileId"/>.
     /// </returns>
+    /// <summary>
+    /// The living enemy roster as (DefId, Slot, Hp) triples, in roster order.
+    /// </summary>
+    /// <remarks>
+    /// The observation deliberately carries no def id -- an agent sees HP, block, intent
+    /// and buffs, not WHICH creature it faces -- which is right for learning and useless
+    /// for a differential sweep. A roster that differs by one is a list of numbers unless
+    /// you can name the creatures, and on a fight whose roster changes every turn, like
+    /// the Fabricator's, the numbers do not say whether a bot was added, replaced or never
+    /// spawned. The live side reports names; this is the other half.
+    ///
+    /// Living only, matching `living_emu_enemies` on the Python side: the emulator keeps a
+    /// corpse at 0 HP so observation indices stay stable, and the game removes it.
+    /// </remarks>
+    [UnmanagedCallersOnly(EntryPoint = "Sts2_GetEnemies")]
+    public static unsafe int Sts2_GetEnemies(int handle, int* buf, int maxEnemies)
+    {
+        var enemies = _pool[handle]!.State.Enemies.Where(enemy => enemy.Hp > 0).ToList();
+        int written = Math.Min(enemies.Count, maxEnemies);
+        for (int i = 0; i < written; i++)
+        {
+            buf[i * 3] = enemies[i].DefId;
+            buf[i * 3 + 1] = enemies[i].Slot;
+            buf[i * 3 + 2] = enemies[i].Hp;
+        }
+
+        return enemies.Count;
+    }
+
     [UnmanagedCallersOnly(EntryPoint = "Sts2_GetPile")]
     public static unsafe int Sts2_GetPile(int handle, int pileId, int* buf, int maxCards)
     {

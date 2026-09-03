@@ -50,6 +50,7 @@ fi
 "$UV" run python -m unittest tests/python/test_sts2_gym.py
 "$UV" run python -m unittest tests/python/test_sweep_buff_map.py
 "$UV" run python -m unittest tests/python/test_trace_buff_slots.py
+"$UV" run python -m unittest tests/python/test_observation_layout.py
 "$UV" run python scripts/train.py --check --run-env
 "$UV" run python scripts/evaluate.py --episodes 2 --run-env --policy first-valid --max-episode-steps 20
 

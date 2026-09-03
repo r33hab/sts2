@@ -375,6 +375,28 @@ def wait_for_hand_to_reach(
     raise RuntimeError("live game never added the debug cards")
 
 
+@functools.cache
+def enemy_name_by_id() -> dict[int, str]:
+    """Map the emulator's numeric enemy ids onto the names the game prints."""
+    text = (_REPO / "src/Sts2Emulator/Generated/Enemies.g.cs").read_text(encoding="utf-8")
+    return {
+        int(m.group(1)): m.group(2)
+        for m in re.finditer(r'new EnemyDef\(Id: (\d+), Name: "([A-Za-z0-9]+)"', text)
+    }
+
+
+def driven_roster(env: Any) -> list[str]:
+    """Name the emulator's living roster, for the failing-row notes."""
+    names = enemy_name_by_id()
+    try:
+        roster = env.unwrapped.get_enemies()
+    except Exception:  # noqa: BLE001 - never fail a sweep over instrumentation
+        return []
+    return [
+        f"{names.get(def_id, f'<{def_id}>')}({hp})@{slot}" for def_id, slot, hp in roster
+    ]
+
+
 def driven_pile(env: Any, pile: str) -> list[tuple[str, bool]]:
     """One pile of the env the sweep is actually driving, in `compare_draw_pile` terms.
 
@@ -1021,6 +1043,10 @@ def drive_turns(
                     }
                     for e in live_summary.get("enemies") or []
                 ],
+                # The emulator's roster BY NAME, so a row that differs by one says which
+                # creature -- added, replaced, or never spawned. The live half has always
+                # had names; this is the other half.
+                "emu_roster": driven_roster(env),
                 "emu_enemies": [
                     {
                         "hp": e.get("hp"),
@@ -1362,6 +1388,10 @@ def capture_one(
                     f"{e.get('name')}({e.get('hp')})" for e in row["live_enemies"]
                 ),
             )
+            if row.get("emu_roster"):
+                notes.append(
+                    f"turn {row['turn']} emu  roster: " + ", ".join(row["emu_roster"]),
+                )
         if failed or row.get("rng_drift"):
             notes.append(
                 f"turn {row['turn']} enemy hp: "

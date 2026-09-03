@@ -1907,3 +1907,38 @@ FABRICATING_STRIKE's one, which the emulator already matches.
 The next thing to measure is WHEN the first bot is spawned on each side, which needs the
 emulator's per-turn roster recorded alongside the live one. The live half is named now; the
 emulator half is still anonymous, and the observation carries no def id to name it with.
+
+### Naming the emulator's roster, and a layout test that had stopped meaning anything
+
+`Sts2_GetEnemies` returns the living roster as (DefId, Slot, Hp), and failing sweep rows now
+print BOTH rosters by name. The observation deliberately carries no def id -- an agent sees
+HP, block, intent and buffs, not WHICH creature it faces, which is right for learning and
+useless for a differential sweep.
+
+It immediately moved the Fabricator investigation off a wrong track. The rosters are
+**identical through turn 6** -- same creatures, same HP, same slots -- so the spawning is not
+where this fight goes wrong:
+
+```
+turn 6  live: Noisebot(14), Stabbot(19), Fabricator(143), Zapbot(22)
+turn 6  emu : Noisebot(14)@0, Stabbot(19)@1, Fabricator(143)@2, Zapbot(22)@3
+turn 7  live: Noisebot(6), ...        emu : (no Noisebot -- it died)
+```
+
+What actually breaks is upstream: **the hands go out of step** -- `action 1 plays 'bash' on
+the emulator and 'defendironclad' live` -- so from turn 6 the two sides play different cards,
+and everything after that is downstream of a different game. The earliest signal is the
+missing `FRAIL_POWER` at turn 3, with the player HP already split 593 against 555, which is
+what a Frail'd player looks like: less block gained, more damage taken.
+
+So the remaining Fabricator work is a HAND divergence, not a roster one. That is a different
+investigation from the one I have been running, and worth stating plainly because three fixes
+in a row (E441, E472, and the block clear) were all roster-shaped and none of them touched it.
+
+**Separately: `test_observation_layout` had been failing and nobody knew.** It asserted the
+orb ring ended exactly at `OBS_SIZE` -- true until E449 appended the incoming-cards block
+after it. `lint-and-test.sh` runs only `test_sts2_gym.py`, so a broken invariant sat green in
+every run since. Python could not even see the incoming block to check it; that is now
+exported, the test pins the seam (orbs end where incoming begins) and the true end, and the
+file is wired into `lint-and-test.sh` along with the other three suites that were also
+missing from it.

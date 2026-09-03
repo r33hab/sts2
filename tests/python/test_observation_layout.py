@@ -66,8 +66,17 @@ class ObservationLayoutTests(unittest.TestCase):
             native.OBS_ORB_CAPACITY_OFFSET + 1,
             native.OBS_ORB_OFFSET,
         )
+        # The orb ring is no longer LAST. E449 appended the incoming-cards block after it,
+        # and this assertion still read `== OBS_SIZE` -- so it broke the day that landed and
+        # nobody saw it, because `lint-and-test.sh` runs only `test_sts2_gym.py`. It now
+        # pins the seam (orbs end exactly where incoming begins) and the true end.
         self.assertEqual(
             native.OBS_ORB_OFFSET + native.OBS_MAX_ORBS * native.OBS_ORB_SLOT_SIZE,
+            native.OBS_INCOMING_OFFSET,
+        )
+        self.assertEqual(
+            native.OBS_INCOMING_OFFSET
+            + native.OBS_MAX_INCOMING_CARDS * native.OBS_CARD_SLOT_SIZE,
             native.OBS_SIZE,
         )
 
