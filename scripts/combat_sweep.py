@@ -403,12 +403,14 @@ def executed_roster(env: Any) -> list[str]:
         flat = env.unwrapped.get_executed()
     except Exception:  # noqa: BLE001 - never fail a sweep over instrumentation
         return []
-    # (def id, intent type, magnitude) triples -- WHAT it executed with, not merely that it
-    # was reached. A creature the loop calls and that then does nothing is a different bug
-    # from one the loop skips.
+    # Five ints per creature: def id, intent type, magnitude, and the deck size BEFORE and
+    # AFTER the call. A creature the loop reaches that then changes nothing is a different
+    # bug from one the loop skips, and the deck delta is what tells them apart.
     return [
-        f"{names.get(flat[i], f'<{flat[i]}>')}/{kinds.get(flat[i + 1], flat[i + 1])}{flat[i + 2]}"
-        for i in range(0, len(flat) - 2, 3)
+        f"{names.get(flat[i], f'<{flat[i]}>')}"
+        f"/{kinds.get(flat[i + 1], flat[i + 1])}{flat[i + 2]}"
+        f"/deck{flat[i + 3]}->{flat[i + 4]}"
+        for i in range(0, len(flat) - 4, 5)
     ]
 
 

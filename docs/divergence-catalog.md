@@ -2060,3 +2060,41 @@ Each step is verified and the conclusion is false, which means one of the verifi
 measuring something subtly other than what the sweep runs. That is worth stating rather than
 resolving badly -- the next move is to record the deck SIZE inside the execution entry, so
 the record says not only what was called and with what, but what changed.
+
+### E473, E474 -- the Fabricator's bots were stunned, and corpses blocked their replacements
+
+Carrying the deck size in the execution record ended the investigation in one reading:
+
+```
+turn 6 emu executed: Noisebot/Debuff2/deck11->11
+```
+
+Reached, right intent, nothing changed. Amplifying the Noisebot's effect to seven cards
+changed nothing either, and a marker at the `case IntentType.Debuff` ROUTING point never
+fired -- which leaves only the early return above the switch.
+
+**E473 -- fabricated bots were created `stunned: true`.** The enemy loop iterates a snapshot
+taken before the Fabricator acted, so a new bot already misses the turn it arrives in. The
+stun made it miss the NEXT turn as well: **the same rule applied twice**. Every bot sat out
+its first real turn -- the Guardbot's block never reached its Fabricator, the Stabbot's Frail
+never landed, the Noisebot never made its noise. `SpawnBot` in the game is a plain
+`CreatureCmd.Add` and a `MinionPower`, with no `CreatureCmd.Stun` anywhere.
+
+That one flag was the whole hand divergence. With it gone the piles match exactly --
+`[6,0,4,5]` on both sides -- and the cards each side plays line up again.
+
+**E474 -- the spawn was gated on the raw roster, corpses included.** `state.Enemies.Count < 6`
+counts the dead the emulator keeps at 0 HP for stable observation indices. Once enough bots
+had died the Fabricator announced FABRICATING_STRIKE and no bot arrived. The game has no such
+count: `GetNextSlot` asks which slot no LIVING creature stands in, and a corpse holds no slot.
+Counting living fixed it, and the rosters now match creature for creature.
+
+**And one further thing, which matters beyond this fight.** `CombatObservation.MaxEnemies` is
+6 and the observation writes `s.Enemies[0..6]` -- the RAW roster. The emulator keeps corpses
+in that list and the game removes them, so in a spawner fight the corpses push LIVING
+creatures past the sixth slot and **the observation drops them entirely**. At turn 9 the state
+holds four living creatures and the observation reports three. That is not a sweep artefact:
+an agent training on this fight cannot see an enemy that is attacking it. Recorded rather than
+fixed here, because the corpse-keeping is deliberate -- it is what gives the observation
+stable indices -- and choosing between stable indices and complete ones is a design decision,
+not a bug fix.

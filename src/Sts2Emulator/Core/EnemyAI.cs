@@ -37,12 +37,6 @@ public static class EnemyAI
 
     public static void ExecuteIntent(EnemyState enemy, CombatState state, Random rng)
     {
-        // Recorded before any of the early returns below, so "the loop called it" and "it
-        // did something" stay separate questions.
-        state.ExecutedThisEnemyTurn.Add(enemy.DefId);
-        state.ExecutedThisEnemyTurn.Add((int)enemy.CurrentIntent.Type);
-        state.ExecutedThisEnemyTurn.Add(enemy.CurrentIntent.Magnitude);
-
         // Enemy data is ascension-dependent; read the run's level once here so every
         // damage and buff below picks the same branch the live game would.
         int ascension = state.AscensionLevel;
@@ -4610,29 +4604,35 @@ public static class EnemyAI
             return chosen;
         }
 
-        if (includeDefensive && state.Enemies.Count < 6)
+        // LIVING, not the raw roster. The emulator keeps a corpse in `Enemies` at 0 HP so
+        // an agent's observation has stable indices, and counting those blocked the spawn
+        // once enough bots had died -- the Fabricator announced FABRICATING_STRIKE and no
+        // bot arrived. The game has no such count: `GetNextSlot` asks which SLOT no LIVING
+        // creature stands in, and a corpse holds no slot.
+        int living = state.Enemies.Count(other => other.Hp > 0);
+        if (includeDefensive && living < 6)
         {
             int defensive = PickBot(KE.Guardbot, KE.Noisebot);
+            // NOT stunned. `SpawnBot` is a plain `CreatureCmd.Add` and a `MinionPower`,
+            // with no `CreatureCmd.Stun` anywhere -- a fabricated bot simply misses the
+            // turn it arrives in, because the enemy loop iterates a snapshot taken before
+            // the Fabricator acted. Stunning it as well made it miss the NEXT turn too, so
+            // every bot sat out its first real turn: the Guardbot's block never reached its
+            // Fabricator, the Stabbot's Frail never landed, and the Noisebot never made its
+            // noise. The snapshot already models the rule; this was the same rule twice.
             var bot = CreateEnemy(
                 defensive,
                 rng,
                 BotIntent(defensive, state.AscensionLevel),
-                stunned: true,
                 state: state
             );
             BuffSystem.Apply(bot.Buffs, BuffId.Minion, 1);
             InsertFabricatorBot(state, enemy, bot);
         }
-        if (state.Enemies.Count < 6)
+        if (state.Enemies.Count(other => other.Hp > 0) < 6)
         {
             int aggro = PickBot(KE.Zapbot, KE.Stabbot);
-            var bot = CreateEnemy(
-                aggro,
-                rng,
-                BotIntent(aggro, state.AscensionLevel),
-                stunned: true,
-                state: state
-            );
+            var bot = CreateEnemy(aggro, rng, BotIntent(aggro, state.AscensionLevel), state: state);
             BuffSystem.Apply(bot.Buffs, BuffId.Minion, 1);
             InsertFabricatorBot(state, enemy, bot);
         }

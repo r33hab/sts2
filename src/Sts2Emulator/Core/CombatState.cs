@@ -446,8 +446,9 @@ public sealed class CombatState
     public List<CardInstance> StolenBackCards = [];
 
     /// <summary>
-    /// The def ids whose intents ACTUALLY executed during the enemy turn just past, in the
-    /// order the loop reached them. Cleared as the enemy phase begins.
+    /// What the enemy loop ACTUALLY called during the turn just past, five ints per
+    /// creature: def id, intent type, intent magnitude, and the player's deck size before
+    /// and after. Cleared as the enemy phase begins.
     /// </summary>
     /// <remarks>
     /// Introspection for differential testing, not gameplay. The sweep can already see

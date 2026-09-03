@@ -1065,7 +1065,19 @@ public static class CombatEngine
                 }
             }
 
+            // Recorded AROUND the call, not inside it: `ExecuteIntent` has an early
+            // return, and a before/after pair written inside would be split by it. The
+            // caller is also the only place that knows the call happened at all, which is
+            // the distinction this record exists to draw -- reached, versus did something.
+            int deckBefore = PlayerCardCount(state);
+            state.ExecutedThisEnemyTurn.Add(enemy.DefId);
+            state.ExecutedThisEnemyTurn.Add((int)enemy.CurrentIntent.Type);
+            state.ExecutedThisEnemyTurn.Add(enemy.CurrentIntent.Magnitude);
+            state.ExecutedThisEnemyTurn.Add(deckBefore);
+
             EnemyAI.ExecuteIntent(enemy, state, rng);
+
+            state.ExecutedThisEnemyTurn.Add(PlayerCardCount(state));
         }
 
         // A Gas Bomb kills itself as it explodes and leaves the roster. Left in place at
@@ -2720,6 +2732,10 @@ public static class CombatEngine
     /// remembering what the player held when the round began: a stack that grew during
     /// the round was applied during it, so this tick is the one it skips.
     /// </summary>
+    /// <summary>Every card the player owns, wherever it is standing.</summary>
+    private static int PlayerCardCount(CombatState state) =>
+        state.DrawPile.Count + state.DiscardPile.Count + state.Hand.Count + state.ExhaustPile.Count;
+
     private static void TickDurationDebuffs(CombatState state)
     {
         foreach (var enemy in state.Enemies.ToArray())

@@ -699,6 +699,74 @@ public class FabricatorTests
     }
 
     /// <summary>
+    /// A fabricated bot acts on its FIRST eligible turn -- it misses only the turn it
+    /// arrives in, because the enemy loop iterates a snapshot taken before the Fabricator
+    /// acted.
+    /// </summary>
+    /// <remarks>
+    /// The bots were created `stunned: true`, which made them miss the NEXT turn as well --
+    /// the same rule applied twice. Every bot sat out its first real turn: the Guardbot's
+    /// block never reached its Fabricator, the Stabbot's Frail never landed, and the
+    /// Noisebot never made its noise. `SpawnBot` in the game is a plain `CreatureCmd.Add`
+    /// and a `MinionPower`, with no `CreatureCmd.Stun` anywhere.
+    ///
+    /// Found by recording what the enemy loop CALLS against what changed:
+    /// `Noisebot/Debuff2/deck11->11` -- reached, right intent, nothing added -- which is
+    /// only possible through the stunned early return.
+    /// </remarks>
+    [Fact]
+    public void AFabricatedBotIsNotStunned()
+    {
+        var fight = Shop();
+        var fabricator = fight.State.Enemies[0];
+        EnemyAI.SummonFabricatorBots(
+            fabricator,
+            fight.State,
+            new Random(1),
+            includeDefensive: true
+        );
+
+        Assert.All(
+            fight.State.Enemies.Where(e => e != fabricator),
+            bot => Assert.Equal(0, BuffSystem.Get(bot.Buffs, BuffId.Stunned))
+        );
+    }
+
+    /// <summary>
+    /// And it acts: a spawned Noisebot adds its two Dazed on the turn after it arrives,
+    /// not the turn after that.
+    /// </summary>
+    [Fact]
+    public void ASpawnedNoisebotMakesItsNoiseOnItsFirstTurn()
+    {
+        var fight = Shop();
+        var fabricator = fight.State.Enemies[0];
+        fight.State.PlayerHp = 999;
+
+        var noise = new EnemyState
+        {
+            DefId = KE.Noisebot,
+            Hp = 20,
+            MaxHp = 20,
+            Slot = 0,
+            CurrentIntent = new Intent(IntentType.Debuff, 2),
+        };
+        fight.State.Enemies.Insert(0, noise);
+
+        int Cards() =>
+            fight.State.DrawPile.Count
+            + fight.State.DiscardPile.Count
+            + fight.State.Hand.Count
+            + fight.State.ExhaustPile.Count;
+        int before = Cards();
+
+        fabricator.Hp = 999;
+        fight.EndTurn();
+
+        Assert.Equal(before + 2, Cards());
+    }
+
+    /// <summary>
     /// A ConditionalBranchState on CanFabricate — fewer than four living teammates — and
     /// only then a roll between FABRICATE and FABRICATING_STRIKE. With the bench full it
     /// DISINTEGRATES, a move the emulator never reached: it rolled the pair
