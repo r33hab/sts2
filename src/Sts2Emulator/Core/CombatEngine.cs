@@ -1057,6 +1057,10 @@ public static class CombatEngine
         // extra attacker per Bloat where the live game shows one bomb appear and go.
         state.Enemies.RemoveAll(e => e.Hp <= 0 && e.DefId == KE.GasBomb);
 
+        // Before the duration tick, and over every LIVING enemy rather than the ones that
+        // acted: `HighVoltagePower.AfterSideTurnEnd` pays each PARTICIPANT, which includes
+        // a bot spawned during this very turn.
+        EnemyAI.ApplyEndOfEnemySideTurn(state);
         TickDurationDebuffs(state);
         EnemyAI.ToggleNemesisIntangible(state);
 

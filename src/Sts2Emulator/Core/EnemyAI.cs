@@ -64,7 +64,6 @@ public static class EnemyAI
                 enemy.MoveIndex++;
             }
 
-            ApplyHighVoltageEndOfEnemyTurn(enemy);
             RestoreTemporaryEnemyStrength(enemy);
             return;
         }
@@ -772,8 +771,26 @@ public static class EnemyAI
             BuffSystem.Apply(enemy.Buffs, BuffId.Vigor, -vigorSpentThisTurn);
         }
 
-        ApplyHighVoltageEndOfEnemyTurn(enemy);
         RestoreTemporaryEnemyStrength(enemy);
+    }
+
+    /// <summary>
+    /// `HighVoltagePower.AfterSideTurnEnd` and `TerritorialPower`'s equivalent, for every
+    /// PARTICIPANT of the enemy side turn.
+    /// </summary>
+    /// <remarks>
+    /// Participants, not actors. This used to run inside `ExecuteIntent`, so only a
+    /// creature that took a turn got its Strength -- and a bot the Fabricator spawned
+    /// DURING the enemy turn had not acted, so it waited a turn the game does not make it
+    /// wait. Glory's sweep showed the Zapbot's Strength one application behind on every
+    /// turn after it arrived.
+    /// </remarks>
+    internal static void ApplyEndOfEnemySideTurn(CombatState state)
+    {
+        foreach (var enemy in state.Enemies.Where(enemy => enemy.Hp > 0))
+        {
+            ApplyHighVoltageEndOfEnemyTurn(enemy);
+        }
     }
 
     private static void ApplyHighVoltageEndOfEnemyTurn(EnemyState enemy)

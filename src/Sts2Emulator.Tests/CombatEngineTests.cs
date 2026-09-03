@@ -961,6 +961,7 @@ public class CombatEngineTests
         EnemyAI.ExecuteIntent(state.Enemies[2], state, new Random(0));
         EnemyAI.ExecuteIntent(state.Enemies[3], state, new Random(0));
         EnemyAI.ExecuteIntent(state.Enemies[4], state, new Random(0));
+        EnemyAI.ApplyEndOfEnemySideTurn(state);
 
         Assert.Equal(15, fabricator.Block);
         Assert.Equal(
@@ -1193,8 +1194,36 @@ public class CombatEngineTests
         state.Enemies = [byrdonis];
 
         EnemyAI.ExecuteIntent(byrdonis, state, new Random(0));
+        // At the end of the SIDE turn, not inside the creature's own action.
+        // `HighVoltagePower.AfterSideTurnEnd` and Territorial's equivalent pay every
+        // PARTICIPANT, which is why they moved out of `ExecuteIntent` -- a creature that
+        // was stunned, or spawned mid-turn, is a participant and had been missing out.
+        EnemyAI.ApplyEndOfEnemySideTurn(state);
 
         Assert.Equal(1, BuffSystem.Get(byrdonis.Buffs, BuffId.Strength));
+    }
+
+    /// <summary>
+    /// A creature that did NOT act is still a participant, so it still gains.
+    /// </summary>
+    [Fact]
+    public void HighVoltagePaysACreatureThatNeverActed()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        var zapbot = new EnemyState
+        {
+            DefId = KE.Zapbot,
+            Hp = 20,
+            MaxHp = 20,
+            CurrentIntent = new Intent(IntentType.Attack, 14),
+            Buffs = [new BuffState(BuffId.HighVoltage, 2)],
+        };
+        state.Enemies = [zapbot];
+
+        // No ExecuteIntent at all: this is the bot the Fabricator spawned this turn.
+        EnemyAI.ApplyEndOfEnemySideTurn(state);
+
+        Assert.Equal(2, BuffSystem.Get(zapbot.Buffs, BuffId.Strength));
     }
 
     [Fact]

@@ -1768,3 +1768,23 @@ list -- the one difference between the two representations that this code has to
 Glory's sweep is what closed it. E441 had been catalogued as partial since it was written,
 with the front-slot half fixed and the refill half described but unmodelled; nothing was
 going to find the second half by reading, because the code reads correctly until a bot dies.
+
+### E469 -- High Voltage paid the actors, not the participants
+
+`HighVoltagePower.AfterSideTurnEnd` gives its owner Strength `if participants.Contains(Owner)`
+-- every creature taking part in the side turn, whether or not it acted. The emulator applied
+it inside `ExecuteIntent`, so only a creature that took a turn was paid.
+
+For anything that acts every turn the two are identical, which is why this survived. The
+difference is the creatures that DON'T act: **a bot the Fabricator spawns during the enemy
+turn has not acted, but it is a participant when that turn ends**, so the game pays it
+immediately and the emulator made it wait a turn. Glory's sweep showed the Zapbot's Strength
+one application behind from the moment it arrived -- live 2 against 0, then 4 against 2.
+
+The same argument covers a STUNNED creature, which the old placement also skipped: it was in
+the stunned branch of `ExecuteIntent`, so a stunned Byrdonis lost its Territorial Strength for
+that turn. Nothing had noticed, because no test stunned one.
+
+Two existing tests asserted the old placement by calling `ExecuteIntent` directly. They now
+call `ApplyEndOfEnemySideTurn`, and a third was added for the case that matters -- a creature
+that never acted at all still gains.
