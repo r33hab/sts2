@@ -55,6 +55,10 @@ fi
 # The full-run ground truths: every retained live run replayed through the emulator and
 # compared snapshot for snapshot. Fails on any divergence not recorded in the manifest.
 "$UV" run python scripts/check_run_traces.py
+
+# The powers ledger: every claim the emulator makes about a power's behaviour, checked
+# against the digest of the source it was read from. Fails when a power has changed.
+"$UV" run python scripts/audit_powers.py
 "$UV" run python scripts/train.py --check --run-env
 "$UV" run python scripts/evaluate.py --episodes 2 --run-env --policy first-valid --max-episode-steps 20
 

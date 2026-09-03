@@ -23,5 +23,9 @@ echo "=== Step 6: Full-run ground truths ==="
 # trace_real_game_run.py and the fixture diff IS the patch's behavioural changelog -- or a
 # genuine emulator regression. The manifest in check_run_traces.py says which are expected.
 python "$REPO_ROOT/scripts/check_run_traces.py"
+echo "=== Step 7: Powers ledger ==="
+# A power whose body changed upstream produces no data diff, no test failure and no sweep
+# divergence unless a captured run happens to touch it. This is the thing that says so.
+python "$REPO_ROOT/scripts/audit_powers.py"
 
 echo "=== Done ==="

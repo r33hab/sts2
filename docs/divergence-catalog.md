@@ -2178,3 +2178,36 @@ in a Bottle the emulator keeps, and a Fire Potion it never gains.
 The manifest fails BOTH ways. A fixture that starts diverging is a regression; a fixture that
 stops is a fix, and the run fails asking for the entry to be removed. It proved itself on the
 first run by catching a fifth divergence I had seen and not recorded.
+
+### The powers ledger -- answering "would we know if the game changed?"
+
+`Models.Powers/` was 261 files of behaviour with no ledger, while cards, relics and monster
+move machines all had one. That was the gap: **a power whose body changes upstream produces
+no data diff, no test failure, and no sweep divergence unless a captured run happens to touch
+it.**
+
+It is not a hypothetical gap. E459, E460, E467, E469, E470, E473 and E475 were every one of
+them found by reading a file in that directory, and each fix rests on a reading that nothing
+was watching.
+
+`audit_powers.py` follows `audit_enemy_moves.py` exactly: a `READ` table where each entry is
+a claim that the emulator expresses this power's behaviour, made against the digest of the
+source it was read from. Comments are stripped and whitespace collapsed, so a reformat is not
+a change; everything else is kept, because narrowing further would mean deciding in advance
+which lines can matter -- which is the judgement the ledger exists to re-check.
+
+Seeded with the 18 powers read this session, each alongside a test. **199 of 217 modelled
+powers remain unread**, and `--unread` lists them: that is the honest backlog, and it is a
+number that can now go down deliberately rather than by luck.
+
+**Verified against the exact question that prompted it.** Editing `AdaptablePower` so the
+Test Subject becomes targetable -- one line, `return !IsReviving` to `return true` -- makes
+the audit say:
+
+```
+DRIFTED AdaptablePower: read at 5c50c9ddf9cb, now 13219015d98e
+  -- vetoes removal; the Test Subject is NOT hittable between forms
+```
+
+and exit non-zero. It runs in `lint-and-test.sh` and as step 7 of `patch_update.sh`, so the
+next patch that touches a read power stops the build and names what has to be re-read.
