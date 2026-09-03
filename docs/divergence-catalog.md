@@ -2211,3 +2211,30 @@ DRIFTED AdaptablePower: read at 5c50c9ddf9cb, now 13219015d98e
 
 and exit non-zero. It runs in `lint-and-test.sh` and as step 7 of `patch_update.sh`, so the
 next patch that touches a read power stops the build and names what has to be re-read.
+
+### The remaining observation caps: latent, not silent
+
+Three caps have the same shape as the corpse overflow that hid a living enemy:
+`MaxEnemyBuffs = 5`, `MaxPlayerBuffs = 10`, `MaxHand = 10`. A creature with a sixth power
+loses it from the observation with no error.
+
+Measured against the 32 retained runs rather than guessed at:
+
+| cap | most observed | headroom |
+|---|---|---|
+| `MaxEnemyBuffs = 5` | 4, on a Gremlin Merc | **one** |
+| `MaxPlayerBuffs = 10` | 3 | seven |
+| `MaxHand = 10` | 7 | three |
+
+So no captured run exceeds them today, and the enemy-buff cap is the tight one -- a player
+who lands Vulnerable and Weak on a creature already carrying four would overflow it.
+
+**The important change is that overflow is no longer SILENT.** The enemy-power and
+player-power comparisons added today read the same capped slots, so a dropped buff shows as a
+power divergence rather than as agreement -- verified directly by feeding the comparator a
+creature with six powers against a five-slot emulator, which fails as it should.
+
+That is why the caps are being left alone. Raising them costs an API bump and observation
+width to fix a problem no run exhibits, and the case for raising `MaxEnemyBuffs` should come
+from a sweep that actually overflows it. The corpse bug was worth fixing because it was
+silent AND happening; this is neither yet.
