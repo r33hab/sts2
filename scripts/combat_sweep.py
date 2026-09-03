@@ -1057,6 +1057,9 @@ def drive_turns(
                 # creature -- added, replaced, or never spawned. The live half has always
                 # had names; this is the other half.
                 "emu_roster": driven_roster(env),
+                # The emulator's DISCARD, named. A status card the emulator never gained
+                # is invisible in counts alone once the hands have already drifted apart.
+                "emu_discard": [name for name, _ in driven_pile(env, "discard")],
                 "emu_enemies": [
                     {
                         "hp": e.get("hp"),
@@ -1402,6 +1405,10 @@ def capture_one(
             if row.get("emu_roster"):
                 notes.append(
                     f"turn {row['turn']} emu  roster: " + ", ".join(row["emu_roster"]),
+                )
+            if row.get("emu_discard"):
+                notes.append(
+                    f"turn {row['turn']} emu  discard: " + ", ".join(row["emu_discard"]),
                 )
             if not row["hand_match"]:
                 # Both hands in ONE vocabulary. Pile counts agreeing says nothing about

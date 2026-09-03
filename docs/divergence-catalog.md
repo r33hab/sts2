@@ -1983,3 +1983,37 @@ So the Noisebot exists, holds the right intent, and does not execute. The next s
 instrument WHICH enemies the emulator's turn loop actually executes, rather than which ones
 it holds -- every check so far has confirmed the creature is present and the effect is
 correct, which leaves only the call.
+
+### The Noisebot is present, correct, and silent -- and one ordering fact reframes it
+
+The emulator's DISCARD is now printed on failing rows, which settles the last ambiguity:
+
+```
+turn 6 emu  roster : Noisebot(14)@0, Stabbot(19)@1, Fabricator(143)@2, Zapbot(22)@3
+turn 6 emu  discard: DefendIronclad, StrikeIronclad, DefendIronclad, StrikeIronclad, StrikeIronclad
+```
+
+The Noisebot stands in slot 0 at 14 HP and there is **no Dazed anywhere in the emulator's
+deck** -- eleven cards, the starter deck exactly, every turn of the fight.
+
+Everything about the creature and the effect has now been checked directly:
+- it is a Noisebot (`Sts2_GetEnemies` reports the def id, not a guess from HP);
+- it announces `Debuff 2`;
+- `ApplyDebuffIntent` has no early return before its case, and `AddStatus` has no cap;
+- the DESTINATIONS match the game -- one Dazed to Discard, one at a random Draw position;
+- the whole path WORKS through `CombatEngine.Step`, the same entry the env uses: spawn a
+  Noisebot through the real summon path and the deck grows by two every turn from the one
+  after it arrives;
+- the sweep steps the emulator with ITS OWN end-turn index, so H17 is not back.
+
+**One ordering fact reframes what is left.** A sweep row is built AFTER `env.step` runs the
+emulator's enemy turn, so the intents and roster in row N describe the state at the END of
+enemy turn N -- not the start. A Noisebot first appearing in row 5 was therefore spawned
+DURING enemy turn 5, and its first action is enemy turn 6, which row 6 would show. Row 6
+shows no Dazed.
+
+That leaves the call itself, and it is worth noting a pure-emulator run of this encounter
+never spawns a Noisebot at all -- the bot only appears when the live game's card plays drive
+the fight, which is why no unit test has ever exercised this creature in this encounter. The
+next instrument is a per-turn record of which enemies the loop actually EXECUTES, as opposed
+to which it holds; every other question about this bot has now been answered.
