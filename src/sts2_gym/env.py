@@ -300,6 +300,15 @@ class Sts2CombatEnv(gym.Env):
         assert self._handle is not None, "Call reset() before get_enemies()"
         return native.get_enemies(self._handle)
 
+    def get_executed(self) -> list[int]:
+        """Def ids whose intents executed during the enemy turn just past, in order.
+
+        Introspection for differential testing: which creatures the turn loop CALLED, as
+        opposed to which ones the roster holds.
+        """
+        assert self._handle is not None, "Call reset() before get_executed()"
+        return native.get_executed(self._handle)
+
     def close(self):
         if self._handle is not None:
             native.destroy(self._handle)

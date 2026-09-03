@@ -395,6 +395,23 @@ def named_card(card_id: Any) -> str:
     return str(compare_draw_pile.card_name_by_id().get(resolved, resolved))
 
 
+def executed_roster(env: Any) -> list[str]:
+    """Name the creatures whose intents the emulator's turn loop actually executed."""
+    names = enemy_name_by_id()
+    kinds = {0: "Attack", 1: "Defend", 2: "Buff", 3: "Debuff", 4: "Unknown"}
+    try:
+        flat = env.unwrapped.get_executed()
+    except Exception:  # noqa: BLE001 - never fail a sweep over instrumentation
+        return []
+    # (def id, intent type, magnitude) triples -- WHAT it executed with, not merely that it
+    # was reached. A creature the loop calls and that then does nothing is a different bug
+    # from one the loop skips.
+    return [
+        f"{names.get(flat[i], f'<{flat[i]}>')}/{kinds.get(flat[i + 1], flat[i + 1])}{flat[i + 2]}"
+        for i in range(0, len(flat) - 2, 3)
+    ]
+
+
 def driven_roster(env: Any) -> list[str]:
     """Name the emulator's living roster, for the failing-row notes."""
     names = enemy_name_by_id()
@@ -1060,6 +1077,10 @@ def drive_turns(
                 # The emulator's DISCARD, named. A status card the emulator never gained
                 # is invisible in counts alone once the hands have already drifted apart.
                 "emu_discard": [name for name, _ in driven_pile(env, "discard")],
+                # Which creatures the emulator's turn loop actually CALLED. The roster says
+                # what it holds and the intents say what they announce; neither says whether
+                # the loop reached them.
+                "emu_executed": executed_roster(env),
                 "emu_enemies": [
                     {
                         "hp": e.get("hp"),
@@ -1405,6 +1426,11 @@ def capture_one(
             if row.get("emu_roster"):
                 notes.append(
                     f"turn {row['turn']} emu  roster: " + ", ".join(row["emu_roster"]),
+                )
+            if row.get("emu_executed") is not None:
+                notes.append(
+                    f"turn {row['turn']} emu  executed: "
+                    + (", ".join(row["emu_executed"]) or "<none>"),
                 )
             if row.get("emu_discard"):
                 notes.append(

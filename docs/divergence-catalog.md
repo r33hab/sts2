@@ -2017,3 +2017,46 @@ never spawns a Noisebot at all -- the bot only appears when the live game's card
 the fight, which is why no unit test has ever exercised this creature in this encounter. The
 next instrument is a per-turn record of which enemies the loop actually EXECUTES, as opposed
 to which it holds; every other question about this bot has now been answered.
+
+### The execution record, and a contradiction worth writing down
+
+`Sts2_GetExecuted` records every creature whose `ExecuteIntent` the enemy loop CALLED, with
+the intent it held, cleared as each enemy phase begins. Recorded at the top of the function,
+before its one early return, so **"the loop reached it" and "it did something" stay separate
+questions** -- which is precisely the distinction every earlier instrument blurred.
+
+It answered the Fabricator's roster question immediately:
+
+```
+turn 5 roster  : Noisebot(20)@0, Stabbot(19)@1, Fabricator(143)@2, Zapbot(22)@3
+turn 5 executed: Fabricator/Buff0, Zapbot/Attack14
+```
+
+Only two of four -- correct. The old Stabbot died during the player's turn, and the Noisebot
+and new Stabbot were spawned by that very FABRICATE, so neither is in the phase's snapshot.
+Nothing wrong there, and it is where several of my timing theories died.
+
+It also confirms E472 in passing: on a pure-emulator run the Fabricator shows
+`Attack18` (FABRICATING_STRIKE) on the turn a Zapbot appears and `Attack11`
+(DISINTEGRATE) on the turns nothing does.
+
+**And then it contradicts itself.** On turn 6:
+
+```
+turn 6 executed: Noisebot/Debuff2, Stabbot/Attack11, Fabricator/Attack11, Zapbot/Attack14
+turn 6 discard : DefendIronclad, StrikeIronclad, DefendIronclad, StrikeIronclad, StrikeIronclad
+turn 6 totals  : emu 11 cards, live 13
+```
+
+The Noisebot was CALLED, with the RIGHT intent, and no Dazed exists anywhere in the
+emulator's deck. Every link in that chain has now been checked directly: the def id constant
+matches the generated data (57 both sides); the `switch` on intent type is thirty lines below
+the record with no reassignment between; `case IntentType.Debuff` calls `ApplyDebuffIntent`;
+its `case KE.Noisebot` sits at the top level of that switch and adds one Dazed to the discard
+and one at a random draw position; `AddStatus` has no cap; and driving the same
+`CombatEngine.Step` entry through the real summon path grows the deck by two every turn.
+
+Each step is verified and the conclusion is false, which means one of the verifications is
+measuring something subtly other than what the sweep runs. That is worth stating rather than
+resolving badly -- the next move is to record the deck SIZE inside the execution entry, so
+the record says not only what was called and with what, but what changed.

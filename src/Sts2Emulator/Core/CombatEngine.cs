@@ -968,6 +968,8 @@ public static class CombatEngine
             }
         }
 
+        state.ExecutedThisEnemyTurn.Clear();
+
         // A reviving illusion is at 0 HP and still takes its turn -- that turn IS the
         // revive. It has to stay in the roster's own order while it does, so it comes back
         // where it stood rather than at one end.

@@ -353,6 +353,13 @@ _lib.Sts2_GetPile.argtypes = [
     ctypes.c_int,
 ]
 
+_lib.Sts2_GetExecuted.restype = ctypes.c_int
+_lib.Sts2_GetExecuted.argtypes = [
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.c_int,
+]
+
 _lib.Sts2_GetEnemies.restype = ctypes.c_int
 _lib.Sts2_GetEnemies.argtypes = [
     ctypes.c_int,
@@ -889,6 +896,17 @@ def get_enemies(handle: int) -> list[tuple[int, int, int]]:
             return [
                 (buf[i * 3], buf[i * 3 + 1], buf[i * 3 + 2]) for i in range(count)
             ]
+        capacity = count
+
+
+def get_executed(handle: int) -> list[int]:
+    """Def ids whose intents executed during the enemy turn just past, in order."""
+    capacity = 16
+    while True:
+        buf = (ctypes.c_int * capacity)()
+        count = _lib.Sts2_GetExecuted(handle, buf, capacity)
+        if count <= capacity:
+            return [buf[i] for i in range(count)]
         capacity = count
 
 

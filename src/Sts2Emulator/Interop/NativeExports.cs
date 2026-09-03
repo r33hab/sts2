@@ -717,6 +717,22 @@ public static class NativeExports
     /// Living only, matching `living_emu_enemies` on the Python side: the emulator keeps a
     /// corpse at 0 HP so observation indices stay stable, and the game removes it.
     /// </remarks>
+    /// <summary>
+    /// The def ids whose intents executed during the enemy turn just past, in order.
+    /// </summary>
+    [UnmanagedCallersOnly(EntryPoint = "Sts2_GetExecuted")]
+    public static unsafe int Sts2_GetExecuted(int handle, int* buf, int maxIds)
+    {
+        var executed = _pool[handle]!.State.ExecutedThisEnemyTurn;
+        int written = Math.Min(executed.Count, maxIds);
+        for (int i = 0; i < written; i++)
+        {
+            buf[i] = executed[i];
+        }
+
+        return executed.Count;
+    }
+
     [UnmanagedCallersOnly(EntryPoint = "Sts2_GetEnemies")]
     public static unsafe int Sts2_GetEnemies(int handle, int* buf, int maxEnemies)
     {

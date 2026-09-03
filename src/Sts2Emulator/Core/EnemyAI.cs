@@ -37,6 +37,12 @@ public static class EnemyAI
 
     public static void ExecuteIntent(EnemyState enemy, CombatState state, Random rng)
     {
+        // Recorded before any of the early returns below, so "the loop called it" and "it
+        // did something" stay separate questions.
+        state.ExecutedThisEnemyTurn.Add(enemy.DefId);
+        state.ExecutedThisEnemyTurn.Add((int)enemy.CurrentIntent.Type);
+        state.ExecutedThisEnemyTurn.Add(enemy.CurrentIntent.Magnitude);
+
         // Enemy data is ascension-dependent; read the run's level once here so every
         // damage and buff below picks the same branch the live game would.
         int ascension = state.AscensionLevel;

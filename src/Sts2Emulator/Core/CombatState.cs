@@ -446,6 +446,18 @@ public sealed class CombatState
     public List<CardInstance> StolenBackCards = [];
 
     /// <summary>
+    /// The def ids whose intents ACTUALLY executed during the enemy turn just past, in the
+    /// order the loop reached them. Cleared as the enemy phase begins.
+    /// </summary>
+    /// <remarks>
+    /// Introspection for differential testing, not gameplay. The sweep can already see
+    /// which creatures the emulator HOLDS and what they announce; it could not see which
+    /// ones the loop actually called, and that gap left a Fabricator's Noisebot -- present,
+    /// correctly intended, and provably able to add its cards -- silently adding nothing.
+    /// </remarks>
+    public List<int> ExecutedThisEnemyTurn = [];
+
+    /// <summary>
     /// The enemy an auto-play was given EXPLICITLY, or -1 when it has to pick its own.
     /// </summary>
     /// <remarks>
