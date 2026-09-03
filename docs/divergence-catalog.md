@@ -1942,3 +1942,44 @@ every run since. Python could not even see the incoming block to check it; that 
 exported, the test pins the seam (orbs end where incoming begins) and the true end, and the
 file is wired into `lint-and-test.sh` along with the other three suites that were also
 missing from it.
+
+### The Fabricator's real divergence: the Noisebot never makes its noise
+
+Failing rows now print both HANDS by name and the hand SIZE alongside the pile counts. That
+turned a vague "hands out of step" into one missing card:
+
+```
+turn 6 live: Dazed, DefendIronclad, Bash, StrikeIronclad, StrikeIronclad
+turn 6 emu :        DefendIronclad, Bash, StrikeIronclad, StrikeIronclad, DefendIronclad
+```
+
+The emulator's first four cards are the live hand's last four. **One status card is missing,
+every index shifts, and from that turn the two sides play different cards** -- which is the
+whole of the downstream damage, death and roster noise I had been chasing.
+
+The totals say it plainly. `draw/disc/exh/hand`:
+
+```
+turn 5  emu [5,0,1,5] = 11    live [5,0,1,5] = 11
+turn 6  emu [0,5,1,5] = 11    live [1,6,1,5] = 13
+turn 7  emu [5,0,1,5] = 11    live [8,0,2,5] = 16
+```
+
+**The emulator's deck never grows.** Eleven cards, every turn, the starter deck exactly. The
+Noisebot arrives in both rosters on turn 5, both announce `Debuff 2`, and only the game's
+adds its two Dazed.
+
+Ruled out by direct check, not reasoning:
+- The DESTINATIONS match. `NoiseMove` puts one Dazed in the Discard and one at a random
+  position in the Draw pile, and the emulator does exactly that.
+- `AddStatus` has no cap, and `ApplyDebuffIntent` has no early return before the Noisebot's
+  case -- it is a plain switch on `DefId`.
+- The mechanism WORKS in isolation: spawn a Noisebot through the real summon path and the
+  deck grows by two every turn from the one after it arrives (11 -> 13 -> 15).
+- It is not an artefact of the player's actions. A pacifist run agrees on every pile every
+  turn -- and spawns no Noisebot at all, which is why it agrees.
+
+So the Noisebot exists, holds the right intent, and does not execute. The next step is to
+instrument WHICH enemies the emulator's turn loop actually executes, rather than which ones
+it holds -- every check so far has confirmed the creature is present and the effect is
+correct, which leaves only the call.

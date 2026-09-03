@@ -385,6 +385,16 @@ def enemy_name_by_id() -> dict[int, str]:
     }
 
 
+def named_card(card_id: Any) -> str:
+    """One card, named, whichever vocabulary it arrived in.
+
+    The row carries the live hand as the game's slugs and the emulator's as numeric ids.
+    Comparing them by eye means putting both in the same terms.
+    """
+    resolved = card_slug_to_id().get(card_id, card_id)
+    return str(compare_draw_pile.card_name_by_id().get(resolved, resolved))
+
+
 def driven_roster(env: Any) -> list[str]:
     """Name the emulator's living roster, for the failing-row notes."""
     names = enemy_name_by_id()
@@ -1358,8 +1368,9 @@ def capture_one(
             )
         if failed:
             notes.append(
-                f"turn {row['turn']} piles draw/disc/exh: "
-                f"emu {row.get('emu_piles')} vs live {row.get('live_piles')}",
+                f"turn {row['turn']} piles draw/disc/exh/hand: "
+                f"emu {[*(row.get('emu_piles') or []), len(row['emu_hand'])]} "
+                f"vs live {[*(row.get('live_piles') or []), len(row['live_hand'])]}",
             )
         if not row["block_match"]:
             notes.append(
@@ -1391,6 +1402,19 @@ def capture_one(
             if row.get("emu_roster"):
                 notes.append(
                     f"turn {row['turn']} emu  roster: " + ", ".join(row["emu_roster"]),
+                )
+            if not row["hand_match"]:
+                # Both hands in ONE vocabulary. Pile counts agreeing says nothing about
+                # which cards are held, and the row already carries both hands -- live as
+                # the game's slugs, the emulator as numeric ids -- so the only work here is
+                # putting them in the same terms.
+                notes.append(
+                    f"turn {row['turn']} live hand: "
+                    + ", ".join(named_card(c) for c in row["live_hand"]),
+                )
+                notes.append(
+                    f"turn {row['turn']} emu  hand: "
+                    + ", ".join(named_card(c) for c in row["emu_hand"]),
                 )
         if failed or row.get("rng_drift"):
             notes.append(
