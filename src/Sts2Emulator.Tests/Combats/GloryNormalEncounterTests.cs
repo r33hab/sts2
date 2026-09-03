@@ -635,6 +635,39 @@ public class FabricatorTests
     }
 
     /// <summary>
+    /// A Guardbot's GUARD_MOVE gives its FABRICATOR 15 block, and that block survives the
+    /// Fabricator's own turn.
+    /// </summary>
+    /// <remarks>
+    /// Block clears for the whole side before anyone acts. The emulator cleared it inside
+    /// `ExecuteIntent`, per creature as it took its turn -- so a Guardbot earlier in the
+    /// roster handed its Fabricator 15 and the Fabricator, acting later, wiped it. Live
+    /// showed 15 and the emulator showed nothing, on a row where every intent agreed.
+    /// </remarks>
+    [Fact]
+    public void AGuardbotsBlockSurvivesTheFabricatorsOwnTurn()
+    {
+        var fight = Shop();
+        var fabricator = fight.State.Enemies[0];
+        fight.State.PlayerHp = 999;
+
+        // A Guardbot in FRONT of the Fabricator, so it acts first.
+        var guard = new EnemyState
+        {
+            DefId = KE.Guardbot,
+            Hp = 20,
+            MaxHp = 20,
+            Slot = 0,
+            CurrentIntent = new Intent(IntentType.Defend, 15),
+        };
+        fight.State.Enemies.Insert(0, guard);
+
+        fight.EndTurn();
+
+        Assert.Equal(15, fabricator.Block);
+    }
+
+    /// <summary>
     /// A ConditionalBranchState on CanFabricate — fewer than four living teammates — and
     /// only then a roll between FABRICATE and FABRICATING_STRIKE. With the bench full it
     /// DISINTEGRATES, a move the emulator never reached: it rolled the pair

@@ -26,6 +26,51 @@ public class AeonglassTests
     }
 
     /// <summary>
+    /// A Wither is not a flat 3. `Wither.FakeUpgrade` adds 3 to its damage, and
+    /// INCREASING_INTENSITY runs it over EVERY Wither in play while
+    /// `AfterCardGeneratedForCombat` matches each new one to the same count -- so they all
+    /// escalate together, 3 then 6 then 9.
+    /// </summary>
+    /// <remarks>
+    /// Found on Glory's first sweep, and only because the aborts were fixed first: the
+    /// Aeonglass row had never once run to a verdict. It showed as the PLAYER's HP
+    /// drifting -- 568 against 565, then 539 against 522 -- with hands, piles, intents and
+    /// enemy HP all agreeing, because `hands_agree` compares card ids and an upgraded
+    /// Wither has the same id as a fresh one.
+    /// </remarks>
+    [Fact]
+    public void WithersEscalateWithEachIncreasingIntensity()
+    {
+        var fight = Glass();
+        var glass = fight.State.Enemies[0];
+        fight.State.PlayerHp = 999;
+
+        // Stunned, so the boss's own attack does not land in the measurement -- but ALIVE,
+        // because the intensity is read off the living creature.
+        int Burn()
+        {
+            fight.State.Hand.Clear();
+            fight.State.Hand.Add(new CardInstance(ST.Wither, Upgraded: false));
+            BuffSystem.Apply(glass.Buffs, BuffId.Stunned, 1);
+            fight.State.PlayerHp = 999;
+            fight.EndTurn();
+            glass.Hp = 999;
+            return 999 - fight.State.PlayerHp;
+        }
+
+        // No intensity yet: the printed 3.
+        Assert.Equal(0, BuffSystem.Get(glass.Buffs, BuffId.WitherIntensity));
+
+        // Each run of the move raises every Wither by 3.
+        BuffSystem.Apply(glass.Buffs, BuffId.WitherIntensity, 1);
+        int once = Burn();
+        BuffSystem.Apply(glass.Buffs, BuffId.WitherIntensity, 1);
+        int twice = Burn();
+
+        Assert.Equal(once + 3, twice);
+    }
+
+    /// <summary>
     /// `AfterCardPlayed` takes one off for every card the player plays, and at zero a
     /// Wither joins their hand and the count goes back to 6. The boss used to carry
     /// Artifact and nothing else, so a 535-HP fight handed out no Withers at all.

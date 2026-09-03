@@ -954,6 +954,20 @@ public static class CombatEngine
         {
             BuffSystem.Remove(enemy.Buffs, BuffId.SkittishSpent);
         }
+        // Block clears for the WHOLE side before anyone acts, not as each creature takes
+        // its turn. The difference is a creature that GIVES block to another: a Guardbot
+        // hands its Fabricator 15, and when the clear was per-creature the Fabricator --
+        // later in the roster -- wiped it on its own turn. Live showed 15 and the emulator
+        // showed nothing. `BurrowedPower.ShouldClearBlock` is false for its owner, which
+        // is what lets a burrowed Tunneler keep the same 37 across turns.
+        foreach (var enemy in state.Enemies)
+        {
+            if (enemy.Hp > 0 && BuffSystem.Get(enemy.Buffs, BuffId.Burrowed) <= 0)
+            {
+                enemy.Block = 0;
+            }
+        }
+
         // A reviving illusion is at 0 HP and still takes its turn -- that turn IS the
         // revive. It has to stay in the roster's own order while it does, so it comes back
         // where it stood rather than at one end.

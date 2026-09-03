@@ -1807,3 +1807,34 @@ and the Fabricator had been diverging for as long as this sweep has existed, and
 reason they showed up as harness noise is that the harness never got far enough to compare
 anything. The abort count is the number that should have been suspicious: a stable 17 across
 two configurations is a bug, not a symptom.
+
+### E470, E471 -- what the abort fix uncovered
+
+Both of these had been diverging for as long as the sweep has existed. Neither had ever been
+seen, because Aeonglass and the Fabricator aborted before comparing anything.
+
+**E470 -- a Wither is not a flat 3.** `Wither.FakeUpgrade` adds 3 to its damage, and
+`IncreasingIntensityMove` runs it over EVERY Wither in play while
+`AfterCardGeneratedForCombat` matches each newly generated one to the same count. So they all
+escalate together -- 3, then 6, then 9 -- and the emulator burned a flat 3 forever.
+
+Every Wither in play therefore shares one level, which is what makes this modellable: the
+count lives on the Aeonglass as `BuffId.WitherIntensity` rather than on each card, and the
+burn reads it.
+
+**It showed as the PLAYER's HP drifting** -- 568 against 565, widening to 539 against 522 --
+with hands, piles, intents and enemy HP all agreeing. `hands_agree` compares card IDs, and an
+upgraded Wither has the same id as a fresh one, so the hands were identical and the damage
+was not.
+
+**E471 -- enemy block clears for the SIDE, not per creature.** The emulator cleared each
+enemy's block inside `ExecuteIntent`, as that creature took its turn. That is invisible until
+one creature GIVES block to another: a Guardbot hands its Fabricator 15, and the Fabricator,
+standing later in the roster, wiped it on its own turn. Live showed 15 and the emulator
+showed nothing.
+
+**Three defects on the enemy side turn in one session** -- E469's High Voltage paying actors
+instead of participants, this one, and both found on the Fabricator. The shape is the same
+each time: something the game does ONCE for the side, done per-creature inside the loop. It is
+worth auditing what else lives in `ExecuteIntent` that the game hangs off `AfterSideTurnEnd`
+or `BeforeSideTurnStart`.

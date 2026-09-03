@@ -740,6 +740,14 @@ public enum BuffId
     WitheringPresence,
 
     /// <summary>
+    /// `Aeonglass.WitherUpgradeCount`: how many times INCREASING_INTENSITY has run. Every
+    /// Wither in play carries the SAME `FakeUpgradeLevel` -- the move upgrades the ones
+    /// already out and `AfterCardGeneratedForCombat` matches each new one to the count --
+    /// so one number on the Aeonglass describes all of them, and each level is +3 damage.
+    /// </summary>
+    WitherIntensity,
+
+    /// <summary>
     /// `TenderPower`, the Hunter Killer's TENDERIZING_GOOP. NOT Vulnerable, which is what
     /// the emulator applied: every card the player plays this turn silently costs them 1
     /// Strength and 1 Dexterity, and `AfterSideTurnEnd` hands all of it back. It is a tax

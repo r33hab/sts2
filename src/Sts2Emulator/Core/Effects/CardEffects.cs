@@ -36,9 +36,16 @@ public static class CardEffects
             case ST.Burn:
             case ST.Infection:
             case ST.Toxic:
-            case ST.Wither:
             case ST.Decay:
                 DealDamageToPlayer(state, def.BaseDamage);
+                break;
+
+            // A Wither is not a fixed 3. `Wither.FakeUpgrade` adds 3 to its damage, and
+            // the Aeonglass runs it over every Wither in play each INCREASING_INTENSITY --
+            // matching each newly generated one to the same count. So they escalate
+            // together, and the level lives on the Aeonglass rather than the card.
+            case ST.Wither:
+                DealDamageToPlayer(state, def.BaseDamage + 3 * WitherIntensity(state));
                 break;
 
             // Beckon and Bad Luck lose HP directly -- Unblockable and Unpowered, so block
@@ -3552,6 +3559,18 @@ public static class CardEffects
             DealDamageToEnemy(state, target, amount);
         }
     }
+
+    /// <summary>
+    /// `Aeonglass.WitherUpgradeCount`, or zero when no Aeonglass is in the fight. Read off
+    /// the living creature: a dead Aeonglass stops upgrading, and the Withers already out
+    /// keep the level they were handed.
+    /// </summary>
+    private static int WitherIntensity(CombatState state) =>
+        state
+            .Enemies.Where(enemy => enemy.Hp > 0)
+            .Select(enemy => BuffSystem.Get(enemy.Buffs, BuffId.WitherIntensity))
+            .DefaultIfEmpty(0)
+            .Max();
 
     public static void DealDamageToPlayer(CombatState state, int amount)
     {

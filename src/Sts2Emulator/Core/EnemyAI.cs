@@ -49,13 +49,9 @@ public static class EnemyAI
                 ? BuffSystem.Get(enemy.Buffs, BuffId.Vigor)
                 : 0;
 
-        // Block clears at the start of the enemy turn -- unless BurrowedPower says
-        // otherwise. `ShouldClearBlock` returns false for its OWNER, which is what lets a
-        // burrowed Tunneler sit behind the same 37 until the player breaks it.
-        if (BuffSystem.Get(enemy.Buffs, BuffId.Burrowed) <= 0)
-        {
-            enemy.Block = 0;
-        }
+        // Block is cleared for the whole side in `CombatEngine` before any creature acts,
+        // not here: doing it per-creature let a later actor wipe block an earlier one had
+        // GIVEN it -- the Guardbot's 15 on its Fabricator.
         if (BuffSystem.Get(enemy.Buffs, BuffId.Stunned) > 0)
         {
             BuffSystem.Apply(enemy.Buffs, BuffId.Stunned, -1);
@@ -3976,6 +3972,11 @@ public static class EnemyAI
                 // AdditionalStrength), where AdditionalStrength counts the times this move
                 // has already run -- so the Strength climbs 4, 5, 6 rather than sitting at
                 // a flat 4. Every third move index is this one, which is that count.
+                // `MatchWitherToUpgradeCount` and the FakeUpgrade sweep over every
+                // Wither already in play: each run of this move makes EVERY Wither hit 3
+                // harder, and the ones it adds arrive at the new level. So the count is
+                // raised BEFORE the Withers are handed over.
+                BuffSystem.Apply(enemy.Buffs, BuffId.WitherIntensity, 1);
                 AddStatus(state, ST.Wither, enemy.CurrentIntent.Magnitude);
                 BuffSystem.Apply(
                     enemy.Buffs,
