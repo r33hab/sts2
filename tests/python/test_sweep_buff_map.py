@@ -86,6 +86,43 @@ class SweepBuffMapTests(unittest.TestCase):
         self.assertTrue(agree)
         self.assertEqual(unmapped, ["NOT_A_REAL_POWER"])
 
+    def test_the_player_comparator_agrees_when_powers_match(self) -> None:
+        live = {"status": [{"id": "VULNERABLE_POWER", "amount": 2}]}
+        emu = {"status": [{"id": 2, "amount": 2}]}
+
+        self.assertEqual(combat_sweep.player_buff_sets(live, emu), (True, []))
+
+    def test_a_debuff_the_emulator_lacks_disagrees(self) -> None:
+        """E463's exact shape.
+
+        The Ovicopter's TENDERIZER applies Vulnerable to the player and the emulator
+        applied it on the wrong turns. Every field the sweep compared agreed, so the
+        missing debuff could only surface as ARITHMETIC ON A THIRD CREATURE -- the hatched
+        eggs announcing 4 where the game said 6, because 4 x 1.5 is what a Vulnerable
+        player is shown. This is the assertion that would have caught it directly.
+        """
+        live = {"status": [{"id": "VULNERABLE_POWER", "amount": 2}]}
+        emu: dict[str, object] = {"status": []}
+
+        agree, _ = combat_sweep.player_buff_sets(live, emu)
+        self.assertFalse(agree)
+
+    def test_a_debuff_at_the_wrong_size_disagrees(self) -> None:
+        live = {"status": [{"id": "VULNERABLE_POWER", "amount": 2}]}
+        emu = {"status": [{"id": 2, "amount": 1}]}
+
+        agree, _ = combat_sweep.player_buff_sets(live, emu)
+        self.assertFalse(agree)
+
+    def test_an_unresolvable_player_power_is_reported_not_ignored(self) -> None:
+        """Same rule as the enemy side: named, and not failed on."""
+        live = {"status": [{"id": "NOT_A_REAL_POWER", "amount": 1}]}
+        emu: dict[str, object] = {"status": []}
+
+        agree, unmapped = combat_sweep.player_buff_sets(live, emu)
+        self.assertTrue(agree)
+        self.assertEqual(unmapped, ["NOT_A_REAL_POWER"])
+
     def test_a_roster_length_mismatch_disagrees(self) -> None:
         live = [{"status": []}, {"status": []}]
         emu = [{"status": []}]

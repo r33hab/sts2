@@ -1640,3 +1640,27 @@ player, a surviving player, and two fixes to the counter -- before that line cou
 reading**: E455, E457 and E458 on enemy block; E459 and E460 on enemy powers; E463 through a
 third creature's arithmetic. Three more -- E464, E465, E466 -- came from one row and needed
 each other removed to become visible.
+
+### The sweep now watches the player's powers too
+
+The last creature nobody was comparing. E463 is the argument: the Ovicopter's TENDERIZER
+applies Vulnerable to the PLAYER, the emulator applied it on the wrong turns, and every
+field the sweep compared agreed -- so a missing debuff could only surface as **arithmetic on
+a third creature**, the hatched eggs announcing 4 where the game announced 6, because
+4 x 1.5 is what a Vulnerable player is shown. A debuff that lands on nobody's enemy is
+invisible until it changes somebody else's number.
+
+`player_buff_sets` now compares it, `player_buff_match` joins the turns verdict, and the
+per-creature logic is shared with the enemy comparison rather than copied -- one
+`_live_powers` and one `_emu_powers`, so an unresolvable power is reported the same way on
+both sides and cannot be handled two ways by accident.
+
+**Checked that it is not vacuous, which a passing comparison does not establish.** Polling
+the live game mid-fight during the encounter that produced E463 shows the player carrying
+`VULNERABLE_POWER` at 2 and then 1 -- so the comparison is reading real data, and the
+emulator agrees with it. A new check that passes because there was nothing to check is worse
+than no check, because it reads as coverage.
+
+That closes the last field either creature exposes. The harness now compares deck, roster,
+intents, player HP and max HP, hand, all three pile sizes, RNG positions on eight streams,
+enemy block, enemy powers, and player powers.

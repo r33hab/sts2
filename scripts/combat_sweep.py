@@ -577,44 +577,66 @@ def _buff_id_to_live_entry() -> dict[int, str]:
 BUFF_ID_TO_LIVE = _buff_id_to_live_entry()
 
 
+def _live_powers(creature: dict[str, Any], unmapped: list[str]) -> set[tuple[str, int]]:
+    """Collect the game's powers on one creature, as (entry, amount).
+
+    A power this map cannot resolve is recorded in `unmapped` and left OUT of the set
+    rather than compared: a buff the comparison cannot see is indistinguishable from a buff
+    that agrees, and quietly dropping it is how a blind spot becomes a clean row. Naming it
+    keeps the run green and the gap visible, which is the only honest combination.
+    """
+    known = set(BUFF_ID_TO_LIVE.values())
+    out: set[tuple[str, int]] = set()
+    for power in creature.get("status") or []:
+        entry = power.get("id")
+        if entry not in known:
+            unmapped.append(str(entry))
+            continue
+        # An amount of zero counts as ABSENT on both sides: the game drops a spent power
+        # and the emulator sometimes keeps it at zero.
+        if power.get("amount"):
+            out.add((str(entry), int(power["amount"])))
+    return out
+
+
+def _emu_powers(creature: dict[str, Any]) -> set[tuple[str, int]]:
+    """Collect the emulator's buffs on one creature, mapped onto the game's entries."""
+    out: set[tuple[str, int]] = set()
+    for buff in creature.get("status") or []:
+        entry = BUFF_ID_TO_LIVE.get(int(buff.get("id", 0)))
+        if entry is not None and buff.get("amount"):
+            out.add((entry, int(buff["amount"])))
+    return out
+
+
 def enemy_buff_sets(
     live_enemies: list[dict[str, Any]],
     emu_enemies: list[dict[str, Any]],
 ) -> tuple[bool, list[str]]:
-    """Compare enemy POWERS, which nothing compared before.
+    """Compare enemy POWERS, which nothing compared before."""
+    unmapped: list[str] = []
+    agree = len(live_enemies) == len(emu_enemies) and all(
+        _live_powers(live, unmapped) == _emu_powers(emu)
+        for live, emu in zip(live_enemies, emu_enemies)
+    )
+    return agree, sorted(set(unmapped))
 
-    Returns (agree, unmapped) where `unmapped` names live powers this map could not
-    resolve. Those are reported rather than skipped: a buff the comparison cannot see is
-    indistinguishable from a buff that agrees, and quietly ignoring it is how a blind spot
-    becomes a clean row. Only buffs the emulator can express are compared -- an amount of
-    zero on either side counts as absent, since the game drops a spent power and the
-    emulator sometimes keeps it at zero.
+
+def player_buff_sets(
+    live_player: dict[str, Any],
+    emu_player: dict[str, Any],
+) -> tuple[bool, list[str]]:
+    """Compare the PLAYER's powers, the last creature nobody was watching.
+
+    E463 is why this exists. The Ovicopter's TENDERIZER applies Vulnerable to the player,
+    the emulator applied it on the wrong turns, and every field the sweep compared agreed --
+    so the missing debuff could only surface as ARITHMETIC ON A THIRD CREATURE, the hatched
+    eggs announcing 4 where the game announced 6 because 4 x 1.5 is what a Vulnerable
+    player is shown. A debuff that lands on nobody's enemy is invisible until it changes
+    somebody's number.
     """
     unmapped: list[str] = []
-    known = set(BUFF_ID_TO_LIVE.values())
-
-    def live_set(enemy: dict[str, Any]) -> set[tuple[str, int]]:
-        out: set[tuple[str, int]] = set()
-        for power in enemy.get("status") or []:
-            entry = power.get("id")
-            if entry not in known:
-                unmapped.append(str(entry))
-                continue
-            if power.get("amount"):
-                out.add((str(entry), int(power["amount"])))
-        return out
-
-    def emu_set(enemy: dict[str, Any]) -> set[tuple[str, int]]:
-        out: set[tuple[str, int]] = set()
-        for buff in enemy.get("status") or []:
-            entry = BUFF_ID_TO_LIVE.get(int(buff.get("id", 0)))
-            if entry is not None and buff.get("amount"):
-                out.add((entry, int(buff["amount"])))
-        return out
-
-    agree = len(live_enemies) == len(emu_enemies) and all(
-        live_set(live) == emu_set(emu) for live, emu in zip(live_enemies, emu_enemies)
-    )
+    agree = _live_powers(live_player, unmapped) == _emu_powers(emu_player)
     return agree, sorted(set(unmapped))
 
 
@@ -969,6 +991,20 @@ def drive_turns(
                 ),
                 "player_match": (live_player.get("hp"), live_player.get("max_hp"))
                 == (emu_player.get("hp"), emu_player.get("max_hp")),
+                # The PLAYER's powers -- see `player_buff_sets` for why E463 needed this.
+                **dict(
+                    zip(
+                        ("player_buff_match", "unmapped_player_buffs"),
+                        player_buff_sets(live_player, emu_player),
+                    ),
+                ),
+                "live_player_buffs": [
+                    (p.get("id"), p.get("amount")) for p in (live_player.get("status") or [])
+                ],
+                "emu_player_buffs": [
+                    (BUFF_ID_TO_LIVE.get(int(b.get("id", 0))), b.get("amount"))
+                    for b in (emu_player.get("status") or [])
+                ],
                 "hand_match": hands_agree(live_player, emu_player),
                 "live_player_hp": live_player.get("hp"),
                 "live_player_max_hp": live_player.get("max_hp"),
@@ -1130,6 +1166,7 @@ def capture_one(
             and row["hand_match"]
             and row["block_match"]
             and row["buff_match"]
+            and row["player_buff_match"]
             for row in turn_rows
         )
 
@@ -1147,7 +1184,11 @@ def capture_one(
     if missing:
         notes.append("intents never seen: " + ", ".join(missing))
     unmapped_buffs = sorted(
-        {b for row in turn_rows for b in row.get("unmapped_buffs") or []},
+        {
+            b
+            for row in turn_rows
+            for b in (row.get("unmapped_buffs") or []) + (row.get("unmapped_player_buffs") or [])
+        },
     )
     if unmapped_buffs:
         # Reported whether or not the row failed: a live power the map cannot resolve is
@@ -1172,6 +1213,7 @@ def capture_one(
             and row["hand_match"]
             and row["block_match"]
             and row["buff_match"]
+            and row["player_buff_match"]
         )
         if failed and row["intents_match"]:
             notes.append(
@@ -1226,6 +1268,11 @@ def capture_one(
             notes.append(
                 f"turn {row['turn']} enemy powers: "
                 f"emu {row['emu_enemy_buffs']} vs live {row['live_enemy_buffs']}",
+            )
+        if not row["player_buff_match"]:
+            notes.append(
+                f"turn {row['turn']} player powers: "
+                f"emu {row['emu_player_buffs']} vs live {row['live_player_buffs']}",
             )
         if failed or row.get("rng_drift"):
             notes.append(
