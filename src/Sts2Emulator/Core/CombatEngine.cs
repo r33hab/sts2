@@ -2768,6 +2768,16 @@ public static class CombatEngine
                 BuffSystem.Remove(state.Enemies[i].Buffs, BuffId.PossessSpeed);
             }
 
+            if (BuffSystem.Get(state.Enemies[i].Buffs, BuffId.PossessStrength) > 0)
+            {
+                // `PossessStrengthPower.AfterDeath`, the same for The Lost's Strength.
+                // Written beside its twin rather than anywhere else, because the two
+                // being apart is how one of them stayed unmodelled.
+                int possessed = BuffSystem.Get(state.Enemies[i].Buffs, BuffId.PossessStrength);
+                Effects.RelicEffects.GainPlayerStrength(state, possessed);
+                BuffSystem.Remove(state.Enemies[i].Buffs, BuffId.PossessStrength);
+            }
+
             // The revive chain proper: at most one of these applies, and the ones that
             // bring the creature back `continue` rather than falling through to the
             // it-really-died work below.

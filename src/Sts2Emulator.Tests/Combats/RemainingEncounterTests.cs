@@ -47,6 +47,42 @@ public class LostAndForgottenTests
     }
 
     /// <summary>
+    /// Killing The Lost hands back every point of Strength its smog took, exactly as
+    /// killing The Forgotten hands back the Dexterity.
+    /// </summary>
+    /// <remarks>
+    /// `PossessSpeedPower` was modelled and `PossessStrengthPower` -- its twin, on the
+    /// creature standing next to it -- was not, so The Lost's debuff was permanent and
+    /// killing it was worth nothing. Found on Glory's first sweep, by the enemy-powers
+    /// comparison reporting POSSESS_STRENGTH_POWER as a live power with no emulator
+    /// counterpart at all. See E467.
+    /// </remarks>
+    [Fact]
+    public void KillingTheLostReturnsTheStrengthItStole()
+    {
+        var fight = Pair();
+        var lost = fight.State.Enemies[0];
+        fight.State.PlayerHp = 999;
+
+        // One smog, so it has actually taken something.
+        fight.EndTurn();
+        int stolen = BuffSystem.Get(lost.Buffs, BuffId.PossessStrength);
+        Assert.True(stolen > 0);
+        Assert.Equal(-stolen, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.Strength));
+
+        // Killed by an actual hit: the death hooks run off the HP crossing zero.
+        fight.State.Hand.Clear();
+        fight.State.Hand.Add(new CardInstance(472, Upgraded: false));
+        fight.State.Energy = 5;
+        lost.Hp = 1;
+        lost.Block = 0;
+        fight.Play(0, target: 0);
+
+        Assert.Equal(0, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.Strength));
+        Assert.Equal(0, BuffSystem.Get(lost.Buffs, BuffId.PossessStrength));
+    }
+
+    /// <summary>
     /// <c>DreadDamage</c> is not a constant: it is
     /// <c>GetValueIfAscension(Deadly, 15, 13) + its own DexterityPower</c>, and MIASMA
     /// hands it two Dexterity every other turn — so the dread CLIMBS. The emulator

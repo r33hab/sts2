@@ -1918,6 +1918,16 @@ public static class CombatFactory
             BuffSystem.Apply(enemy.Buffs, BuffId.Imbalanced, 1);
         }
 
+        // `TorchHeadAmalgam.AfterAddedToRoom` applies MinionPower to ITSELF -- it is a
+        // minion from the moment the Queen's fight starts, not one she summons. So killing
+        // it pays no fatal bonus: Feed, Hand of Greed and The Hunt all gate on
+        // `ShouldOwnerDeathTriggerFatal`, which MinionPower answers false. E459 was this
+        // same marker missing on an illusion.
+        if (enemy.DefId == KE.TorchHeadAmalgam)
+        {
+            BuffSystem.Apply(enemy.Buffs, BuffId.Minion, 1);
+        }
+
         if (enemy.DefId == KE.TerrorEel)
         {
             // TerrorEel.AfterAddedToRoom applies ShriekPower(ShriekAmount) — 75 at A8,

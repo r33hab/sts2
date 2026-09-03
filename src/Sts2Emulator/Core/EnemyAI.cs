@@ -4033,6 +4033,15 @@ public static class EnemyAI
             case KE.TheLost:
                 Effects.RelicEffects.GainPlayerStrength(state, -enemy.CurrentIntent.Magnitude);
                 BuffSystem.Apply(enemy.Buffs, BuffId.Strength, enemy.CurrentIntent.Magnitude);
+                // `PossessStrengthPower` keeps a tally of the Strength it has taken and
+                // gives ALL of it back on death, exactly as PossessSpeed does for The
+                // Forgotten's Dexterity. That twin was fixed and this one was not, so
+                // killing The Lost was worth nothing and its debuff was permanent.
+                BuffSystem.Apply(
+                    enemy.Buffs,
+                    BuffId.PossessStrength,
+                    enemy.CurrentIntent.Magnitude
+                );
                 break;
 
             case KE.TheForgotten:

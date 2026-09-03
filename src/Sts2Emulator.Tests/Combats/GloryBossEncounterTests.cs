@@ -159,6 +159,27 @@ public class QueenTests
         Fight.Encounter(CombatFactory.ActOneEncounter.Queen, ascension);
 
     /// <summary>
+    /// The Torch Head Amalgam is a MINION from the moment the fight starts -- it applies
+    /// `MinionPower` to ITSELF in `AfterAddedToRoom`, rather than being summoned as one.
+    /// </summary>
+    /// <remarks>
+    /// So killing it pays no fatal bonus: Feed, Hand of Greed, The Hunt and Book Repair
+    /// Knife all gate on `ShouldOwnerDeathTriggerFatal`, which MinionPower answers false.
+    /// E459 was this same marker missing on an illusion; this one was found on Glory's
+    /// first sweep, on all four seeds, by the enemy-powers comparison.
+    /// </remarks>
+    [Fact]
+    public void TheAmalgamIsAMinionFromTheStart()
+    {
+        var fight = Court();
+
+        Assert.Equal(KE.TorchHeadAmalgam, fight.State.Enemies[0].DefId);
+        Assert.True(BuffSystem.Has(fight.State.Enemies[0].Buffs, BuffId.Minion));
+        // And the Queen herself is not one -- she is the fight.
+        Assert.False(BuffSystem.Has(fight.State.Enemies[1].Buffs, BuffId.Minion));
+    }
+
+    /// <summary>
     /// The Queen's raw announcements over the next turns. Raw rather than announced,
     /// unlike the rest of this file, because YOU_ARE_MINE leaves the player on Vulnerable
     /// 99 — so every announced number after turn two carries a 1.5x that says nothing

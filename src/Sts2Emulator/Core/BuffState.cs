@@ -128,6 +128,12 @@ public enum BuffId
     VitalSpark, // Infested Prism: playing a Skill taints the player for the round
     Tainted, // the player: powered attacks land for this much more, until the enemy turn ends
     PossessSpeed, // The Forgotten: how much Dexterity it has stolen, returned when it dies
+
+    /// <summary>
+    /// The Lost: how much Strength it has stolen, returned when it dies. `PossessSpeed`'s
+    /// twin, and it went unmodelled while its twin was fixed -- see E467.
+    /// </summary>
+    PossessStrength,
     Accelerant, // the player: enemy Poison triggers this many EXTRA times each turn
     CorrosiveWave, // the player: every card DRAWN poisons all enemies; lasts one turn
     Outbreak, // the player: every third Poison applied damages all enemies for this much

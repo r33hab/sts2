@@ -1710,3 +1710,36 @@ produced a verdict, so this is 70 encounters agreeing and 10 unknown. And the wh
 is scoped to what these four seeds reached in eight turns with one player policy -- the
 Bowlbug Rock needed `IMPERVIOUS` before its second move was ever seen, and there is no reason
 to think it was the last move gated behind a way of playing nobody had tried.
+
+### E467, E468 -- Glory's first sweep
+
+Act 3 had never been swept. Seventy-two rows found **10 divergences on three encounters**,
+12 coverage gaps, and 17 aborts -- nearly double Hive's abort rate, which is act 3 hitting
+harder than `--buff-max-hp 200` covers.
+
+**E467 -- The Lost never gave back the Strength it stole.** `PossessSpeedPower` keeps a tally
+of the Dexterity The Forgotten takes and returns all of it on death; that was modelled, and
+its comment says the debuff had been permanent before. `PossessStrengthPower` is the exact
+twin on the creature standing NEXT TO IT in the same encounter, and it was never modelled at
+all -- so killing The Lost was worth nothing and its Strength drain was permanent.
+
+**One twin fixed and the other missed, in one encounter.** The two powers are separate files
+with separate names; nothing about fixing one points at the other. The return now sits
+directly beside PossessSpeed's in `HandleEnemyDeaths` rather than anywhere else, because the
+two being apart is how one of them stayed unmodelled.
+
+**E468 -- the Torch Head Amalgam was not a minion.** It applies `MinionPower` to ITSELF in
+`AfterAddedToRoom`, so it is a minion from the moment the Queen's fight begins rather than
+one she summons. Killing it should pay no fatal bonus. E459 was this same marker missing on
+an illusion; this is the third creature whose Minion the emulator did not carry, and the
+first found by the powers comparison on a boss.
+
+Both were invisible before today: the intents, damage, HP and block all agreed on every one
+of those rows. **Only the power lists differed**, which is the comparison added this session.
+
+Still open from this sweep: the Fabricator's roster ORDER differs from the game's and its
+Strength lags -- emu `[HV, Minion, Strength 2]` at index 0 where live has it at index 1 with
+Strength 4. That is E441, already catalogued as partial ("fabricated bots all stood in front
+of the Fabricator"), now with live evidence and a second symptom. It needs slots modelled on
+`EnemyState` rather than inferred from list position, which is a larger change than this
+pass.

@@ -600,7 +600,19 @@ def _presence_only_powers() -> set[str]:
         for path in powers.glob("*.cs")
         if "override int DisplayAmount" in path.read_text(encoding="utf-8")
     }
-    return derived | {"SURROUNDED_POWER"}
+    # And the powers the EMULATOR stores something else in. There is no signal for these
+    # in the game's source -- they are choices on this side -- so they are listed, with the
+    # reason each is here.
+    emulator_side = {
+        # The Kaiser Crab's FACING: FacingRight 1, FacingLeft 2.
+        "SURROUNDED_POWER",
+        # `PossessSpeedPower` and `PossessStrengthPower` are `StackType.Single` and keep
+        # their tally in internal data, reporting a presence of 1. The emulator keeps the
+        # tally IN the magnitude, because that is what it gives back on death.
+        "POSSESS_SPEED_POWER",
+        "POSSESS_STRENGTH_POWER",
+    }
+    return derived | emulator_side
 
 
 PRESENCE_ONLY_POWERS = _presence_only_powers()
