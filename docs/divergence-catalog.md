@@ -1693,3 +1693,20 @@ Worth naming the pattern. Weak and Frail agreed exactly on all eight rows, which
 said the amount comparison was working and the two outliers were special. **A new comparison's
 first contact is most likely to find the comparison's own bugs**, and the useful signal is
 which fields agree around the ones that do not.
+
+### Every field either creature exposes now agrees
+
+The confirming run after the presence-only rule: **70 of 70 completed rows ALL MATCH, zero
+failures of any kind, zero player-power mismatches.** Both encounters that failed the
+previous run -- `hunter-killer` on Tender and `kaiser-crab` on Surrounded -- pass on all four
+seeds. Ten rows aborted before a verdict, the harness's usual rate for this configuration.
+
+The harness now compares, per turn: deck, roster, every announced intent, player HP and max
+HP, hand contents, all three pile sizes, RNG positions on eight streams, enemy block, enemy
+powers, and player powers. **There is no field either side reports that is left unwatched.**
+
+Two things to keep in view rather than mistake for completeness. Ten of eighty rows never
+produced a verdict, so this is 70 encounters agreeing and 10 unknown. And the whole statement
+is scoped to what these four seeds reached in eight turns with one player policy -- the
+Bowlbug Rock needed `IMPERVIOUS` before its second move was ever seen, and there is no reason
+to think it was the last move gated behind a way of playing nobody had tried.
