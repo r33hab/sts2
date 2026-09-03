@@ -971,7 +971,7 @@ public class KnockoutBlowTests
 
         fight.PlayCard(RGOk.KnockoutBlow);
 
-        Assert.Equal(0, fight.Enemy0.Hp);
+        Assert.Empty(fight.State.Enemies);
         Assert.Equal(5, fight.State.Stars);
     }
 

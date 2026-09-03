@@ -33,11 +33,16 @@ public class BashTests
             ],
         };
 
+        // Held by REFERENCE across the kill: a dead creature LEAVES the roster now, as
+        // it does in the game, so an index taken before the death is stale after it.
+        var target = state.Enemies[0];
+        var bystander = state.Enemies[1];
+
         CombatEngine.Step(state, 0, new Random(0), targetEnemyIndex: 0);
 
-        Assert.Equal(0, state.Enemies[0].Hp);
-        Assert.Empty(state.Enemies[0].Buffs);
-        Assert.Empty(state.Enemies[1].Buffs);
+        Assert.Equal(0, target.Hp);
+        Assert.Empty(target.Buffs);
+        Assert.Empty(bystander.Buffs);
     }
 
     [Fact]

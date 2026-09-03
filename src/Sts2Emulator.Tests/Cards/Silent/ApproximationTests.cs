@@ -414,7 +414,7 @@ public class TheHuntTests
 
         fight.Play();
 
-        Assert.Equal(0, fight.Enemy0.Hp);
+        Assert.Empty(fight.State.Enemies);
         Assert.Equal(1, fight.State.ExtraCardRewards);
         Assert.Equal(1, fight.PlayerBuffAmount(BuffId.TheHunt));
     }
@@ -434,7 +434,7 @@ public class TheHuntTests
 
         fight.Play(0);
 
-        Assert.True(fight.State.Enemies[0].Hp <= 0);
+        Assert.Empty(fight.State.Enemies);
         Assert.Equal(0, fight.State.ExtraCardRewards);
         Assert.Equal(0, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.TheHunt));
     }

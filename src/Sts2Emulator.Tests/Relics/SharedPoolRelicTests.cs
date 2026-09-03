@@ -100,18 +100,23 @@ public class PenNibTests
         var fight = Fight.WithRelics(RelicEffects.PenNib);
         fight.State.Energy = 999;
         fight.State.Hand = [.. Enumerable.Range(0, 10).Select(_ => Card(SI.Slice))];
+        // Held by reference and kept alive: a creature that dies leaves the roster, and
+        // this test is about the RELIC's count, not about killing anything.
+        var foe = fight.Enemy0;
+        foe.Hp = 999;
+        foe.MaxHp = 999;
 
         for (int i = 0; i < 9; i++)
         {
-            int before = fight.Enemy0.Hp;
+            int before = foe.Hp;
             fight.Play();
-            Assert.Equal(before - 6, fight.Enemy0.Hp);
+            Assert.Equal(before - 6, foe.Hp);
         }
 
-        int last = fight.Enemy0.Hp;
+        int last = foe.Hp;
         fight.Play();
 
-        Assert.Equal(last - 12, fight.Enemy0.Hp);
+        Assert.Equal(last - 12, foe.Hp);
     }
 
     /// <summary>Skills do not advance the count — it is `cardPlay.Card.Type != Attack`.</summary>
@@ -120,6 +125,12 @@ public class PenNibTests
     {
         var fight = Fight.WithRelics(RelicEffects.PenNib);
         fight.State.Energy = 999;
+
+        // Held by reference and kept alive: a creature that dies leaves the roster, and
+        // this test is about the RELIC's count, not about killing anything.
+        var foe = fight.Enemy0;
+        foe.Hp = 999;
+        foe.MaxHp = 999;
 
         // Five Defends first: if they counted, the tenth ATTACK would arrive early.
         fight.State.Hand = [.. Enumerable.Range(0, 5).Select(_ => Card(SI.DefendSilent))];
@@ -131,16 +142,16 @@ public class PenNibTests
         fight.State.Hand = [.. Enumerable.Range(0, 9).Select(_ => Card(SI.Slice))];
         for (int i = 0; i < 9; i++)
         {
-            int before = fight.Enemy0.Hp;
+            int before = foe.Hp;
             fight.Play(0);
-            Assert.Equal(before - 6, fight.Enemy0.Hp);
+            Assert.Equal(before - 6, foe.Hp);
         }
 
         fight.State.Hand = [Card(SI.Slice)];
-        int last = fight.Enemy0.Hp;
+        int last = foe.Hp;
         fight.Play(0);
 
-        Assert.Equal(last - 12, fight.Enemy0.Hp);
+        Assert.Equal(last - 12, foe.Hp);
     }
 }
 

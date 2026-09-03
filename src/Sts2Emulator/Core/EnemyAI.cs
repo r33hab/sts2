@@ -4865,6 +4865,45 @@ public static class EnemyAI
     }
 
     /// <summary>
+    /// `Hook.ShouldCreatureBeRemovedFromCombatAfterDeath`: a creature that dies leaves the
+    /// combat unless a power vetoes it. Unanimous consent -- the default is REMOVE, and any
+    /// listener returning false keeps the creature in the roster.
+    /// </summary>
+    /// <remarks>
+    /// Five powers veto for their owner, and each is a creature that is not finished:
+    /// `ReattachPower` (a Decimillipede segment reattaches), `IllusionPower` (an illusion
+    /// revives), `AdaptablePower` (the Test Subject comes back in a bigger form),
+    /// `SteamEruptionPower` (the Waterfall Giant is still exploding) and `PainfulStabsPower`
+    /// (the Test Subject's later forms).
+    ///
+    /// `DieForYouPower` vetoes too and is deliberately absent: it belongs to Osty, a
+    /// player-side pet, and never sits in `state.Enemies`.
+    /// </remarks>
+    internal static bool ShouldRemoveOnDeath(EnemyState enemy) =>
+        !BuffSystem.Has(enemy.Buffs, BuffId.Reattach)
+        && !BuffSystem.Has(enemy.Buffs, BuffId.Illusion)
+        && !BuffSystem.Has(enemy.Buffs, BuffId.Adaptable)
+        && !BuffSystem.Has(enemy.Buffs, BuffId.SteamEruption)
+        && !BuffSystem.Has(enemy.Buffs, BuffId.PainfulStabs);
+
+    /// <summary>
+    /// `Hook.ShouldAllowHitting`: whether a card or effect may target this creature.
+    /// </summary>
+    /// <remarks>
+    /// Also unanimous consent, and a DIFFERENT question from whether the creature is still
+    /// in the fight. The Waterfall Giant stays AND is targetable while it explodes --
+    /// `SteamEruptionPower` overrides removal and says nothing about hitting. The Test
+    /// Subject stays and is NOT targetable between forms, because `AdaptablePower` answers
+    /// `!IsReviving`. `ReattachPower` and `IllusionPower` answer the same way.
+    ///
+    /// So the rule is the REVIVING state, not zero HP: `BuffId.Reviving` is the emulator's
+    /// marker for exactly the window those three powers refuse hits in.
+    /// </remarks>
+    internal static bool IsTargetable(EnemyState enemy) =>
+        BuffSystem.Get(enemy.Buffs, BuffId.Reviving) <= 0
+        && (enemy.Hp > 0 || BuffSystem.Has(enemy.Buffs, BuffId.SteamEruption));
+
+    /// <summary>
     /// `SlumberPower` reaching zero runs `WakeUpMove`, which REMOVES the beetle's
     /// `PlatingPower` outright. Called from both decrement paths -- turn end and unblocked
     /// damage -- because the game wakes from either and a wake wired into one of them

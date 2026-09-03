@@ -624,25 +624,30 @@ public class CombatEngineTests
         state.Hand.Add(new CardInstance(IC.StrikeIronclad, false));
         state.Energy = 3;
 
+        // Held by REFERENCE across the kill: a dead creature LEAVES the roster now, as
+        // it does in the game, so an index taken before the death is stale after it.
+        var ally = state.Enemies[0];
+        var slug = state.Enemies[1];
+
         CombatEngine.Step(state, 0, new Random(0));
 
-        Assert.Equal(0, state.Enemies[0].Hp);
-        Assert.Equal(5, BuffSystem.Get(state.Enemies[1].Buffs, BuffId.Strength));
-        Assert.Equal(1, BuffSystem.Get(state.Enemies[1].Buffs, BuffId.Stunned));
+        Assert.Equal(0, ally.Hp);
+        Assert.Equal(5, BuffSystem.Get(slug.Buffs, BuffId.Strength));
+        Assert.Equal(1, BuffSystem.Get(slug.Buffs, BuffId.Stunned));
 
-        EnemyAI.ExecuteIntent(state.Enemies[1], state, new Random(0));
+        EnemyAI.ExecuteIntent(slug, state, new Random(0));
 
-        Assert.Equal(0, BuffSystem.Get(state.Enemies[1].Buffs, BuffId.Stunned));
+        Assert.Equal(0, BuffSystem.Get(slug.Buffs, BuffId.Stunned));
         Assert.Equal(64, state.PlayerHp);
 
         EnemyAI.ChooseIntents(state.Enemies, state.Turn, new Random(0));
 
-        Assert.Equal(IntentType.Attack, state.Enemies[1].CurrentIntent.Type);
+        Assert.Equal(IntentType.Attack, slug.CurrentIntent.Type);
         // WHIP_SLAP is MultiAttackIntent(3, 2), not a single 6. Folded into one hit the
         // two are the same number only while the slug has no Strength -- and Ravenous,
         // which this very test just handed it, is how it gets some.
-        Assert.Equal(3, state.Enemies[1].CurrentIntent.Magnitude);
-        Assert.Equal(2, state.Enemies[1].CurrentIntent.Hits);
+        Assert.Equal(3, slug.CurrentIntent.Magnitude);
+        Assert.Equal(2, slug.CurrentIntent.Hits);
     }
 
     [Fact]
@@ -821,7 +826,8 @@ public class CombatEngineTests
         // own row reading "80 Gold (stolen back)". This used to assert 99 in hand.
         Assert.Equal(59, state.PlayerGold);
         Assert.Equal(40, state.StolenBackGold);
-        Assert.Equal(0, state.Enemies[0].HeistGold);
+        // The gremlin LEFT with its death, so the gold is only in StolenBackGold now.
+        Assert.Empty(state.Enemies);
     }
 
     /// <summary>A pack of rats in the slots the encounter places them in, Slots[2..4].</summary>

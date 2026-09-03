@@ -2098,3 +2098,38 @@ an agent training on this fight cannot see an enemy that is attacking it. Record
 fixed here, because the corpse-keeping is deliberate -- it is what gives the observation
 stable indices -- and choosing between stable indices and complete ones is a design decision,
 not a bug fix.
+
+### E475 -- the roster now mirrors the game: corpses leave, and targetability is its own question
+
+The emulator kept every dead creature in `state.Enemies` at 0 HP so an agent's observation
+had stable indices. The game does not: `Hook.ShouldCreatureBeRemovedFromCombatAfterDeath` is
+unanimous consent -- the default is REMOVE -- and the mod reports living creatures only.
+
+Keeping them cost more than it bought. `MaxEnemies` is 6 and the observation writes the RAW
+roster, so accumulated corpses pushed LIVING creatures past the last slot: in the Fabricator
+fight the state held four living creatures and the observation reported three. **An agent
+training on that fight could not see an enemy attacking it.** And the stability was not even
+real -- `InsertFabricatorBot` places a bot in slot order, so indices already moved.
+
+Five powers veto removal, each a creature that is not finished: `ReattachPower` (a segment
+reattaches), `IllusionPower`, `AdaptablePower` (the Test Subject's next form),
+`SteamEruptionPower` (the Waterfall Giant is still erupting) and `PainfulStabsPower`.
+`DieForYouPower` vetoes too and is deliberately absent -- it belongs to Osty, a player-side
+pet that never sits in `state.Enemies`.
+
+**Targetability is a different question, and two creatures pin it apart.** The Waterfall
+Giant stays in the fight AND stays hittable while it erupts, because `SteamEruptionPower`
+overrides removal and says nothing about hitting. The Test Subject stays and is NOT hittable
+between forms, because `AdaptablePower.ShouldAllowHitting` answers `!IsReviving`. So the rule
+is the REVIVING window, not zero HP -- and `FirstEnemy` now asks `IsTargetable` rather than
+`Hp > 0`.
+
+**Fifteen tests failed on the change and every one was stale, not broken.** They killed a
+creature and then indexed it -- `Assert.Equal(0, fight.Enemy0.Hp)` on a corpse that has now
+left. Each was rewritten to hold the creature by REFERENCE across the kill, which is both the
+fix and the more faithful test: the object is what the question is about, and the index was
+only ever a way to reach it.
+
+This closes the Fabricator. It had failed all session through E441, E469, E471, E472, E473
+and E474 -- every one a real defect -- and the corpses were the last of it. Eight rows across
+four spawner-heavy encounters now pass on both seeds.

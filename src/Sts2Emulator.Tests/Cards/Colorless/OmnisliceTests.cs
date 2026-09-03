@@ -38,9 +38,14 @@ public class OmnisliceTests
             },
         ];
 
+        // Held by REFERENCE across the kill: a dead creature LEAVES the roster now, as
+        // it does in the game, so an index taken before the death is stale after it.
+        var slain = state.Enemies[0];
+
         CombatEngine.Step(state, 0, new Random(0));
 
-        Assert.Equal([0, 22, 25], state.Enemies.Select(enemy => enemy.Hp));
+        Assert.Equal(0, slain.Hp);
+        Assert.Equal([22, 25], state.Enemies.Select(enemy => enemy.Hp));
         Assert.Empty(state.Hand);
         Assert.Contains(state.DiscardPile, card => card.DefId == CL.Omnislice);
     }

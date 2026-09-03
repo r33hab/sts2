@@ -254,10 +254,15 @@ public class EchoingSlashTests
         var fight = Fight.Hand(Card(SI.EchoingSlash)).Energy(1).Enemy(hp: 6);
         fight.Enemy(hp: 100);
 
+        // Held by REFERENCE across the kill: a dead creature LEAVES the roster now, as
+        // it does in the game, so an index taken before the death is stale after it.
+        var first = fight.Enemy0;
+        var second = fight.Enemy1;
+
         fight.Play();
 
-        Assert.True(fight.Enemy0.Hp <= 0);
-        Assert.Equal(100 - 20, fight.Enemy1.Hp);
+        Assert.True(first.Hp <= 0);
+        Assert.Equal(100 - 20, second.Hp);
     }
 
     /// <summary>
@@ -272,12 +277,18 @@ public class EchoingSlashTests
         fight.Enemy(hp: 26);
         fight.Enemy(hp: 100);
 
+        // Held by REFERENCE across the kill: a dead creature LEAVES the roster now, as
+        // it does in the game, so an index taken before the death is stale after it.
+        var slain = fight.State.Enemies.Take(3).ToList();
+        var survivor = fight.State.Enemies[3];
+
         fight.Play();
 
         // Volley 1 kills the 6 and leaves 6/16/90. Volley 2 kills the 16 and leaves
         // 0/6/80. Volley 3 kills the 26. Volley 4 is the last one bought.
-        Assert.All(fight.State.Enemies.Take(3), e => Assert.True(e.Hp <= 0));
-        Assert.Equal(100 - 40, fight.State.Enemies[3].Hp);
+        Assert.All(slain, e => Assert.True(e.Hp <= 0));
+        Assert.Equal(100 - 40, survivor.Hp);
+        Assert.Single(fight.State.Enemies);
     }
 
     /// <summary>Killing nothing means one volley, and the loop terminates.</summary>

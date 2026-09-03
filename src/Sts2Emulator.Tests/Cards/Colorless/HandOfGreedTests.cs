@@ -30,7 +30,8 @@ public class HandOfGreedTests
 
         fight.Play();
 
-        Assert.Equal(0, fight.Enemy0.Hp);
+        // The creature LEAVES the fight when it dies, as it does in the game.
+        Assert.Empty(fight.State.Enemies);
         Assert.Equal(goldBefore + 20, fight.State.PlayerGold);
     }
 

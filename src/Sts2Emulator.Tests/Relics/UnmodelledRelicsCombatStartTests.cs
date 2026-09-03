@@ -255,12 +255,15 @@ public class TurnOneOpenerRelicTests
     public void BrimstoneSkipsTheDead()
     {
         var fight = Fight.WithRelics(RelicEffects.Brimstone);
-        int dead = fight.State.Enemies.Count - 1;
-        int armedSoFar = BuffSystem.Get(fight.State.Enemies[dead].Buffs, BuffId.Strength);
-        fight.State.Enemies[dead].Hp = 0;
+        // Held by REFERENCE, not by index: a creature that dies leaves the roster, so the
+        // index would be stale by the assertion -- and the object is what the question is
+        // about anyway.
+        var dead = fight.State.Enemies[^1];
+        int armedSoFar = BuffSystem.Get(dead.Buffs, BuffId.Strength);
+        dead.Hp = 0;
 
         fight.EndTurn();
 
-        Assert.Equal(armedSoFar, BuffSystem.Get(fight.State.Enemies[dead].Buffs, BuffId.Strength));
+        Assert.Equal(armedSoFar, BuffSystem.Get(dead.Buffs, BuffId.Strength));
     }
 }

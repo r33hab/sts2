@@ -8477,15 +8477,26 @@ public static class CardEffects
         // NOTHING and only starts paying once it has been played.
         + (card.Enchantment == Enchantment.Goopy ? Math.Max(0, card.EnchantAmount - 1) : 0);
 
+    /// <summary>
+    /// The aimed-at enemy: the explicit target when there is one, else the first TARGETABLE
+    /// creature.
+    /// </summary>
+    /// <remarks>
+    /// Targetable is not the same as alive, which is why this does not simply ask for HP.
+    /// `Hook.ShouldAllowHitting` refuses a REVIVING creature -- a Decimillipede segment
+    /// between death and reattach, an illusion, the Test Subject between forms -- and says
+    /// nothing about a Waterfall Giant at zero HP mid-eruption, which stays in the fight and
+    /// stays hittable. See `EnemyAI.IsTargetable`.
+    /// </remarks>
     private static EnemyState? FirstEnemy(CombatState state)
     {
         int idx = state.TargetEnemyIndex;
-        if (idx >= 0 && idx < state.Enemies.Count && state.Enemies[idx].Hp > 0)
+        if (idx >= 0 && idx < state.Enemies.Count && EnemyAI.IsTargetable(state.Enemies[idx]))
         {
             return state.Enemies[idx];
         }
 
-        return state.Enemies.FirstOrDefault(e => e.Hp > 0);
+        return state.Enemies.FirstOrDefault(EnemyAI.IsTargetable);
     }
 
     private static void ExhaustRandomCardFromHand(CombatState state, Random rng)

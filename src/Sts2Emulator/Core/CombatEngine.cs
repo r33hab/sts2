@@ -2898,6 +2898,17 @@ public static class CombatEngine
                 enemy.SecondaryIntent = null;
             }
         }
+
+        // MIRROR THE GAME: a creature that died leaves the roster unless a power vetoes.
+        // The emulator used to keep every corpse at 0 HP for stable observation indices,
+        // which the game does not do -- the mod reports living creatures only. Keeping them
+        // cost more than it bought: with `MaxEnemies` at 6, accumulated corpses pushed
+        // LIVING creatures past the last observation slot and an agent stopped seeing an
+        // enemy that was attacking it.
+        //
+        // Done AFTER the loop above, which walks by index against `enemyHpsBefore` and
+        // would lose its correlation if the list shrank underneath it.
+        state.Enemies.RemoveAll(enemy => enemy.Hp <= 0 && EnemyAI.ShouldRemoveOnDeath(enemy));
     }
 
     /// <summary>
@@ -3135,9 +3146,9 @@ public static class CombatEngine
         // the explicit target when there is one, else the first living enemy.
         int index = state.TargetEnemyIndex;
         var target =
-            index >= 0 && index < state.Enemies.Count && state.Enemies[index].Hp > 0
+            index >= 0 && index < state.Enemies.Count && EnemyAI.IsTargetable(state.Enemies[index])
                 ? state.Enemies[index]
-                : state.Enemies.FirstOrDefault(e => e.Hp > 0);
+                : state.Enemies.FirstOrDefault(EnemyAI.IsTargetable);
         if (target is null)
         {
             return;

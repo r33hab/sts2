@@ -75,7 +75,7 @@ public class FeedTests
 
         fight.Play(0);
 
-        Assert.True(fight.State.Enemies[0].Hp <= 0);
+        Assert.Empty(fight.State.Enemies);
         Assert.Equal(maxHpBefore, fight.State.PlayerMaxHp);
     }
 

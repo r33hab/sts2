@@ -333,11 +333,16 @@ public class EndOfDaysTests
             .Enemy(hp: 20)
             .Enemy(hp: 500);
 
+        // Held by REFERENCE across the kill: a dead creature LEAVES the roster now, as
+        // it does in the game, so an index taken before the death is stale after it.
+        var doomed = fight.Enemy0;
+        var survivor = fight.Enemy1;
+
         fight.Play();
 
-        Assert.Equal(0, fight.Enemy0.Hp);
-        Assert.Equal(500, fight.Enemy1.Hp);
-        Assert.Equal(29, BuffSystem.Get(fight.Enemy1.Buffs, BuffId.Doom));
+        Assert.Equal(0, doomed.Hp);
+        Assert.Equal(500, survivor.Hp);
+        Assert.Equal(29, BuffSystem.Get(survivor.Buffs, BuffId.Doom));
     }
 }
 
