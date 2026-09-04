@@ -31,6 +31,36 @@ public static class StateCloning
         return copy;
     }
 
+    /// <summary>
+    /// A copy of this stream, from a DIFFERENT seed but at the same call count.
+    /// </summary>
+    /// <remarks>
+    /// The position is kept deliberately. A stream's call count is not hidden information --
+    /// it is a fact about how much has happened -- so a determinization should change what
+    /// the next value IS, not how far along the sequence stands. Keeping it also means a
+    /// reseeded copy stays comparable to the original in the stream-position diff.
+    /// </remarks>
+    public static CountingRandom? Reseeded(this CountingRandom? rng, int? seed)
+    {
+        if (rng is null)
+        {
+            return null;
+        }
+
+        if (seed is null)
+        {
+            return rng.Clone();
+        }
+
+        var copy = new CountingRandom(seed.Value);
+        for (int i = 0; i < rng.CallCount; i++)
+        {
+            copy.Next();
+        }
+
+        return copy;
+    }
+
     public static CountingRandom Clone(this CountingRandom rng)
     {
         var copy = new CountingRandom(rng.Seed);
@@ -85,7 +115,25 @@ public static class StateCloning
             AfterSelectionToHand = [.. selection.AfterSelectionToHand],
         };
 
-    public static CombatState Clone(this CombatState combat) =>
+    /// <summary>
+    /// Copy a combat, optionally RESEEDING every random stream it owns.
+    /// </summary>
+    /// <remarks>
+    /// Without a seed this is a faithful copy: same streams, same seeds, same call counts,
+    /// so the copy plays out exactly as the original would. That is what the differential
+    /// tests want and must not change.
+    ///
+    /// With one, each stream is rebuilt from the new seed and fast-forwarded to the SAME
+    /// call count -- different values, identical positions. That is the latent half of a
+    /// determinization: every roll still to come (enemy moves, card generation, targeting,
+    /// orb and HP rolls) resolves differently in each copy, which is what a search over an
+    /// imperfect-information game needs and a plain clone cannot give it. `RunState.Clone`
+    /// has taken a `stringSeed` for this reason; combat had no equivalent.
+    ///
+    /// It does NOT touch the draw pile. That order was materialised by a shuffle that has
+    /// already happened, so reseeding cannot undo it -- see `ReshuffleUnknownDrawOrder`.
+    /// </remarks>
+    public static CombatState Clone(this CombatState combat, int? rngSeed = null) =>
         new()
         {
             AscensionLevel = combat.AscensionLevel,
@@ -131,18 +179,20 @@ public static class StateCloning
             Enemies = [.. combat.Enemies.Select(enemy => enemy.Clone())],
             EncounterId = combat.EncounterId,
             IsEliteCombat = combat.IsEliteCombat,
-            ShuffleRng = combat.ShuffleRng?.Clone(),
-            TargetRng = combat.TargetRng?.Clone(),
-            CardSelectionRng = combat.CardSelectionRng?.Clone(),
+            ShuffleRng = combat.ShuffleRng.Reseeded(rngSeed),
+            TargetRng = combat.TargetRng.Reseeded(rngSeed),
+            CardSelectionRng = combat.CardSelectionRng.Reseeded(rngSeed),
             EnergyCostRng = combat.EnergyCostRng?.Clone(),
-            CardGenerationRng = combat.CardGenerationRng?.Clone(),
-            PotionGenerationRng = combat.PotionGenerationRng?.Clone(),
-            OrbGenerationRng = combat.OrbGenerationRng?.Clone(),
+            CardGenerationRng = combat.CardGenerationRng.Reseeded(rngSeed),
+            PotionGenerationRng = combat.PotionGenerationRng.Reseeded(rngSeed),
+            OrbGenerationRng = combat.OrbGenerationRng.Reseeded(rngSeed),
             // A CountingRandom carries its seed and position, so it clones exactly. A
             // plain Random does not, and only the combat-only environment supplies one
             // -- that path has no clone export, so the shared reference is unreachable.
-            AiRng = combat.AiRng is CountingRandom counting ? counting.Clone() : combat.AiRng,
-            NicheHpRng = combat.NicheHpRng?.Clone(),
+            AiRng = combat.AiRng is CountingRandom counting
+                ? counting.Reseeded(rngSeed)
+                : combat.AiRng,
+            NicheHpRng = combat.NicheHpRng.Reseeded(rngSeed),
             PendingSelection = combat.PendingSelection?.Clone(),
             AutoPlaying = combat.AutoPlaying,
             PlayedCardBonusDamage = combat.PlayedCardBonusDamage,

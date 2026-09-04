@@ -2276,3 +2276,47 @@ Fifteen rows still report `coverage:FAIL`, and none of them is a divergence: `Qu
 ceiling -- moves nobody reached -- and act 3's version of the same three causes act 2 had:
 too few turns, the fight ending first, and a policy that never produces the state a branch
 needs.
+
+### Determinization: the latent half, and an inventory of the rest
+
+`RunState.Clone` has always taken an optional `stringSeed` that rebuilds all twelve run
+streams. `CombatState.Clone` had no equivalent, which is the level a combat search actually
+runs at -- so every branch inherited the same seeds AND the same positions, and every roll
+still to come resolved identically in all of them. `Clone(rngSeed:)` closes that: each stream
+is rebuilt from the new seed and fast-forwarded to the SAME call count.
+
+The position is kept deliberately. A stream's call count is not hidden information -- it is a
+fact about how much has happened -- so a determinization should change what the next value
+IS, not how far along the sequence stands. It also keeps a reseeded copy comparable in the
+stream-position diff.
+
+**What needs special handling, by category.** Read off `CombatState` and `EnemyState` rather
+than recalled:
+
+*Materialised hidden state -- must be PERMUTED, since no reseeding undoes a shuffle that has
+already run:*
+- `DrawPile` order. The player knows the multiset and not the order, so a uniform permutation
+  is the right posterior -- except for positions they placed themselves
+  (`DiscardToDrawPileTop`, `AutoPlayFromDrawPileTop`), which are known and must survive it.
+
+*Latent hidden state -- RESEEDED, and now reachable:* `ShuffleRng`, `TargetRng`,
+`CardSelectionRng`, `CardGenerationRng`, `PotionGenerationRng`, `OrbGenerationRng`,
+`NicheHpRng`, `AiRng`.
+
+*Predicts the future but is EARNED, so must NOT be resampled:* `EnemyState.MoveIndex`,
+`StarterMove`, `LastBranch`, `LastSpawnedDefId`, `OffBalance`. A human watching a fight knows
+where a creature is in its cycle, that a `CannotRepeat` branch cannot repeat, and which bot a
+Fabricator spawned last. Randomising these would make the search WORSE than a player, which
+is the failure mode hardest to notice because it looks like weak play rather than a bug.
+
+*Visible, despite looking like hidden queues:* `ReturnToHandBeforeDraw` and
+`CopiesToHandBeforeDraw` -- the game shows incoming cards, which is why E449 put them in the
+observation -- plus `AutoPlayQueue`, `Orbs`, `StolenCard` (the Swipe hover tip names it) and
+`Slot`.
+
+*Needs nothing:* `DiscardPile` order, which is permuted by the reshuffle before it is ever
+drawn from.
+
+So the remaining work is one operation -- permute the unknown span of the draw pile -- and
+the bookkeeping it needs, which is the only genuinely new thing: the emulator does not
+currently distinguish a card placed on top from one shuffled in at random.
