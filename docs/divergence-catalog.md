@@ -2318,5 +2318,16 @@ observation -- plus `AutoPlayQueue`, `Orbs`, `StolenCard` (the Swipe hover tip n
 drawn from.
 
 So the remaining work is one operation -- permute the unknown span of the draw pile -- and
-the bookkeeping it needs, which is the only genuinely new thing: the emulator does not
-currently distinguish a card placed on top from one shuffled in at random.
+the bookkeeping it needs.
+
+**Correcting an overstatement in the first version of this entry**, which claimed the
+emulator "does not distinguish a card placed on top from one shuffled in at random". It does:
+`Headbutt` opens a `DiscardToDrawPileTop` selection and the chosen card goes through
+`state.TopDeck(card)` to position 0. Top-decking is implemented, tested and captured, and the
+mechanic is correct.
+
+What is missing is only the METADATA: nothing records that position 0 is KNOWN TO THE PLAYER.
+That matters for exactly one consumer -- a determinization needs to know how much of the top
+to leave alone -- and the length of that known prefix moves as the game goes: two Headbutts
+make it two, a draw shortens it by one, a reshuffle erases it. `TopDeck` is right about where
+the card goes and silent about what the player knows, which is all it ever needed to be.
