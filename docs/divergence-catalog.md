@@ -2253,3 +2253,26 @@ rows before they produced a verdict; this one lost one. That is the `cards_playe
 waiting on the game's own play counter rather than on the hand shrinking -- and it means the
 run compared about eleven percent more of the act than any sweep before it. A row that
 aborts is not a row that passes, and for months the difference was invisible.
+
+### Glory re-swept: 72/72 verdicts, zero divergences, zero aborts
+
+Act 3 after the roster change, and it is the strongest result the sweep has produced:
+**72 rows, 72 verdicts, no divergence in any compared field, and NOT ONE abort.**
+
+Glory is the harder test of E475 and it was chosen for that. Three of the five powers that
+veto removal live here -- `SteamEruption` on the Waterfall Giant, `Adaptable` and
+`PainfulStabs` on the Test Subject -- so this act is where "corpses leave, except these"
+would break if the rule were wrong. It holds. So do E441, E467, E468, E469 and E471 through
+E474, all of which were found in this act.
+
+The abort count is the headline next to it. Glory lost **seventeen** rows in its first sweep
+and every sweep after, always the same six encounters, and I spent a whole pass attributing
+that to act-3 damage and re-running with more HP -- which changed nothing, because it was
+never about damage. With `cards_played` as the wait signal it is zero. The act went from 55
+comparable rows to 72.
+
+Fifteen rows still report `coverage:FAIL`, and none of them is a divergence: `Queen 2/6`,
+`Living Shield 1/2`, `Axebot 2/3`, `Magi Knight 4/5`, `Fabricator 2/3`. That is the known
+ceiling -- moves nobody reached -- and act 3's version of the same three causes act 2 had:
+too few turns, the fight ending first, and a policy that never produces the state a branch
+needs.
