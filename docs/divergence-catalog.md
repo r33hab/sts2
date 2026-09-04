@@ -2238,3 +2238,18 @@ That is why the caps are being left alone. Raising them costs an API bump and ob
 width to fix a problem no run exhibits, and the case for raising `MaxEnemyBuffs` should come
 from a sweep that actually overflows it. The corpse bug was worth fixing because it was
 silent AND happening; this is neither yet.
+
+### Hive re-swept after the roster change: 79/79, and nine more rows than before
+
+E475 altered every fight's roster semantics -- corpses leave, indices shift on death, and
+`FirstEnemy` asks `IsTargetable` rather than `Hp > 0`. The C# suite passing said nothing about
+whether that held against a real fight's worth of deaths, so the act was re-swept.
+
+**79 verdicts, 79 all-ok, one abort.** No divergence in deck, roster, intents, player state,
+hand, piles, RNG positions, enemy block, enemy powers or player powers.
+
+The abort count is the other result. Every earlier run of this configuration lost nine or ten
+rows before they produced a verdict; this one lost one. That is the `cards_played` fix --
+waiting on the game's own play counter rather than on the hand shrinking -- and it means the
+run compared about eleven percent more of the act than any sweep before it. A row that
+aborts is not a row that passes, and for months the difference was invisible.
