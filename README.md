@@ -38,13 +38,17 @@ exposed it and how to reproduce it.
 - `tests/python`: tests that must cross the native boundary — the observation layout, the
   command layer, and the live fixtures.
 - `scripts`: build, data extraction, patch update, trace validation, full-run trace capture,
-  live per-card and per-event capture, the source-vs-emulator audits, and training scripts.
+  live per-card and per-event capture, and the source-vs-emulator audits.
   `scripts/play.py` is the interactive client that lets a person play a run by hand.
+- `rl`: everything that faces a learning agent rather than the emulator — the `MaskablePPO`
+  trainer, the scripted-policy evaluator, and the two probes (`agent_probe.py`,
+  `mcts_probe.py`) that measure the observation, the action encoding and the search path.
+  See [docs/agent-interface.md](docs/agent-interface.md).
 
 ## Architecture
 
 ```text
-Python RL training
+rl (training, evaluation, search probes)
     |
     | Gymnasium + NumPy observations
     v
@@ -288,30 +292,30 @@ Crystal Sphere's board stays under its fog (see
 
 ```bash
 # Check the Gymnasium environment
-uv run python scripts/train.py --check
+uv run python rl/train.py --check
 
 # Short training job
-uv run python scripts/train.py --timesteps 5000 --n-envs 2
+uv run python rl/train.py --timesteps 5000 --n-envs 2
 
 # Against the native full-run wrapper
-uv run python scripts/train.py --run-env --timesteps 5000 --n-envs 2
+uv run python rl/train.py --run-env --timesteps 5000 --n-envs 2
 
 # Longer run, saved as a Stable Baselines3 checkpoint
-uv run python scripts/train.py --timesteps 1000000 --n-envs 4 --save-path checkpoints/maskable_ppo
+uv run python rl/train.py --timesteps 1000000 --n-envs 4 --save-path checkpoints/maskable_ppo
 ```
 
-`scripts/train.py` trains `MaskablePPO` from `sb3-contrib` using action masks from the
+`rl/train.py` trains `MaskablePPO` from `sb3-contrib` using action masks from the
 environment.
 
 ```bash
 # Baseline policy over fixed seeds, with per-encounter win rates
-uv run python scripts/evaluate.py --episodes 100 --policy first-valid
+uv run python rl/evaluate.py --episodes 100 --policy first-valid
 
 # Native full-run episodes
-uv run python scripts/evaluate.py --run-env --episodes 10 --policy first-valid --max-episode-steps 200
+uv run python rl/evaluate.py --run-env --episodes 10 --policy first-valid --max-episode-steps 200
 
 # Force an encounter, starter-deck-aware baseline
-uv run python scripts/evaluate.py --episodes 100 --policy starter-aggressive --encounter chompers
+uv run python rl/evaluate.py --episodes 100 --policy starter-aggressive --encounter chompers
 ```
 
 ## Differential testing against the live game

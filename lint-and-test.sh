@@ -48,8 +48,8 @@ fi
 
 # Test Python
 "$UV" run python -m unittest tests/python/test_sts2_gym.py
-"$UV" run python scripts/train.py --check --run-env
-"$UV" run python scripts/evaluate.py --episodes 2 --run-env --policy first-valid --max-episode-steps 20
+"$UV" run python rl/train.py --check --run-env
+"$UV" run python rl/evaluate.py --episodes 2 --run-env --policy first-valid --max-episode-steps 20
 
 # Test the emulator
 "$DOTNET" test src/Sts2Emulator.Tests/Sts2Emulator.Tests.csproj --nologo

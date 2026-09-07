@@ -238,13 +238,13 @@ None of the above weakens the differential harness, by construction:
 
 ---
 
-## What the interface actually measures (`scripts/agent_probe.py`)
+## What the interface actually measures (`rl/agent_probe.py`)
 
 The sections above are design. This is what the interface *does* when something walks
 it, and the numbers are here so later emulator work has a target rather than a feeling.
 Re-run after any change to the observation, the action encoding or the step path:
 
-    uv run python scripts/agent_probe.py
+    uv run python rl/agent_probe.py
 
 Findings worth carrying, from the first run:
 
@@ -277,13 +277,13 @@ it means one output neuron means different things on different screens, so the p
 to be prominent in the observation for the network to disambiguate.
 
 
-## What the search path measures (`scripts/mcts_probe.py`)
+## What the search path measures (`rl/mcts_probe.py`)
 
 A throwaway determinized MCTS — shallow tree, floor-count value, nothing trained —
 walked hard enough to answer what the design above could not. Re-run after any change to
 the clone API or the step path:
 
-    uv run python scripts/mcts_probe.py
+    uv run python rl/mcts_probe.py
 
 **The clone contract holds.** All three invariants a tree search depends on pass:
 stepping a clone leaves the parent untouched; two un-resampled clones given the same
@@ -344,7 +344,7 @@ Reading down the table rules out three suspects and leaves one:
   falls off a cliff — 2.7us and 1.0KB — and the only thing it skips is the next turn's
   setup. That path costs roughly **77us and 13.6KB per step**.
 
-Two further pieces of scale, from `scripts/agent_probe.py`: combat is about **61% of a
+Two further pieces of scale, from `rl/agent_probe.py`: combat is about **61% of a
 run's total step time**, and within a combat, ending the turn costs about **12x playing a
 card** (125us vs 10us). So the next-player-turn path is the single hottest thing in the
 emulator, and it is a path that allocates.

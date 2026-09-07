@@ -9,8 +9,8 @@ An agent trained today would be of dubious value anyway: the audits still list o
 flags, and a policy is perfectly happy to exploit an emulator bug. What is worth having
 now is the shape of the interface it would use.
 
-    uv run python scripts/agent_probe.py
-    uv run python scripts/agent_probe.py --runs 40 --section actions
+    uv run python rl/agent_probe.py
+    uv run python rl/agent_probe.py --runs 40 --section actions
 """
 
 from __future__ import annotations
