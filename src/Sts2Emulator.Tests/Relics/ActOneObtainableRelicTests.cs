@@ -471,10 +471,10 @@ public class LastingCandyTests
     /// fights' reward screens are the ones that get the extra Power.
     /// </summary>
     /// <remarks>
-    /// The screen itself is not modelled: the candy ADDS a fourth option and the emulator's
-    /// reward screen has three slots, with `RewardSkipAction` sitting on index 3. See
-    /// <c>RelicEffects.UnmodelledInRun</c> for why that is an action-space change rather
-    /// than a relic change. The clock is pinned here so only the screen is left.
+    /// The screen was the half that stayed unmodelled the longest, on the grounds that a
+    /// fourth option meant renumbering a screen whose index 3 is the SKIP. It did not: the
+    /// option is APPENDED at `RewardFourthCardAction`, and every action id the run already
+    /// had kept its meaning. See E493.
     /// </remarks>
     [Fact]
     public void TheCandyTriggersOnEverySecondCombat()
@@ -497,33 +497,31 @@ public class LastingCandyTests
     }
 
     /// <summary>
-    /// Four declared gaps, each for a reason that is not "nobody got to it". Lasting Candy
-    /// needs a fourth card-reward slot and Driftwood needs a reward reroll -- both
-    /// action-space changes, not missing effects. Delicate Frond would have to guess a
-    /// draw count on `CombatPotionGeneration`, and E451 is what a wrong draw count costs.
-    /// Whispering Earring's auto-play is a POLICY -- the game's own selector choosing up
-    /// to thirteen cards for the player -- and approximating a policy is worse than
-    /// admitting there is one; its +1 max energy is modelled, so it is a PARTIAL entry
-    /// here, the same shape as Snecko Eye's. Fake Snecko Eye left the list when Confused
-    /// arrived with Snecko Eye.
+    /// NO declared gaps. Every relic in the game is modelled.
     ///
-    /// Pinned by MEMBERSHIP rather than by count, so the list cannot quietly become a
-    /// place to park work: adding a fifth goes red here and has to be argued for in this
-    /// comment, which is the whole point of the guard.
+    /// The list is pinned EMPTY rather than deleted, because what it was ever worth was the
+    /// bar for adding to it, not the entries. Anything put back here goes red until it is
+    /// argued for in the comment on `RelicEffects.UnmodelledInRun`.
+    ///
+    /// Four relics were declared here over its life and all four left, but only one of the
+    /// four arguments held up. Fake Snecko Eye's was simply overtaken by Confused. Delicate
+    /// Frond's had gone STALE -- "no before-combat hook both entry paths share", when all
+    /// seven funnel through `StartCombatWithDeck` (E485). Whispering Earring's was UNSOUND:
+    /// it called the auto-play a policy when the card is `FirstOrDefault(c => c.CanPlay())`,
+    /// the target is `HittableEnemies.FirstOrDefault()` and the selector takes the first N
+    /// (E486). Lasting Candy's and Driftwood's was real but OVERSTATED -- a fourth option
+    /// and a reroll are action-space changes, and the assumption was that they meant
+    /// renumbering a screen whose index 3 is the skip. Appending costs nothing that
+    /// renumbering would have cost (E493).
+    ///
+    /// Three arguments out of four wrong, and none of them wrong in a way that a count or a
+    /// staleness check would have caught -- only re-reading each against the source did.
+    /// That is the reason this guard pins MEMBERSHIP and demands prose.
     /// </summary>
     [Fact]
-    public void TheDeclaredRunGapsAreTheFourThatAreArguedFor()
+    public void ThereAreNoDeclaredRunGaps()
     {
-        Assert.Equal(
-            new[]
-            {
-                RelicEffects.LastingCandy,
-                RelicEffects.Driftwood,
-                RelicEffects.DelicateFrond,
-                RelicEffects.WhisperingEarring,
-            },
-            RelicEffects.UnmodelledInRun
-        );
+        Assert.Empty(RelicEffects.UnmodelledInRun);
     }
 }
 

@@ -258,4 +258,12 @@ public sealed class PendingCardSelection
     /// leaves the card alone, which is why this cannot be read off the source card.
     /// </summary>
     public bool GeneratedUpgraded { get; init; }
+
+    /// <summary>
+    /// Whether a card taken from <see cref="GeneratedCandidates" /> arrives Retained
+    /// instead of free for the turn. Choices Paradox is the only source: it applies Retain
+    /// to its five options and does NOT make the kept one free, where Discovery does the
+    /// opposite -- so this picks between the two rather than adding to one.
+    /// </summary>
+    public bool GeneratedRetained { get; init; }
 }

@@ -79,6 +79,33 @@ public static class BuffSystem
         }
     }
 
+    /// <summary>
+    /// The powers the game declares <c>AllowNegative</c> on a <c>Counter</c> stack. A
+    /// NEGATIVE application of one of these is a DEBUFF -- `PowerModel.GetTypeForAmount`
+    /// says so outright -- which is what puts it in Artifact's way.
+    /// </summary>
+    /// <remarks>
+    /// Strength, Dexterity, Focus, Shrink and Shriek are the whole list in
+    /// `Models.Powers`. Shrink and Shriek are printed Debuffs either way; the first three
+    /// are Buffs whose sign decides.
+    /// </remarks>
+    public static bool AllowsNegative(BuffId id) =>
+        id is BuffId.Strength or BuffId.Dexterity or BuffId.Focus or BuffId.Shrink;
+
+    /// <summary>
+    /// Whether applying <paramref name="magnitude"/> of <paramref name="id"/> is a DEBUFF
+    /// landing -- the question Artifact answers, and not the same as "is this a debuff".
+    /// </summary>
+    /// <remarks>
+    /// Nine points of Strength off an enemy is a debuff; nine points ON is not, and both
+    /// are `BuffId.Strength`. `Apply` only asks the positive half of this because most of
+    /// its negative callers are BOOKKEEPING -- a temporary power handing back what it
+    /// took, which the game does by removing the power rather than by applying a debuff,
+    /// and which Artifact must not eat.
+    /// </remarks>
+    public static bool IsDebuffApplication(BuffId id, int magnitude) =>
+        (magnitude > 0 && IsDebuff(id)) || (magnitude < 0 && AllowsNegative(id));
+
     public static bool TryConsumeArtifact(List<BuffState> buffs)
     {
         int artifact = Get(buffs, BuffId.Artifact);
@@ -356,15 +383,23 @@ public static class BuffSystem
             return 0;
         }
 
+        // `Hook.ModifyBlock` runs every ADDITIVE contribution first and only then the
+        // multiplicative ones. Fasten is `ModifyBlockAdditive` like Dexterity, so it has to
+        // land before Frail rather than after it: added afterwards, a Frail Defend came out
+        // as (base + Dex) * 0.75 + Fasten where the game pays (base + Dex + Fasten) * 0.75.
         blk += Get(buffs, BuffId.Dexterity);
-        if (Get(buffs, BuffId.Frail) > 0)
-        {
-            blk *= 0.75f;
-        }
 
+        // `FastenPower.ModifyBlockAdditive` refuses a card that is not tagged Defend, which
+        // is why the caller has to say which kind of block this is.
         if (isDefend)
         {
             blk += Get(buffs, BuffId.FastenPower);
+        }
+
+        // `FrailPower.ModifyBlockMultiplicative`, the only multiplicative one here.
+        if (Get(buffs, BuffId.Frail) > 0)
+        {
+            blk *= 0.75f;
         }
 
         return Math.Max(0, (int)blk);

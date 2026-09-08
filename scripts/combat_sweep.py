@@ -614,7 +614,11 @@ def apply_action(
 _REPO = Path(__file__).resolve().parent.parent
 
 
-from buff_map import BUFF_ID_TO_LIVE  # noqa: E402 -- shared with the run replay
+from buff_map import (  # noqa: E402 -- shared with the run replay
+    BUFF_ID_TO_LIVE,
+    LIVE_ALIASES,
+    canonical_power,
+)
 
 
 def _presence_only_powers() -> set[str]:
@@ -657,47 +661,156 @@ def _presence_only_powers() -> set[str]:
 
 PRESENCE_ONLY_POWERS = _presence_only_powers()
 
+# Live powers with a real emulator behaviour behind them but NOTHING the sweep can set
+# against them, excluded from the unmapped report because they are accounted for rather
+# than unknown. Silence here has to be ARGUED, the same bar `RelicEffects.UnmodelledInRun`
+# holds itself to on the C# side -- a power goes quiet only with the reason written down.
+DECLARED_NO_QUANTITY = {
+    # `ThieveryPower.Amount` is the steal RATE, not the takings: `Steal` takes
+    # `Min(Amount, Gold)` and banks the running total in `DynamicVars.Gold`. The live power
+    # reads a constant 20 all fight -- observed doing exactly that on a gremlin-merc
+    # capture, four turns at 20 while the stash grew to 80. The emulator holds the rate as
+    # the literal in `Math.Min(20, state.PlayerGold)` and the takings in
+    # `EnemyState.StolenGold`, so the live amount corresponds to NEITHER field. Mapping it
+    # to `StolenGold` -- the obvious move -- would set a rate against a total and call them
+    # equal at the one moment they coincide.
+    "THIEVERY_POWER",
+    # `HeistPower.Amount` is what the merc took, carried by the Fat Gremlin and handed back
+    # as a `GoldReward` on its death. The emulator keeps it in `EnemyState.HeistGold`, and a
+    # side-channel export can read it -- that part was built and worked. It still cannot be
+    # compared HERE, for a reason that is structural rather than missing plumbing: the
+    # combat sweep has no player GOLD. Every non-arena `CombatFactory.Reset` passes
+    # `playerGold: 0`, so the emulator's merc computes `Min(20, 0)` and steals nothing,
+    # while the live merc robs a real run. The two sides would disagree on every capture,
+    # forever, and a comparison that always fails teaches nothing.
+    #
+    # Where it IS checked is the run traces, which carry real gold and compare
+    # `player.gold` per action: six of the thirty-two fixtures fight this encounter, and
+    # they pass. The stash's whole observable consequence is the gold it returns, so that
+    # is the check that matters. Giving the sweep gold would mean routing every capture
+    # through the arena reset to carry one number -- see E489.
+    "HEIST_POWER",
+    # Applied by NOTHING. Each of these three is referenced only by its own class and by
+    # `AbstractModelSubtypes`, the model registry that lists every power whether or not
+    # anything uses it -- no card, relic, potion or monster applies them. Dead content, so
+    # they cannot appear in a capture and reporting them as gaps invites someone to model
+    # a power the game never grants. Re-derive with a grep before trusting this: a patch
+    # that ships the card these were written for turns them live again.
+    "GRAVITY_POWER",
+    "LEADERSHIP_POWER",
+    "MAGIC_BOMB_POWER",
+    # MODELLED, and thoroughly -- just not as a buff. `DieForYouPower` is applied to OSTY at
+    # summon with an amount of 1, a marker rather than a quantity, and it redirects the
+    # unblocked remainder of a powered attack aimed at its owner onto the pet.
+    # `EnemyAI` implements exactly that, keyed on `state.OstyHp > 0`, sponge capacity and
+    # overkill spill included. There is nothing to set it against here for two reasons: the
+    # amount carries no information, and the power rides a creature the emulator does not
+    # put in a status list at all.
+    "DIE_FOR_YOU_POWER",
+}
 
-def _live_powers(creature: dict[str, Any], unmapped: list[str]) -> set[tuple[str, int]]:
-    """Collect the game's powers on one creature, as (entry, amount).
+# Powers only a CO-OP game can produce, so a solo sweep cannot meet them. Each is applied by
+# a `MultiplayerOnly` card, and `CardFactory.FilterForPlayerCount` drops those from every
+# pool in a single-player run.
+COOP_ONLY_POWERS = {
+    "BEACON_OF_HOPE_POWER",
+    "FLANKING_POWER",
+    "INTERCEPT_POWER",
+    "KNOCKDOWN_POWER",
+    "SNEAKY_POWER",
+    "TAG_TEAM_POWER",
+    "TANK_POWER",
+    # Applied by `Intercept`, which is MultiplayerOnly: `CoveredPower.AfterApplied` reads
+    # `base.Applier.Player.NetId` and hands the owner to an `InterceptPower` on the applier,
+    # so it needs a second PLAYER to exist at all.
+    "COVERED_POWER",
+    # Applied by `TankPower`, whose card is MultiplayerOnly, and the same shape as Covered:
+    # it names its applier and halves powered damage for them.
+    "GUARDED_POWER",
+}
 
-    A power this map cannot resolve is recorded in `unmapped` and left OUT of the set
+
+# A power whose live amount is a display value carries no comparable number, so only its
+# PRESENCE is recorded. A STRING, not a magic number: the obvious `-1` is a real amount --
+# a single point of Strength drain is `-1` -- and a sentinel that can be mistaken for data
+# is how a compared buff turns into an unchecked one.
+_PRESENCE = "present"
+
+
+def _fold(bucket: dict[str, object], entry: str, amount: object) -> None:
+    """Add one power to a creature's tally, keyed by the name BOTH sides use.
+
+    SUMMED, because the mapping is many-to-one: the game reports thirteen distinct
+    `: TemporaryStrengthPower` subclasses where the emulator keeps a single
+    `BuffId.TemporaryStrength`, so a creature carrying Mangle 2 and Dark Shackles 2 shows
+    as two live powers against one emulator buff of 4. Matching them pairwise would call
+    that a divergence; it is the same four points of strength counted twice over.
+    """
+    if amount is _PRESENCE or bucket.get(entry) is _PRESENCE:
+        bucket[entry] = _PRESENCE
+        return
+    bucket[entry] = int(bucket.get(entry, 0)) + int(amount)
+
+
+def _drop_empty(bucket: dict[str, object]) -> dict[str, object]:
+    """Zero totals count as ABSENT, the same rule each single power already followed.
+
+    Needed because the fold can REACH zero even though no contributor was zero: Mangle -2
+    and a Flex Potion +2 sum to nothing, and the emulator's single buff at zero is dropped
+    by the same rule on its side. Without this the live side keeps a key the emulator does
+    not have and the row fails on two powers that cancelled.
+    """
+    return {k: v for k, v in bucket.items() if v is _PRESENCE or v != 0}
+
+
+def _live_powers(creature: dict[str, Any], unmapped: list[str]) -> dict[str, object]:
+    """Collect the game's powers on one creature, as canonical name -> amount.
+
+    A power this map cannot resolve is recorded in `unmapped` and left OUT of the tally
     rather than compared: a buff the comparison cannot see is indistinguishable from a buff
     that agrees, and quietly dropping it is how a blind spot becomes a clean row. Naming it
     keeps the run green and the gap visible, which is the only honest combination.
+
+    Resolution goes through `canonical_power`, which is the whole point of that table and
+    which this function used to skip -- it asked `BUFF_ID_TO_LIVE.values()` alone, so all
+    nineteen ALIASED powers were reported unmapped and dropped. The full-run replay has
+    always canonicalised; only the sweep did not, and two harnesses answering the same
+    question differently is exactly what `buff_map` exists to prevent.
     """
-    known = set(BUFF_ID_TO_LIVE.values())
-    out: set[tuple[str, int]] = set()
+    known = set(BUFF_ID_TO_LIVE.values()) | set(LIVE_ALIASES)
+    out: dict[str, object] = {}
     for power in creature.get("status") or []:
-        entry = power.get("id")
-        if entry not in known:
-            unmapped.append(str(entry))
+        entry = str(power.get("id"))
+        if entry in DECLARED_NO_QUANTITY or entry in COOP_ONLY_POWERS:
             continue
-        # A power whose live amount is a display value carries no comparable number, so
-        # only its PRESENCE is recorded -- see `_presence_only_powers`.
-        if entry in PRESENCE_ONLY_POWERS:
-            out.add((str(entry), -1))
+        if entry not in known:
+            unmapped.append(entry)
+            continue
+        name = canonical_power(entry)
+        if entry in PRESENCE_ONLY_POWERS or name in PRESENCE_ONLY_POWERS:
+            _fold(out, name, _PRESENCE)
             continue
         # An amount of zero counts as ABSENT on both sides: the game drops a spent power
         # and the emulator sometimes keeps it at zero.
         if power.get("amount"):
-            out.add((str(entry), int(power["amount"])))
-    return out
+            _fold(out, name, int(power["amount"]))
+    return _drop_empty(out)
 
 
-def _emu_powers(creature: dict[str, Any]) -> set[tuple[str, int]]:
+def _emu_powers(creature: dict[str, Any]) -> dict[str, object]:
     """Collect the emulator's buffs on one creature, mapped onto the game's entries."""
-    out: set[tuple[str, int]] = set()
+    out: dict[str, object] = {}
     for buff in creature.get("status") or []:
         entry = BUFF_ID_TO_LIVE.get(int(buff.get("id", 0)))
         if entry is None:
             continue
-        if entry in PRESENCE_ONLY_POWERS:
-            out.add((entry, -1))
+        name = canonical_power(entry)
+        if name in PRESENCE_ONLY_POWERS:
+            _fold(out, name, _PRESENCE)
             continue
         if buff.get("amount"):
-            out.add((entry, int(buff["amount"])))
-    return out
+            _fold(out, name, int(buff["amount"]))
+    return _drop_empty(out)
 
 
 def enemy_buff_sets(

@@ -56,6 +56,15 @@ public sealed class RunEngine
         RunNonCombatEffects.ClearDeckSelection(State);
         State.PendingRestUpgrade = false;
         State.RestResultPending = false;
+        // The relics that keep RUN-length state of their own. Reset reuses the state
+        // object, so anything a previous run left here would be inherited by the next one.
+        State.CardRemovalsOwed = 0;
+        State.RoyaltiesGoldOwed = 0;
+        State.WaxRelics.Clear();
+        State.FurCoatRooms.Clear();
+        State.FurCoatAct = -1;
+        State.GoldenPathAct = -1;
+        State.ParasolSweepPending = false;
         State.UnknownMapPointsVisited = 0;
         State.UnknownMapPointMonsterOdds = 0.1;
         State.UnknownMapPointEliteOdds = -1.0;
@@ -118,6 +127,12 @@ public sealed class RunEngine
         int completedCombatRoomsBeforeCurrent = 0
     )
     {
+        // `DelicateFrond.BeforeCombatStart` fills every open potion slot. Here because this
+        // is the one hook every combat entry path in the run shares -- and BEFORE the slots
+        // are snapshotted into the combat below, or the fight would be handed the belt as it
+        // stood a moment earlier and the potions would exist only on the run.
+        RunRewardGenerator.FillPotionSlotsForDelicateFrond(State);
+
         int[] startingPotions = potionIds.ToArray();
         State.Deck = runDeck.ToList();
         State.Relics = runRelics.ToList();
@@ -221,6 +236,16 @@ public sealed class RunEngine
 
         combat.OrbGenerationRng = orbGenerationRng;
 
+        // The belt's SIZE travels with its contents, and it has to be set BEFORE the reset:
+        // `CombatFactory.Reset` runs `RelicEffects.ApplyCombatStart`, and Petrified Toad
+        // procures a Shaped Rock into the first FREE slot from in there. `CombatState
+        // .MaxPotionSlots` defaults to 3 and was never set from the run, so a fight always
+        // believed in three slots and the toad made a third one out of nothing on a run
+        // that had two. `TryToProcure` fails silently on a full belt, so the game gives no
+        // rock at all. Setting it after the reset is too late by one relic -- which is how
+        // this was written first. See E492.
+        combat.MaxPotionSlots = State.MaxPotionSlots;
+
         CombatFactory.Reset(
             combat,
             combatRng,
@@ -247,6 +272,22 @@ public sealed class RunEngine
         State.TookUnblockedDamageThisCombat = false;
 
         Effects.RelicEffects.RestoreUsedUpRelics(combat, State.UsedUpRelics);
+
+        // `FurCoat.BeforeCombatStart` bites the opening roster; the flag it is read from
+        // stays on the combat so `AfterCreatureAddedToCombat` can bite reinforcements with
+        // the same rule -- see `RelicEffects.Spawned`.
+        combat.FurCoatBites = State.FurCoatRooms.Contains(State.CurrentMapCoord);
+        foreach (var enemy in combat.Enemies)
+        {
+            Effects.RelicEffects.BiteForFurCoat(combat, enemy);
+        }
+
+        // The pre-play phase runs HERE rather than on the first `Step`, because the run
+        // hands this combat straight to `CombatEngine.ValidActions` -- an observation of a
+        // state that must already include whatever plays itself. After the Fur Coat bites
+        // above: the coat is `BeforeCombatStart` and pre-play is inside turn one, so a
+        // creature it pins to 1hp must be pinned before an auto-played attack can reach it.
+        CombatEngine.ResolvePrePlayPhase(combat, combatRng);
 
         State.ActiveCombat = combat;
         State.ActiveCombatRng = combatRng;
@@ -355,6 +396,17 @@ public sealed class RunEngine
 
     private int RollUnknownMapPointNodeType()
     {
+        // `GoldenCompass.ModifyUnknownMapPointRoomTypes` narrows the set to Event alone,
+        // for its own act only. A one-element set is not a roll -- the golden path's "?"
+        // rooms are events, and the stream is not touched.
+        if (
+            State.Relics.Any(relic => relic.DefId == RunConstants.RelicGoldenCompass)
+            && State.GoldenPathAct == State.CurrentActIndex
+        )
+        {
+            return RunConstants.NodeEvent;
+        }
+
         var allowedRoomTypes = new HashSet<int>
         {
             RunConstants.NodeNormal,
@@ -511,6 +563,26 @@ public sealed class RunEngine
                     SetMask(mask, i);
                 }
 
+                // `PaelsWing.TryModifyCardRewardAlternatives` adds SACRIFICE whenever the
+                // relic is held. It is an alternative to taking a card, not to skipping:
+                // it ends the screen the same way a claim does.
+                if (State.Relics.Any(relic => relic.DefId == RunConstants.RelicPaelsWing))
+                {
+                    SetMask(mask, RunConstants.RewardSacrificeAction);
+                }
+
+                // Lasting Candy's fourth option, offered only on the screens that HAVE one
+                // -- every second combat, and never after a reroll.
+                if (State.LastingCandyRewardCard != 0)
+                {
+                    SetMask(mask, RunConstants.RewardFourthCardAction);
+                }
+
+                if (State.CardRewardRerollAvailable)
+                {
+                    SetMask(mask, RunConstants.RewardRerollAction);
+                }
+
                 break;
 
             case RunPhase.Map:
@@ -578,6 +650,30 @@ public sealed class RunEngine
                 )
                 {
                     SetMask(mask, RunConstants.RestHatchAction);
+                }
+
+                // `MeatCleaver.TryModifyRestSiteOptions` adds COOK whenever the relic is
+                // held; `CookRestSiteOption.IsEnabled` is what wants two removable cards.
+                // The emulator has no disabled-but-present option, so the enable check is
+                // what gates the move.
+                if (
+                    State.Relics.Any(relic => relic.DefId == RunConstants.RelicMeatCleaver)
+                    && RunNonCombatEffects.CanCook(State)
+                    && !RestOptionSpent(RunConstants.RestCookAction)
+                )
+                {
+                    SetMask(mask, RunConstants.RestCookAction);
+                }
+
+                // `PumpkinCandle.TryModifyRestSiteOptions` adds KINDLE unconditionally
+                // while the relic is held -- there is no cap on the count, so it stays on
+                // the screen even with the candle already full.
+                if (
+                    State.Relics.Any(relic => relic.DefId == RunConstants.RelicPumpkinCandle)
+                    && !RestOptionSpent(RunConstants.RestKindleAction)
+                )
+                {
+                    SetMask(mask, RunConstants.RestKindleAction);
                 }
 
                 SetMask(mask, RunConstants.RewardSkipAction);
@@ -898,6 +994,10 @@ public sealed class RunEngine
         obs[offset + 9] = State.RewardCards[0];
         obs[offset + 10] = State.RewardCards[1];
         obs[offset + 11] = State.RewardCards[2];
+        // The FOURTH option lives at the end of the observation rather than here, so that
+        // adding it moved nothing. See `RunConstants.FourthRewardObsOffset`.
+        obs[RunConstants.FourthRewardObsOffset] = State.LastingCandyRewardCard;
+        obs[RunConstants.FourthRewardObsOffset + 1] = State.LastingCandyRewardUpgraded ? 1 : 0;
         for (int i = 0; i < RunConstants.MapChoices; i++)
         {
             // Types only. What is BEHIND a node is not on the game's map -- see
@@ -1196,6 +1296,30 @@ public sealed class RunEngine
                 // Improvement rider, and the run-side seam that kept it unmodelled
                 // until O17. Before the sync, which is where the combat is dropped.
                 RunNonCombatEffects.ApplyImprovementUpgrades(State);
+
+                // `RoyaltiesPower.AfterCombatEnd` and
+                // `ForbiddenGrimoirePower.AfterCombatEnd` each hang an extra reward on the
+                // room. Read off the COMBAT here, before the sync drops it -- both powers
+                // were applied by their cards and asked about by nothing, so the gold and
+                // the removals never arrived.
+                if (State.ActiveCombat is { } finished)
+                {
+                    State.RoyaltiesGoldOwed += BuffSystem.Get(
+                        finished.PlayerBuffs,
+                        BuffId.Royalties
+                    );
+                    State.CardRemovalsOwed += BuffSystem.Get(
+                        finished.PlayerBuffs,
+                        BuffId.ForbiddenGrimoire
+                    );
+                }
+                // `PumpkinCandle.AfterCombatEnd` burns a point of Kindle whether the fight
+                // was won or not, so it sits here rather than behind the victory check.
+                RunNonCombatEffects.BurnPumpkinCandle(State);
+
+                // `ToyBox.AfterCombatEnd` counts the fight whether or not it was won, the
+                // same as the candle -- and every third one melts a wax relic.
+                RunNonCombatEffects.MeltAToyBoxRelic(State);
                 SyncAfterCombat();
                 if (result.PlayerWon)
                 {
@@ -1662,7 +1786,28 @@ public sealed class RunEngine
     private int StepCardReward(int action, out bool terminal)
     {
         terminal = false;
-        if (0 <= action && action < State.RewardCards.Length)
+
+        // `Driftwood`'s reroll answers the screen WITHOUT closing it: the options are
+        // thrown away, three more are rolled, and the player chooses again.
+        if (action == RunConstants.RewardRerollAction && State.CardRewardRerollAvailable)
+        {
+            RunRewardGenerator.PopulateCardReward(State, isReroll: true);
+            return 0;
+        }
+
+        // The three ordinary options are actions 0-2; Lasting Candy's fourth is claimed at
+        // `RewardFourthCardAction` and reads slot 3. Two ids for one array, because three
+        // is the SKIP and always has been -- see the constant.
+        // Lasting Candy's option is claimed by its own action and comes from its own field,
+        // so it takes none of the three the roll produced.
+        if (action == RunConstants.RewardFourthCardAction && State.LastingCandyRewardCard != 0)
+        {
+            RunNonCombatEffects.AddCardToDeck(
+                State,
+                new CardInstance(State.LastingCandyRewardCard, State.LastingCandyRewardUpgraded)
+            );
+        }
+        else if (0 <= action && action < State.RewardCards.Length)
         {
             int cardId = State.RewardCards[action];
             if (cardId == 0)
@@ -1677,12 +1822,33 @@ public sealed class RunEngine
                     State.RewardUpgraded[action],
                     // Wing Charm enchants the OPTION on the screen, so the enchantment
                     // travels with the card the player picks -- and only with that one.
+                    // `Glitter.TryModifyCardRewardOptionsLate` enchants EVERY eligible
+                    // option instead, so it is asked per-card rather than by index.
                     Enchantment: action == State.RewardEnchantIndex
                         ? State.RewardEnchantment
-                        : Enchantment.None,
-                    EnchantAmount: action == State.RewardEnchantIndex ? 1 : 0
+                        : Effects.RelicEffects.GlitterEnchantmentFor(
+                            State,
+                            new CardInstance(cardId, State.RewardUpgraded[action])
+                        ),
+                    EnchantAmount: action == State.RewardEnchantIndex ? 1
+                        : Effects.RelicEffects.GlitterEnchantmentFor(
+                            State,
+                            new CardInstance(cardId, State.RewardUpgraded[action])
+                        ) == Enchantment.None
+                            ? 0
+                        : 1
                 )
             );
+        }
+        else if (
+            action == RunConstants.RewardSacrificeAction
+            && State.Relics.Any(relic => relic.DefId == RunConstants.RelicPaelsWing)
+        )
+        {
+            // `EndSelectionAndCompleteReward`: the screen closes exactly as it does for a
+            // claim, so this falls through to the same clear-and-advance below rather than
+            // being a skip. What it costs is the card; what it buys is every second relic.
+            RunNonCombatEffects.SacrificeACardReward(State);
         }
         else if (action != RunConstants.RewardSkipAction)
         {
@@ -1691,6 +1857,9 @@ public sealed class RunEngine
 
         Array.Clear(State.RewardCards);
         Array.Clear(State.RewardUpgraded);
+        State.LastingCandyRewardCard = 0;
+        State.LastingCandyRewardUpgraded = false;
+        State.CardRewardRerollAvailable = false;
 
         // Prayer Wheel and White Star each add a WHOLE extra CardReward, so the screen
         // comes back rather than the run moving on. Rolled here, when the previous offer
@@ -1846,6 +2015,32 @@ public sealed class RunEngine
     private int LeaveRewardScreen(out bool terminal)
     {
         terminal = false;
+
+        // `CardRemovalReward` is claimed FROM the reward screen, so it is answered as the
+        // screen is left rather than before it. One selection at a time: the screen reopens
+        // for the next while any are still owed.
+        if (
+            State.CardRemovalsOwed > 0
+            && State.Deck.Count > 1
+            && State.PendingSelectionKind == DeckSelection.None
+        )
+        {
+            State.CardRemovalsOwed--;
+            if (
+                RunNonCombatEffects.BeginDeckSelection(
+                    State,
+                    DeckSelection.Remove,
+                    0,
+                    count: 1,
+                    returnTo: SelectionReturn.Map
+                )
+            )
+            {
+                State.Phase = RunPhase.TransformSelect;
+                return 0;
+            }
+        }
+
         if (State.NeowAwaitingProceed)
         {
             State.Phase = RunPhase.Ancient;
@@ -1960,12 +2155,22 @@ public sealed class RunEngine
 
             State.Gold -= cost;
             RunNonCombatEffects.CloseMawBank(State, cost);
-            if (State.Relics.All(relic => relic.DefId != relicId))
-            {
-                State.Relics.Add(new RelicInstance(relicId));
-            }
-
             State.ShopRelics[index] = 0;
+
+            // A bought relic is `RelicCmd.Obtain` like any other, so its `AfterObtained`
+            // runs. Adding it to the list bare made every pickup effect free for the shop
+            // to swallow: a Distinguished Cape bought here cost no max HP and paid no
+            // Apparitions, and a Preserved Fog removed nothing.
+            var followUp = RunNonCombatEffects.ApplyRelicPickup(
+                State,
+                relicId,
+                SelectionReturn.Shop
+            );
+            if (followUp == RunFollowUp.TransformSelect)
+            {
+                State.Phase = RunPhase.TransformSelect;
+                return 0;
+            }
         }
         else if (10 <= action && action < 13)
         {
@@ -2077,10 +2282,13 @@ public sealed class RunEngine
     private int AdvanceAfterNode(out bool terminal)
     {
         terminal = false;
-        int terminalFloor =
-            State.Act == RunConstants.ActUnderdocks
-                ? RunConstants.MapBossRow * 2 + 1
-                : RunConstants.MapBossRow + 1;
+        // The BACKSTOP, not the real ending: a run finishes by beating the last act's boss,
+        // which `AdvanceAfterRelicReward` handles. This only catches a run that has walked
+        // past where any map could take it -- so it reads the boss row off the map the run
+        // is on rather than assuming the standard one. Golden Compass lays a map a row
+        // taller, and a constant here cut its last room off.
+        int bossRow = RunMapGenerator.BossRow(State);
+        int terminalFloor = State.Act == RunConstants.ActUnderdocks ? bossRow * 2 + 1 : bossRow + 1;
         if (State.Floor >= terminalFloor)
         {
             State.Phase = RunPhase.Complete;
@@ -2182,6 +2390,46 @@ public sealed class RunEngine
             // else -- the egg's transformation is the RELIC's `AfterObtained`, so it lands
             // however the relic is obtained rather than only through the rest site.
             RunNonCombatEffects.ApplyRelicPickup(State, Effects.RelicEffects.Byrdpip);
+            FinishRestOption(action);
+            return 0;
+        }
+
+        if (
+            action == RunConstants.RestKindleAction
+            && State.Relics.Any(relic => relic.DefId == RunConstants.RelicPumpkinCandle)
+        )
+        {
+            // `KindleRestSiteOption.OnSelect` is `Rekindle()` and nothing else, which is
+            // exactly what the pickup does -- so it goes through the same arm.
+            RunNonCombatEffects.ApplyRelicPickup(State, RunConstants.RelicPumpkinCandle);
+            FinishRestOption(action);
+            return 0;
+        }
+
+        if (
+            action == RunConstants.RestCookAction
+            && State.Relics.Any(relic => relic.DefId == RunConstants.RelicMeatCleaver)
+            && RunNonCombatEffects.CanCook(State)
+        )
+        {
+            // Remove TWO and then gain nine max HP. The HP rides the follow-up because the
+            // game gains it after the removals resolve, and because a selection the player
+            // cancels out of pays nothing -- `OnSelect` returns false on an empty pick.
+            if (
+                RunNonCombatEffects.BeginDeckSelection(
+                    State,
+                    DeckSelection.Remove,
+                    0,
+                    count: 2,
+                    followUpMaxHpGain: 9,
+                    returnTo: SelectionReturn.Rest
+                )
+            )
+            {
+                State.Phase = RunPhase.TransformSelect;
+                return 0;
+            }
+
             FinishRestOption(action);
             return 0;
         }
@@ -4712,9 +4960,19 @@ public sealed class RunEngine
             {
                 case SelectionReturn.Shop:
                     State.Phase = RunPhase.Shop;
+                    // A parasol sweep that stopped to ask something picks up where it
+                    // left off -- the shelves are the cursor, so this finishes the rest
+                    // of them and then asks for the removal it still owes.
+                    RunRewardGenerator.ContinueLordsParasolSweep(State);
                     return 0;
                 case SelectionReturn.Map:
                     return AdvanceAfterNode(out terminal);
+                case SelectionReturn.Rest:
+                    // The option was spent on the way in; whether the screen stays up is
+                    // the Tent's call, which is what FinishRestOption decides.
+                    FinishRestOption(RunConstants.RestCookAction);
+                    State.Phase = RunPhase.Rest;
+                    return 0;
                 default:
                     // The belt's Jelly Liver keeps its options up, because the belt turns
                     // and offers the next dish; everything else shows its result page.

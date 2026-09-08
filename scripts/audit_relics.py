@@ -353,7 +353,7 @@ READ: dict[str, tuple[str, str]] = {
     ),
     "FakeSneckoEye": (
         "a3a8feee695c",
-        "Applies ConfusedPower and nothing else -- the real Snecko Eye's downside without its two cards of draw. NOT modelled: Confused re-rolls every card's cost as it is drawn and the emulator has no such power. Declared in RelicEffects.UnmodelledInRun.",
+        "Applies ConfusedPower and nothing else -- the real Snecko Eye's downside without its two cards of draw. Confused IS modelled: each drawn card's cost is re-rolled to 0..3 off the run's combat_energy_costs stream, X-cost cards skipped. (This note used to say the opposite and name RelicEffects.UnmodelledInRun; the power was written and the note was not. A digest cannot catch that -- it fingerprints the GAME source, and what went stale was the claim about the EMULATOR.)",
     ),
     "FakeStrikeDummy": (
         "7c00c61396cb",
@@ -786,6 +786,94 @@ READ: dict[str, tuple[str, str]] = {
         "BeforeHandDraw turn one: one Power MOVED from draw to hand off CombatCardSelection, free for the turn. Moves rather than makes, so the draw pile shortens and the turn-one reorder sees it.",
     ),
     "SignetRing": ("9f6083896263", "GoldVar(999) on pickup, through GainGold so Bloody Idol sees it."),
+    "BeautifulBracelet": (
+        "6a62fd539b52",
+        "FromDeckForEnchantment with Swift at 3, on three cards. Swift takes Powers only, so the count is what the screen ASKS for and not what it is guaranteed to get.",
+    ),
+    "Claws": (
+        "fc125c0ecc8a",
+        "FromDeckForTransformation into Maul, six cards. The game carries the original's upgrade onto the Maul when the Maul is upgradable; TransformTo does not yet, which is this arm's one approximation.",
+    ),
+    "DistinguishedCape": (
+        "e054a5ddd56e",
+        "LoseMaxHp(9) then three Apparitions into the deck. No selection -- it takes the HP and hands the cards over.",
+    ),
+    "PreservedFog": (
+        "f937505cffed",
+        "FromDeckForRemoval for three, then a Folly. The curse rides the follow-up so it arrives AFTER the removals, the way the game orders it.",
+    ),
+    "MeatCleaver": (
+        "65cc148876d3",
+        "Adds CookRestSiteOption to the rest screen: remove TWO and gain 9 max HP, which heals by what it adds. IsEnabled wants two REMOVABLE cards; the emulator has no greyed-out option, so that check gates the move rather than its label.",
+    ),
+    "PumpkinCandle": (
+        "98a3569592f6",
+        "KindleCount starts at 5, pays +1 max energy while it is above zero, and burns a point at every combat END whether the fight was won or not. Its Kindle rest option is Rekindle() -- +5, uncapped -- which is the same body as the pickup.",
+    ),
+    "SereTalon": (
+        "bf242eb6cb17",
+        "TWO curses off Rng.Niche drawn WITHOUT replacement -- the game removes each pick from its own list -- and then three Wishes. The removal is why this cannot be RollGeneratableCurse twice.",
+    ),
+    "BrilliantScarf": (
+        "e54b77904a46",
+        "ShouldModifyCost is CardsPlayedThisTurn == Cards.BaseValue - 1, so with CardsVar(5) the free card is the FIFTH -- the one played with four already down -- and nothing before or after it. Zeroes energy AND stars, through two hooks that return the same zero.",
+    ),
+    "ChoicesParadox": (
+        "3b9f90e2fb2c",
+        "Turn ONE only: five distinct cards off the character's own pool through GetDistinctForCombat, Retain applied to each, and one kept. The kept card is Retained rather than free for the turn, which is the whole difference from Discovery's identical-looking screen.",
+    ),
+    "DiamondDiadem": (
+        "5a38175481c0",
+        "Two cards or fewer this turn and BeforeSideTurnEnd grants DiamondDiademPower, which halves POWERED attack damage and removes itself when the enemy side's turn ends. PowerStackType.Single, and the threshold is <=, so a turn that plays nothing qualifies.",
+    ),
+    "MusicBox": (
+        "efa084e0c1fb",
+        "The first ATTACK each turn is CLONED into hand with Ethereal. Its Before/After pair exists only to survive the await between them, so both halves collapse to one check here.",
+    ),
+    "ArchaicTooth": (
+        "7d6de614b0d1",
+        "Transforms the FIRST deck card with a transcendent form -- Bash into Break for an Ironclad. FirstOrDefault in deck order, not a choice and not a roll, and CardCmd.Transform builds the new card fresh so no upgrade or enchantment rides across.",
+    ),
+    "Glitter": (
+        "baf0cbd87aa6",
+        "TryModifyCardRewardOptionsLate stamps Glam on EVERY eligible card reward, at amount 1 -- not one option chosen off a stream the way Wing Charm's is, which is why it is asked per-card and draws nothing.",
+    ),
+    "TouchOfOrobas": (
+        "fc58657b9a35",
+        "RelicCmd.Replace on the run's STARTER-rarity relic: Burning Blood becomes Black Blood, and a starter with no entry in RefinementUpgrades becomes a Circlet. The starter is found by RARITY, which is what makes the Circlet fallback reachable.",
+    ),
+    "TriBoomerang": (
+        "80ed7750709d",
+        "FromDeckForEnchantment with Instinct at 1, on three cards. Instinct is Attacks-only and DOUBLES powered damage -- a flat 2x, every play, with no once-only status.",
+    ),
+    "FurCoat": (
+        "b65090f5961b",
+        "Marks SEVEN Monster-or-Elite rooms off the relic's OWN Rng stream, in the act it was picked up in and no other; entering one puts every hittable enemy on 1 hp. Both hooks: BeforeCombatStart bites the opening roster and AfterCreatureAddedToCombat bites whatever joins after it, which is why the marked-room answer rides the COMBAT rather than being looked up on the map.",
+    ),
+    "GoldenCompass": (
+        "4ca26475dc6e",
+        "Replaces its act's map with GoldenPathActMap -- one column, sixteen rooms in a fixed sequence, no choices -- and narrows every '?' on that act to Event. A TALLER map than the standard one: the boss sits on row seventeen, so the run's end-of-run backstop reads the boss row off the map it is on rather than assuming the constant.",
+    ),
+    "LordsParasol": (
+        "dbd2caf6e6b5",
+        "Buys the ENTIRE merchant inventory with ignoreCost: true, in the game's order, and then the removal service. Free rather than afforded -- no gold is spent, so Maw Bank never closes. RESUMABLE, because the game awaits every purchase: a bought relic whose own AfterObtained opens a card-select screen stops the sweep where it stands, and answering it finishes the shelf and asks for the removal that is still owed.",
+    ),
+    "MassiveScroll": (
+        "e15035361381",
+        "IsAllowed => Players.Count > 1. Being absent from a solo run IS its behaviour -- RelicGrabBag.AllowedInSoloRun refuses it by id -- and its AfterObtained (three MultiplayerOnly cards) is unreachable because nothing can hand it over.",
+    ),
+    "PaelsEye": (
+        "75caa218d681",
+        "A turn in which NOTHING was played, once per combat, exhausts the hand and skips the enemy side outright -- ShouldTakeExtraTurn is checked in SwitchFromPlayerToEnemySide before the switch. AnyCardsPlayedThisTurn returns true on turn one for a run holding Whispering Earring, which is the game refusing the combination rather than counting auto-plays.",
+    ),
+    "PaelsWing": (
+        "fe9d2fab37c8",
+        "Adds a SACRIFICE alternative to the card reward: no card, and every second sacrifice pulls a relic from the FRONT of the grab bag. EndSelectionAndCompleteReward, so it closes the screen the way a claim does rather than the way a skip does.",
+    ),
+    "ToyBox": (
+        "eefc7a95416e",
+        "FOUR relics off the front of the bag, offered on a screen and marked WAX -- and every third combat melts the first one still held. Four relics on LOAN for twelve fights, not four relics.",
+    ),
     "Fiddle": (
         "e4ca940a266e",
         "ModifyHandDrawLate +2 every turn, and ShouldDraw REFUSES every other draw while it is your turn -- draws on the enemy's turn still land. Both halves: the refusal is the price, and without it Fiddle is a strictly better Bag of Preparation.",

@@ -75,6 +75,42 @@ public static class EnemyAI
                     BuffSystem.Apply(enemy.Buffs, BuffId.Thorns, -2);
                 }
 
+                // `CrushMove` attacks and THEN takes CrushStrength. STOMP is the other
+                // attack in the same loop and takes nothing, so they are told apart by
+                // where in the loop they sit rather than by damage.
+                if (
+                    enemy.DefId == KE.CeremonialBeast
+                    && enemy.MoveIndex >= BeastCryLoopBase
+                    && (enemy.MoveIndex - BeastCryLoopBase) % 3 == 2
+                )
+                {
+                    DealAttackDamage(enemy, state, enemy.CurrentIntent.Magnitude);
+                    BuffSystem.Apply(
+                        enemy.Buffs,
+                        BuffId.Strength,
+                        Ascension.Value(state.AscensionLevel, Ascension.DeadlyEnemies, 4, 3)
+                    );
+                    break;
+                }
+
+                // `AxeRubyRaider.SwingMove` attacks and THEN gains SwingBlock -- both SWING
+                // states carry a `DefendIntent` beside their attack. BIG_SWING carries none,
+                // and the two are told apart by damage the way the Strangler's are: Swing is
+                // the smaller number.
+                if (
+                    enemy.DefId == KE.AxeRubyRaider
+                    && enemy.CurrentIntent.Magnitude
+                        == Ascension.Value(state.AscensionLevel, Ascension.DeadlyEnemies, 6, 5)
+                )
+                {
+                    DealAttackDamage(enemy, state, enemy.CurrentIntent.Magnitude);
+                    enemy.Block += BuffSystem.IncomingBlock(
+                        Ascension.Value(state.AscensionLevel, Ascension.DeadlyEnemies, 6, 5),
+                        enemy.Buffs
+                    );
+                    break;
+                }
+
                 if (
                     enemy.DefId == KE.SlitheringStrangler
                     && enemy.CurrentIntent.Magnitude
@@ -447,7 +483,15 @@ public static class EnemyAI
                     );
                 }
 
-                if (enemy.DefId == KE.CeremonialBeast && enemy.MoveIndex > 0)
+                // `PlowMove` takes `PlowStrength`, which is 2 -- the BuffIntent it carries
+                // beside its attack. Scoped to the PLOW loop: the Beast's second loop has
+                // its own attacks, and STOMP takes nothing while CRUSH takes CrushStrength,
+                // so an unscoped `MoveIndex > 0` handed both of them a Plow's worth.
+                if (
+                    enemy.DefId == KE.CeremonialBeast
+                    && enemy.MoveIndex > 0
+                    && enemy.MoveIndex < BeastCryLoopBase
+                )
                 {
                     BuffSystem.Apply(enemy.Buffs, BuffId.Strength, 2);
                 }
@@ -705,6 +749,18 @@ public static class EnemyAI
             enemy.Escaped = true;
         }
 
+        // `FatGremlin.FLEE_MOVE`: it runs off with whatever it is holding. Zeroing the HP
+        // is how the emulator takes a creature out of the fight, so the flag is what tells
+        // the reward screen this was an ESCAPE -- the gold does not come back and the fight
+        // pays nothing. Beside the Hopper's because they are the same thing, and out of
+        // `ApplyBuffIntent` because the flee is not a buff and is no longer announced as one.
+        if (enemy.DefId == KE.FatGremlin && enemy.MoveIndex > 0 && !enemy.Escaped)
+        {
+            enemy.Hp = 0;
+            enemy.Escaped = true;
+            state.FatGremlinEscaped = true;
+        }
+
         if (
             enemy.DefId == KE.Nibbit
             && enemy.CurrentIntent.Type == IntentType.Attack
@@ -742,7 +798,15 @@ public static class EnemyAI
             // ground on its second: a live Sewer Clam holds 9 block at Plating 9, then 8
             // at Plating 8. CombatState.Turn counts from ZERO, so the first enemy phase of
             // a fight is Turn 0 -- reading it as 1 puts the whole decay a turn late.
-            if (enemy.DefId != KE.LagavulinMatriarch && state.Turn > 0)
+            //
+            // The Lagavulin Matriarch used to be excluded from this, with no reason
+            // recorded and none in the game: `PlatingPower.AfterSideTurnStart` decrements
+            // for its owner whatever else is true of it, and `AsleepPower` says nothing
+            // about the decay -- only that the Plating comes off on the last sleeping turn
+            // and the moment she is struck. The underdocks sweep settled it: at the third
+            // turn the live game holds PLATING 11 and block 11 where the emulator held 12
+            // and 12, having never decayed at all.
+            if (state.Turn > 0)
             {
                 BuffSystem.Apply(enemy.Buffs, BuffId.Plating, -1);
             }
@@ -755,6 +819,14 @@ public static class EnemyAI
 
         if (enemy.DefId == KE.LagavulinMatriarch && BuffSystem.Get(enemy.Buffs, BuffId.Asleep) > 0)
         {
+            // `AsleepPower.BeforeSideTurnEndVeryEarly`: on the LAST sleeping turn -- amount
+            // one, checked BEFORE the decrement -- the Plating comes off. Without it the
+            // Matriarch woke up still armoured and kept the shield for the whole fight.
+            if (BuffSystem.Get(enemy.Buffs, BuffId.Asleep) <= 1)
+            {
+                BuffSystem.Remove(enemy.Buffs, BuffId.Plating);
+            }
+
             BuffSystem.Apply(enemy.Buffs, BuffId.Asleep, -1);
             // SLEEP_MOVE loops on itself for as long as AsleepPower lasts, and only then
             // does SLEEP_BRANCH send her to SLASH. Sleeping turns are all one move, so
@@ -796,9 +868,35 @@ public static class EnemyAI
     /// </remarks>
     internal static void ApplyEndOfEnemySideTurn(CombatState state)
     {
+        // `DiamondDiademPower.AfterSideTurnEnd` removes itself when the ENEMY side's turn
+        // ends. It is granted before the player's turn ends, so it covers the one enemy
+        // turn in between and nothing after it.
+        BuffSystem.Remove(state.PlayerBuffs, BuffId.DiamondDiadem);
+
         foreach (var enemy in state.Enemies.Where(enemy => enemy.Hp > 0))
         {
             ApplyHighVoltageEndOfEnemyTurn(enemy);
+            ApplyDemiseEndOfEnemyTurn(state, enemy);
+        }
+    }
+
+    /// <summary>
+    /// `DemisePower.AfterSideTurnEnd` (the Powdered Demise potion, 9 on one enemy): the
+    /// creature takes its amount as `Unblockable | Unpowered` damage when its own side turn
+    /// ends.
+    /// </summary>
+    /// <remarks>
+    /// UNBLOCKABLE, so it goes past the enemy's block rather than through it -- and the
+    /// power neither decrements nor removes itself, so it pays every enemy turn for the
+    /// rest of the fight. Both are worth stating because the neighbouring damage-over-time
+    /// powers do the opposite on each count.
+    /// </remarks>
+    private static void ApplyDemiseEndOfEnemyTurn(CombatState state, EnemyState enemy)
+    {
+        int demise = BuffSystem.Get(enemy.Buffs, BuffId.Demise);
+        if (demise > 0)
+        {
+            Effects.CardEffects.DealUnblockableUnpoweredDamageToEnemy(state, enemy, demise);
         }
     }
 
@@ -963,9 +1061,12 @@ public static class EnemyAI
                 || enemy.RepeatStreak < (maxRepeats is null ? 1 : maxRepeats[index])
             )
             .ToArray();
+        // Everything blocked: the game spends a draw and takes the FIRST declared branch.
+        // Falling back to "all of them" spent the same draw but answered uniformly, which
+        // is a different move whenever more than one branch exists.
         if (eligible.Length == 0)
         {
-            eligible = [.. Enumerable.Range(0, branches.Length)];
+            eligible = [0];
         }
 
         // One draw whatever the choice narrowed to: GetNextState rolls NextFloat(total)
@@ -1136,9 +1237,12 @@ public static class EnemyAI
                     );
 
             case KE.FatGremlin:
-                return enemy.MoveIndex == 0
-                    ? new Intent(IntentType.Unknown, 0)
-                    : new Intent(IntentType.Buff, 0);
+                // SPAWNED_MOVE carries a StunIntent and FLEE_MOVE an EscapeIntent, which
+                // loops on itself forever. NEITHER is a buff: the emulator announced the
+                // flee as `Buff 0` and the live readout is an escape with no magnitude at
+                // all, which the sweep sees as `(4, None)`. The emulator has no Escape in
+                // its intent enum and Unknown is what the game's own readout reduces to.
+                return new Intent(IntentType.Unknown, 0);
 
             case KE.Inklet:
             {
@@ -1226,7 +1330,20 @@ public static class EnemyAI
                     }
                 }
 
-                int move = eligible.Count > 0 ? PickBranch(eligible, rng) : smash;
+                // Weighted over the FULL declared list -- VULNERABLE_SPORES, FRAIL_SPORES,
+                // SMASH, which is RAND's AddBranch order -- with a blocked branch at weight
+                // zero. That is exactly `GetNextState`, and it is what makes the
+                // everything-blocked case come out as the game's: a draw spent and the
+                // FIRST branch taken. Filtering to an eligible list and falling back to
+                // SMASH got both halves wrong.
+                int move = PickWeightedBranch(
+                    [
+                        (vulnerableSpores, eligible.Contains(vulnerableSpores) ? 1f : 0f),
+                        (frailSpores, eligible.Contains(frailSpores) ? 1f : 0f),
+                        (smash, eligible.Contains(smash) ? 1f : 0f),
+                    ],
+                    rng
+                );
                 enemy.LastMove = move;
                 enemy.MoveHistory.Add(move);
                 return move switch
@@ -2277,6 +2394,34 @@ public static class EnemyAI
                 };
 
             case KE.CeremonialBeast:
+                // Two loops, and the STUN is the door between them. STAMP applies the Plow
+                // threshold and then PLOW_MOVE follows ITSELF forever -- nothing in the
+                // declared FollowUps ever reaches the second loop. The only way in is
+                // `PlowPower` firing, which stuns the Beast onto STUN_MOVE and points it at
+                // BEAST_CRY: from there it is BEAST_CRY -> STOMP -> CRUSH -> BEAST_CRY.
+                //
+                // The second loop was not modelled at all, so a stunned Beast went on
+                // plowing. It only shows past turn ten, which is why six-turn sweeps missed
+                // it and a twelve-turn one caught it on every seed at once.
+                if (enemy.MoveIndex >= BeastCryLoopBase)
+                {
+                    return ((enemy.MoveIndex - BeastCryLoopBase) % 3) switch
+                    {
+                        // BEAST_CRY_MOVE: a DebuffIntent, which announces no number.
+                        0 => new Intent(IntentType.Debuff, 0),
+                        // StompDamage
+                        1 => new Intent(
+                            IntentType.Attack,
+                            Ascension.Value(ascension, Ascension.DeadlyEnemies, 17, 15)
+                        ),
+                        // CrushDamage, and CRUSH carries a BuffIntent beside it.
+                        _ => new Intent(
+                            IntentType.Attack,
+                            Ascension.Value(ascension, Ascension.DeadlyEnemies, 19, 17)
+                        ),
+                    };
+                }
+
                 return enemy.MoveIndex == 0
                     ? new Intent(
                         IntentType.Buff,
@@ -3438,9 +3583,21 @@ public static class EnemyAI
     private static int PickWeightedBranch(List<(int Move, float Weight)> branches, Random rng)
     {
         float total = branches.Sum(branch => branch.Weight);
+
+        // `RandomBranchState.GetNextState` when EVERY branch is blocked: `NextFloat(0)`
+        // still increments the counter -- it is `Counter++` before the draw, unconditional
+        // -- and the walk then subtracts zero and returns on the FIRST entry. So the game
+        // spends a draw and takes the first DECLARED branch.
+        //
+        // This returned the LAST branch and spent NOTHING, which is wrong twice: the wrong
+        // move, and a MonsterAi stream one draw behind the game for the rest of the fight.
+        // The Flyconid is where it shows -- all three of its moves can be blocked at once,
+        // by CannotRepeat and two cooldowns -- and a turn where only one branch is eligible
+        // hides it, which is why it took seven turns to surface.
         if (total <= 0f)
         {
-            return branches[^1].Move;
+            rng.NextDouble();
+            return branches[0].Move;
         }
 
         float roll = (float)(rng.NextDouble() * total);
@@ -3620,16 +3777,6 @@ public static class EnemyAI
                 BuffSystem.Apply(enemy.Buffs, BuffId.Thorns, 2);
                 break;
 
-            case KE.FatGremlin:
-                // It runs off with whatever it is holding. Zeroing the HP is how the
-                // emulator takes a creature out of the fight, so the flag is what tells
-                // the reward screen this was an ESCAPE -- the gold does not come back,
-                // and the fight pays nothing.
-                enemy.Hp = 0;
-                enemy.Escaped = true;
-                state.FatGremlinEscaped = true;
-                break;
-
             case KE.SpinyToad:
                 BuffSystem.Apply(enemy.Buffs, BuffId.Thorns, enemy.CurrentIntent.Magnitude);
                 break;
@@ -3745,7 +3892,20 @@ public static class EnemyAI
                 break;
 
             case KE.CeremonialBeast:
-                BuffSystem.Apply(enemy.Buffs, BuffId.Plow, enemy.CurrentIntent.Magnitude);
+                // `StampMove` applies `PlowPower` at `PlowAmount` -- 150, or 160 against
+                // DeadlyEnemies -- which is an HP THRESHOLD, not the move's damage. The
+                // emulator passed the INTENT's magnitude, which for a BuffIntent is zero,
+                // so the threshold was never above zero and the power could never fire.
+                //
+                // Nothing read `BuffId.Plow` at all until O-Plow, so a wrong amount cost
+                // nothing and stayed invisible. With the trigger wired the Beast simply
+                // never stunned: it plowed forever where the live game takes one wound and
+                // switches to the BEAST_CRY loop.
+                BuffSystem.Apply(
+                    enemy.Buffs,
+                    BuffId.Plow,
+                    Ascension.Value(state.AscensionLevel, Ascension.DeadlyEnemies, 160, 150)
+                );
                 break;
 
             case KE.Crusher:
@@ -3871,6 +4031,15 @@ public static class EnemyAI
 
     private static void ApplyDebuffIntent(EnemyState enemy, CombatState state, Random rng)
     {
+        // `BeastCryMove` applies `RingingPower(1)` to the player. BEAST_CRY announces a
+        // DebuffIntent, so it resolves here -- the Beast's other power move, STAMP, is a
+        // BuffIntent and resolves in `ApplyBuffIntent`.
+        if (enemy.DefId == KE.CeremonialBeast && enemy.MoveIndex >= BeastCryLoopBase)
+        {
+            BuffSystem.Apply(state.PlayerBuffs, BuffId.Ringing, 1);
+            return;
+        }
+
         switch (enemy.DefId)
         {
             case KE.Chomper:
@@ -3973,7 +4142,11 @@ public static class EnemyAI
                 break;
 
             case KE.MagiKnight:
+                // `DampenPower.AfterApplied` is what does the work: every upgraded card the
+                // player holds is downgraded until the power goes. Applying the buff and
+                // stopping there made this move a debuff the player carried and never paid.
                 BuffSystem.Apply(state.PlayerBuffs, BuffId.Dampen, enemy.CurrentIntent.Magnitude);
+                Effects.CardEffects.ApplyDampen(state);
                 break;
 
             case KE.Aeonglass:
@@ -4182,6 +4355,14 @@ public static class EnemyAI
         damage = (int)(
             damage * Effects.RelicEffects.IncomingDamageMultiplierFromDoom(state, enemy)
         );
+        // `DiamondDiademPower.ModifyDamageMultiplicative` returns 0.5m on a POWERED attack
+        // aimed at its owner. This path IS the powered-attack path, so the guard is the
+        // power alone.
+        if (BuffSystem.Get(state.PlayerBuffs, BuffId.DiamondDiadem) > 0)
+        {
+            damage /= 2;
+        }
+
         if (
             BuffSystem.Get(state.PlayerBuffs, BuffId.Colossus) > 0
             && BuffSystem.Get(enemy.Buffs, BuffId.Vulnerable) > 0
@@ -4496,6 +4677,85 @@ public static class EnemyAI
         // looking at becomes the stun rather than whatever was announced.
         enemy.CurrentIntent = new Intent(IntentType.Unknown, 0);
     }
+
+    /// <summary>
+    /// `PlowPower.AfterDamageReceived`: an unblocked hit that leaves the Ceremonial Beast
+    /// at or below its threshold strips ALL of its Strength -- the permanent power and
+    /// every temporary one -- and stuns it. The power goes as it fires, so this is once a
+    /// combat, and it is the answer to a Beast that has been building Strength all fight.
+    /// </summary>
+    /// <remarks>
+    /// The same shape as Shriek's, and it was applied and never read: the Beast took the
+    /// power on its Plow move and nothing anywhere asked about it again, so dropping it low
+    /// did nothing and its Strength kept climbing.
+    ///
+    /// `PowerCmd.Remove&lt;StrengthPower&gt;` REMOVES the power rather than subtracting from
+    /// it, so a Beast at negative Strength comes back to zero rather than further down.
+    /// </remarks>
+    internal static void TriggerPlowIfWounded(EnemyState enemy)
+    {
+        int threshold = BuffSystem.Get(enemy.Buffs, BuffId.Plow);
+        if (threshold <= 0 || enemy.Hp > threshold || enemy.Hp <= 0)
+        {
+            return;
+        }
+
+        BuffSystem.Remove(enemy.Buffs, BuffId.Plow);
+        BuffSystem.Remove(enemy.Buffs, BuffId.Strength);
+        BuffSystem.Remove(enemy.Buffs, BuffId.TemporaryStrength);
+        BuffSystem.Apply(enemy.Buffs, BuffId.Stunned, 1);
+
+        // `CreatureCmd.Stun(owner, StunnedMove, BeastCryState)`: the stun is a TURN, and the
+        // Beast comes out of it into the cry loop rather than back to plowing. Parking the
+        // index one BELOW the base leaves the end-of-turn increment to land on BEAST_CRY.
+        if (enemy.DefId == KE.CeremonialBeast)
+        {
+            enemy.MoveIndex = BeastCryLoopBase - 1;
+        }
+        // As with Shriek: the stun replaces the announced intent rather than following it.
+        enemy.CurrentIntent = new Intent(IntentType.Unknown, 0);
+    }
+
+    /// <summary>
+    /// `AsleepPower.AfterDamageReceived`: ANY unblocked hit wakes the Lagavulin Matriarch
+    /// at once -- the Plating comes off, she is stunned onto her WakeUpMove, and the sleep
+    /// is gone. Not a countdown like the Slumbering Beetle's: one point of damage ends it
+    /// however many sleeping turns were left.
+    /// </summary>
+    /// <remarks>
+    /// The emulator ticked `Asleep` down over turns and had no answer to being hit at all,
+    /// so hitting her did not wake her and she kept her Plating for the fight. Slumber --
+    /// the same idea on the Beetle -- was modelled; this twin was not, which is the same
+    /// shape as PossessSpeed having a twin nobody had written.
+    ///
+    /// `CreatureCmd.Stun(owner, WakeUpMove, "SLASH_MOVE")`: the wake turn does nothing and
+    /// SLASH follows it. MoveIndex parks at zero so the increment at the end of her turn
+    /// starts the four-move ring on SLASH, which is where the sleeping branch leaves it too.
+    /// </remarks>
+    internal static void WakeMatriarchIfStruck(EnemyState enemy)
+    {
+        if (
+            enemy.DefId != KE.LagavulinMatriarch
+            || BuffSystem.Get(enemy.Buffs, BuffId.Asleep) <= 0
+            || enemy.Hp <= 0
+        )
+        {
+            return;
+        }
+
+        BuffSystem.Remove(enemy.Buffs, BuffId.Asleep);
+        BuffSystem.Remove(enemy.Buffs, BuffId.Plating);
+        BuffSystem.Apply(enemy.Buffs, BuffId.Stunned, 1);
+        enemy.MoveIndex = 0;
+        enemy.CurrentIntent = new Intent(IntentType.Unknown, 0);
+    }
+
+    /// <summary>
+    /// Where the Ceremonial Beast's SECOND loop starts counting. A sentinel rather than a
+    /// flag because the move index is what the intent table already reads, and the two loops
+    /// never interleave -- once `PlowPower` has fired the Beast never plows again.
+    /// </summary>
+    private const int BeastCryLoopBase = 1000;
 
     /// <summary>TwoTailedRatsNormal.Slots: five, three of them taken at the start.</summary>
     private const int RatSlots = 5;

@@ -27,7 +27,7 @@ public static class RunNativeExports
     public static int Sts2Run_InfoSize() => RunConstants.RunInfoSize;
 
     /// <summary>How many numbers <see cref="Sts2Run_ObsLayout"/> writes.</summary>
-    public const int RUN_OBS_LAYOUT_SIZE = 12;
+    public const int RUN_OBS_LAYOUT_SIZE = 13;
 
     /// <summary>
     /// Where the run observation's variable-length blocks sit, so a consumer does not have
@@ -35,7 +35,10 @@ public static class RunNativeExports
     ///
     /// <c>[scalars, deck offset, deck slots, ints per card, relic offset, relic slots,
     /// ints per relic, shop offset, shop slots, ints per shop slot, map choices, map node
-    /// type offset]</c>
+    /// type offset, Lasting Candy's extra-option offset]</c>
+    ///
+    /// APPENDED, never inserted -- a consumer reading by index must keep reading the same
+    /// thing across builds, which is the whole reason this export exists.
     ///
     /// Offsets are relative to the start of the run block, which itself begins at the
     /// combat observation's own size.
@@ -61,6 +64,7 @@ public static class RunNativeExports
         layout[9] = RunConstants.ShopSlotSize;
         layout[10] = RunConstants.MapChoices;
         layout[11] = RunConstants.MapNodeTypeObsOffset;
+        layout[12] = RunConstants.FourthRewardObsOffset;
         return RUN_OBS_LAYOUT_SIZE;
     }
 
@@ -229,7 +233,14 @@ public static class RunNativeExports
         {
             0 => WriteCardList(run.State.Deck, output),
             1 => WriteRelicList(run.State.Relics, output),
-            2 => WriteIntArray(run.State.PotionSlots, output),
+            // The ACTIVE COMBAT's belt while there is one, exactly as the observation does
+            // (`RunEngine`: `activeCombat?.PotionSlots ?? State.PotionSlots`). A combat is
+            // handed a COPY of the run's slots and only syncs back when it ends, so reading
+            // the run's here reported the belt as it stood when the fight started -- every
+            // potion drunk, auto-fired or picked up mid-combat was invisible until the
+            // fight was over. Three of the four known run-trace divergences were this one
+            // line. See E492.
+            2 => WriteIntArray(ActivePotionSlots(run.State), output),
             3 => WriteIntArray(run.State.NeowOptions, output),
             4 => WriteIntArray(run.State.ShopCosts, output),
             5 => WriteBoolArray(run.State.RewardUpgraded, output),
@@ -500,6 +511,30 @@ public static class RunNativeExports
         }
         return required;
     }
+
+    /// <summary>
+    /// The belt as it stands RIGHT NOW: the active combat's while a fight is in progress,
+    /// the run's otherwise.
+    /// </summary>
+    /// <remarks>
+    /// A combat is handed a COPY of the run's slots at the start and only syncs back when
+    /// it ends, so reading the run's during a fight reported the belt as it stood when the
+    /// fight began -- every potion drunk, auto-fired or gained mid-combat was invisible
+    /// until the fight was over. Three of the four known run-trace divergences were this:
+    /// a Fairy in a Bottle that had already revived the player, a Potion Shaped Rock
+    /// already spent, and a Fire Potion the run had picked up. See E492.
+    ///
+    /// The PHASE guard is not optional and is the whole reason this is a method.
+    /// `State.ActiveCombat` is only nulled on `Reset`, so a finished combat lingers on the
+    /// run; taking its slots outside `RunPhase.Combat` reports the belt from whatever fight
+    /// happened last. Written without the guard first, and it cost twenty-four traces --
+    /// `RunEngine`'s observation has always spelled it `State.Phase == RunPhase.Combat ?
+    /// State.ActiveCombat : null`, which is exactly this.
+    /// </remarks>
+    private static int[] ActivePotionSlots(Core.Run.RunState state) =>
+        state.Phase == Core.Run.RunPhase.Combat && state.ActiveCombat is { } combat
+            ? combat.PotionSlots
+            : state.PotionSlots;
 
     private static int WriteIntArray(int[] values, Span<int> output)
     {

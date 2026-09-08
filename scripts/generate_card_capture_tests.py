@@ -190,6 +190,10 @@ BUFF_ALIASES = {
     "HOTFIX_POWER": "TemporaryFocus",
     "SYNCHRONIZE_POWER": "TemporaryFocus",
     "SPEED_POTION_POWER": "TemporaryDexterity",
+    # `SelfFormingClayPower` grants its amount as block after the next block clear, which is
+    # what the emulator's `BlockNextTurn` already is -- the relic applies 3 to both. One
+    # concept, two names, so it belongs here rather than in the unmapped report.
+    "SELF_FORMING_CLAY_POWER": "BlockNextTurn",
     "HELICAL_DART_POWER": "TemporaryDexterity",
     "ANTICIPATE_POWER": "TemporaryDexterity",
 }

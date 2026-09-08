@@ -2533,16 +2533,18 @@ public static class CardEffects
         bool fromHandDraw = false
     )
     {
-        // NoDrawPower stops every later draw this turn, whatever asks for it.
-        if (BuffSystem.Get(state.PlayerBuffs, BuffId.NoDraw) > 0)
+        // `NoDrawPower.ShouldDraw` returns TRUE for a hand draw -- it spares it, exactly as
+        // Fiddle's does, and gags only the extra draws. Battle Trance's gag is removed at
+        // the end of the turn it was played on, so it never survives to meet a hand draw
+        // and blocking those too was unreachable rather than wrong; written the game's way
+        // so it stays right if either of those two facts ever moves.
+        if (!fromHandDraw && BuffSystem.Get(state.PlayerBuffs, BuffId.NoDraw) > 0)
         {
             return;
         }
 
         // `Fiddle.ShouldDraw` refuses any draw that is not the hand draw while it is its
-        // owner's turn. Sits beside NoDraw because it is the same kind of veto, and after
-        // it because NoDraw is unconditional where this one spares the hand draw and the
-        // enemy's turn.
+        // owner's turn -- the same veto with a different owner.
         if (!fromHandDraw && RelicEffects.BlocksExtraDraws(state))
         {
             return;
@@ -2569,7 +2571,10 @@ public static class CardEffects
                 break;
             }
 
-            var card = ConfuseCostOnDraw(state, GrowKinglyCardOnDraw(state.DrawPile[0]));
+            var card = BindOnDraw(
+                state,
+                ConfuseCostOnDraw(state, GrowKinglyCardOnDraw(state.DrawPile[0]))
+            );
             state.RemoveFromDrawPileAt(0);
             // `Void.AfterCardDrawn` when the drawn card IS the Void: `LoseEnergy(1)`. The
             // card is Unplayable and Ethereal, so its whole existence is the energy it
@@ -2970,6 +2975,48 @@ public static class CardEffects
     /// draw or generation ones -- and it lands on `CostForCombat`, which is exactly
     /// `EnergyCost.SetThisCombat`.
     /// </remarks>
+    /// <summary>
+    /// `ChainsOfBindingPower.AfterCardDrawn`: a card drawn during the owner's own side turn
+    /// is afflicted with Bound, up to the power's amount per turn.
+    /// </summary>
+    /// <remarks>
+    /// The cap counts AFFLICTIONS this turn, not draws -- a turn that draws ten cards under
+    /// Chains 2 binds the first two and leaves the rest alone.
+    ///
+    /// What Bound costs is in `IsBlockedByBound`: at most ONE bound card may be played per
+    /// turn. The power was applied by the Chained Knight and read by NOTHING, so the move
+    /// was a debuff the player carried and never paid.
+    /// </remarks>
+    /// <summary>
+    /// `ChainsOfBindingPower.BeforeSideTurnEnd`: `ClearAffliction` on every card the player
+    /// owns. Bound lasts the turn it was dealt in and no longer.
+    /// </summary>
+    internal static void ClearBoundCards(CombatState state)
+    {
+        foreach (var pile in AllCardPiles(state))
+        {
+            for (int i = 0; i < pile.Count; i++)
+            {
+                if (pile[i].Bound)
+                {
+                    pile[i] = pile[i] with { Bound = false };
+                }
+            }
+        }
+    }
+
+    internal static CardInstance BindOnDraw(CombatState state, CardInstance card)
+    {
+        int chains = BuffSystem.Get(state.PlayerBuffs, BuffId.ChainsOfBinding);
+        if (chains <= 0 || !state.PlayerTurn || state.BoundCardsThisTurn >= chains)
+        {
+            return card;
+        }
+
+        state.BoundCardsThisTurn++;
+        return card with { Bound = true };
+    }
+
     internal static CardInstance ConfuseCostOnDraw(CombatState state, CardInstance card)
     {
         if (BuffSystem.Get(state.PlayerBuffs, BuffId.Confused) <= 0)
@@ -4602,6 +4649,8 @@ public static class CardEffects
         if (hpLoss > 0)
         {
             EnemyAI.TriggerShriekIfWounded(target);
+            EnemyAI.TriggerPlowIfWounded(target);
+            EnemyAI.WakeMatriarchIfStruck(target);
         }
 
         // `ReaperFormPower.AfterDamageGiven`, on `result.TotalDamage` -- blocked plus
@@ -4663,10 +4712,24 @@ public static class CardEffects
 
         if (hpLoss > 0)
         {
+            // `EnvenomPower.AfterDamageGiven` applies its Poison through `PowerCmd.Apply`,
+            // which is the same door every other Poison goes through -- so Snecko Skull's
+            // extra point, Unsettling Lamp's doubling, Vicious, Sleight of Flesh and
+            // Artifact all get their say. Applied raw, Envenom's poison was the one Poison
+            // in the game none of them could see.
+            //
+            // No rng reaches this far down the damage path; the draw helper prefers
+            // `state.ShuffleRng` anyway and the fallback is for a hand-made test fight.
             int envenom = BuffSystem.Get(state.PlayerBuffs, BuffId.Envenom);
             if (envenom > 0)
             {
-                BuffSystem.Apply(target.Buffs, BuffId.Poison, envenom);
+                ApplyEnemyDebuffToTarget(
+                    state,
+                    target,
+                    BuffId.Poison,
+                    envenom,
+                    state.ShuffleRng ?? new Random(0)
+                );
             }
 
             // `PersonalHivePower.AfterDamageReceived` adds its Dazed at
@@ -8455,6 +8518,13 @@ public static class CardEffects
             damage = (int)(damage * 1.5m);
         }
 
+        // Instinct.EnchantDamageMultiplicative is a flat 2x on a powered attack -- also
+        // every play, and also with no once-only status.
+        if (card.Enchantment == Enchantment.Instinct)
+        {
+            damage *= 2;
+        }
+
         damage += RelicEffects.CardDamageBonus(state, def, card.Upgraded);
         // `MysticLighter.ModifyDamageAdditive`: 9 more from a powered attack played off an
         // ENCHANTED card, whatever the enchantment is.
@@ -8463,6 +8533,24 @@ public static class CardEffects
             damage += RelicEffects.EnchantedCardDamageBonus(state);
         }
         damage *= RelicEffects.CardDamageMultiplier(state, def);
+
+        // `GigantificationPower.ModifyDamageMultiplicative` returns 3 for the next powered
+        // ATTACK card. LAST, because it is multiplicative and so lands on the total every
+        // additive contribution above has already built -- a Gigantified Sharp Strike
+        // triples the Sharp too.
+        //
+        // Per CARD, not per hit: the game latches the first `AttackCommand` in `BeforeAttack`
+        // and then tripes only that command's `ModelSource`, so every hit of one multi-hit
+        // attack is tripled and the next card is not. This function is reached once per card
+        // for the same reason -- a multi-hit call computes its damage here and then repeats
+        // it -- so the latch lives at the play site, in `CombatEngine`.
+        if (
+            def.Type == CardType.Attack
+            && BuffSystem.Get(state.PlayerBuffs, BuffId.Gigantification) > 0
+        )
+        {
+            damage *= 3;
+        }
 
         return damage;
     }
@@ -8488,6 +8576,9 @@ public static class CardEffects
     /// nothing about a Waterfall Giant at zero HP mid-eruption, which stays in the fight and
     /// stays hittable. See `EnemyAI.IsTargetable`.
     /// </remarks>
+    /// <summary>The aimed-at enemy, for callers outside this file (targeted POTIONS).</summary>
+    internal static EnemyState? TargetedEnemyFor(CombatState state) => FirstEnemy(state);
+
     private static EnemyState? FirstEnemy(CombatState state)
     {
         int idx = state.TargetEnemyIndex;
@@ -9020,6 +9111,108 @@ public static class CardEffects
     /// Call of the Void's card: one from the character's own combat pool, granted ETHEREAL,
     /// into hand. Rolled on the card-generation stream, as `GetDistinctForCombat` is.
     /// </summary>
+    /// <summary>
+    /// `DampenPower.AfterApplied`: every UPGRADED card its owner holds is downgraded, and
+    /// the power remembers which so that losing it puts them back.
+    /// </summary>
+    /// <remarks>
+    /// `AllCards` -- hand, draw, discard and exhaust alike, not just the ones in play. The
+    /// game keys its memory on the card object; here the card carries a flag, because a
+    /// `CardInstance` is a value that gets copied from pile to pile and there is no object
+    /// to key on.
+    ///
+    /// `StackType.None`, so a second Magi Knight applying it does not stack -- and the
+    /// cards it already took are already un-upgraded, so the second pass finds nothing.
+    /// </remarks>
+    public static void ApplyDampen(CombatState state)
+    {
+        foreach (var pile in AllCardPiles(state))
+        {
+            for (int i = 0; i < pile.Count; i++)
+            {
+                if (pile[i].Upgraded)
+                {
+                    pile[i] = pile[i] with { Upgraded = false, DampenedUpgrade = true };
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// `DampenPower.AfterRemoved`: every card it downgraded is upgraded again, by as many
+    /// levels as it took. One level here, the emulator's cards being upgraded or not.
+    /// </summary>
+    public static void RemoveDampen(CombatState state)
+    {
+        BuffSystem.Remove(state.PlayerBuffs, BuffId.Dampen);
+        foreach (var pile in AllCardPiles(state))
+        {
+            for (int i = 0; i < pile.Count; i++)
+            {
+                if (pile[i].DampenedUpgrade)
+                {
+                    pile[i] = pile[i] with { Upgraded = true, DampenedUpgrade = false };
+                }
+            }
+        }
+    }
+
+    /// <summary>`PlayerCombatState.AllCards`: every pile a card of the player's can be in.</summary>
+    private static IEnumerable<List<CardInstance>> AllCardPiles(CombatState state)
+    {
+        yield return state.Hand;
+        yield return state.DrawPile;
+        yield return state.DiscardPile;
+        yield return state.ExhaustPile;
+    }
+
+    /// <summary>
+    /// `ChoicesParadox.AfterPlayerTurnStart`: `GetDistinctForCombat` over the character's
+    /// own pool for <paramref name="count"/> cards, Retain applied to each, and one of them
+    /// chosen into hand.
+    /// </summary>
+    /// <remarks>
+    /// The generation is a SHUFFLE of the whole filtered pool and then the first
+    /// <paramref name="count"/> -- see `DistinctColorlessForCombat` for why drawing ids and
+    /// rejecting duplicates is a different draw pattern on the same stream.
+    ///
+    /// NOT skippable: the game's `CardSelectorPrefs(prompt, 1)` leaves `Cancelable` at its
+    /// default, and the relic logs a softlock rather than passing when the pool comes back
+    /// empty. An empty pool here simply offers nothing.
+    /// </remarks>
+    internal static void OpenChoicesParadoxOffer(CombatState state, int count, Random? rng)
+    {
+        var pool = CombatGenerationPool(GeneratedData.CardPools.Ironclad);
+        if (pool.Count == 0 || count <= 0)
+        {
+            return;
+        }
+
+        var stream = CardGenerationRng(state, rng);
+        for (int i = pool.Count - 1; i > 0; i--)
+        {
+            int j = stream.Next(i + 1);
+            (pool[i], pool[j]) = (pool[j], pool[i]);
+        }
+
+        var options = pool.Take(count).ToList();
+        if (state.AutoPlaying)
+        {
+            state.Hand.Add(new CardInstance(options[0], false) { RetainForCombat = true });
+            return;
+        }
+
+        state.PendingSelection = new PendingCardSelection
+        {
+            Kind = CardSelectionKind.GeneratedCardToHand,
+            Candidates = [.. Enumerable.Range(0, options.Count)],
+            GeneratedCandidates = options,
+            SourceCardDefId = 0,
+            Skippable = false,
+            GeneratedRetained = true,
+        };
+    }
+
     internal static void AddEtherealPoolCardToHand(CombatState state, Random rng)
     {
         var pool = CombatGenerationPool(GeneratedData.CardPools.Necrobinder);
@@ -9511,16 +9704,17 @@ public static class CardEffects
             return;
         }
 
-        int hpBeforeThorns = state.PlayerHp;
-        state.PlayerHp = Math.Max(
-            0,
-            state.PlayerHp - BuffSystem.CapIncomingDamage(thorns, state.PlayerBuffs)
-        );
-        state.PlayerHpLostThisTurn += Math.Max(0, hpBeforeThorns - state.PlayerHp);
-        if (state.PlayerHp != hpBeforeThorns)
-        {
-            RelicEffects.ApplyAfterPlayerHpChanged(state);
-        }
+        // `ThornsPower.BeforeDamageReceived` is `CreatureCmd.Damage(dealer, Amount,
+        // Unpowered | SkipHurtAnim)` -- real DAMAGE, which BLOCK ABSORBS. Taking it off HP
+        // directly is invisible in a capture that plays no cards, because a player who
+        // never acts never holds any block, and wrong in every fight that does.
+        //
+        // That is word for word the lesson already written beside Constrict and the
+        // Disintegration tick, which were fixed for exactly this. Thorns is the one that
+        // reached half its call sites: the underdocks sweep found it as a ONE point gap on
+        // a single Toadpole capture -- the player held 1 block, which ate 1 of the 2
+        // Thorns, and the emulator charged both to HP.
+        DealDamageToPlayer(state, thorns);
     }
 
     private static void ApplyEnemyDebuff(CombatState state, BuffId id, int magnitude, Random rng)
@@ -9543,6 +9737,21 @@ public static class CardEffects
     )
     {
         if (target.Hp <= 0)
+        {
+            return;
+        }
+
+        // `ArtifactPower.TryModifyPowerAmountReceived` eats a debuff whole and decrements.
+        // `BuffSystem.Apply` already does that for a POSITIVE debuff; what it cannot see is
+        // that taking Strength OFF a creature is a debuff too -- `GetTypeForAmount` calls a
+        // negative application of an AllowNegative counter a Debuff, and Strength and
+        // Dexterity are both of those. Piercing Wail and Resonance went straight past an
+        // Artifact with their Strength loss and then had their Weak eaten by it, which is
+        // the wrong half blocked and the wrong outcome twice over.
+        if (
+            BuffSystem.IsDebuffApplication(id, magnitude)
+            && BuffSystem.TryConsumeArtifact(target.Buffs)
+        )
         {
             return;
         }
@@ -9713,10 +9922,16 @@ public static class CardEffects
 
         var power = GeneratedData.Powers.Get(found);
 
-        // `PowerModel.GetTypeForAmount`: a COUNTER power at a negative amount is a Debuff
-        // whatever its declared type. Strength is the one that matters -- Shared Fate takes
-        // it off both sides, and that is a debuff on the enemy however the power is labelled.
-        if (magnitude < 0 && power.StackType == "Counter")
+        // `PowerModel.GetTypeForAmount`: a Counter power that ALLOWS NEGATIVE is a Debuff
+        // at a negative amount, whatever its declared type. Strength is the one that
+        // matters -- Shared Fate takes it off both sides, and that is a debuff on the enemy
+        // however the power is labelled.
+        //
+        // The AllowNegative half is load-bearing and used to be missing here: without it a
+        // Counter power that does NOT allow negative reads as a debuff when applied
+        // negatively, where the game's other clause calls that a BUFF. Same rule, same list,
+        // as the one Artifact consults -- it lives in `BuffSystem` so the two cannot drift.
+        if (magnitude < 0 && power.StackType == "Counter" && BuffSystem.AllowsNegative(id))
         {
             return true;
         }
@@ -9843,22 +10058,65 @@ public static class CardEffects
         "UltimateStrike",
     };
 
-    internal static void AddRandomUpgradedIroncladCardToHand(
+    /// <summary>
+    /// `AggressionPower.BeforeSideTurnStart`: <paramref name="count"/> ATTACK cards taken
+    /// out of the DISCARD PILE into hand, each upgraded if it can be.
+    /// </summary>
+    /// <remarks>
+    /// The player's OWN cards, moved -- not new ones generated. The emulator rolled a
+    /// random card out of the Ironclad pool off the GENERATION stream, which is wrong three
+    /// ways at once: the wrong cards, the wrong stream, and a deck that grows every turn
+    /// where the game's does not.
+    ///
+    /// `UnstableShuffle(Rng.CombatCardSelection).Take(Amount)` -- a shuffle of every Attack
+    /// in the pile and then the first N, which is a different draw pattern on that stream
+    /// from picking N indices, and the same distinction `DistinctColorlessForCombat` is
+    /// written about.
+    ///
+    /// The upgrade is `if (card.IsUpgradable) Upgrade(card)`, so a card that cannot take
+    /// one still moves.
+    /// </remarks>
+    internal static void MoveDiscardedAttacksToHandForAggression(
         CombatState state,
         int count,
         Random rng
     )
     {
-        for (int i = 0; i < count; i++)
+        var attacks = new List<int>();
+        for (int i = 0; i < state.DiscardPile.Count; i++)
         {
+            if (GeneratedData.Cards.Get(state.DiscardPile[i].DefId).Type == CardType.Attack)
+            {
+                attacks.Add(i);
+            }
+        }
+
+        if (attacks.Count == 0)
+        {
+            return;
+        }
+
+        var stream = CardSelectionRng(state, rng);
+        for (int i = attacks.Count - 1; i > 0; i--)
+        {
+            int j = stream.Next(i + 1);
+            (attacks[i], attacks[j]) = (attacks[j], attacks[i]);
+        }
+
+        // Highest index first, so removing one does not shift the others out from under us.
+        var taken = attacks.Take(count).OrderByDescending(index => index).ToList();
+        foreach (int index in taken)
+        {
+            var card = state.DiscardPile[index];
+            state.DiscardPile.RemoveAt(index);
             if (state.Hand.Count >= MaxCardsInHand)
             {
-                break;
+                continue;
             }
 
-            var ironcladPool = IroncladGenerationPool();
-            int defId = ironcladPool[CardGenerationRng(state, rng).Next(ironcladPool.Count)];
-            state.Hand.Add(new CardInstance(defId, true));
+            state.Hand.Add(
+                Run.RunConstants.IsRunCardUpgradable(card) ? card with { Upgraded = true } : card
+            );
         }
     }
 

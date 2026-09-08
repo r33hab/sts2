@@ -12,6 +12,19 @@ public enum DeckSelection
     /// <summary>Transform the chosen card into the card id in <c>PendingSelectionArg</c>.</summary>
     TransformTo,
 
+    /// <summary>
+    /// Transform the chosen card into the card id in <c>PendingSelectionArg</c>, with NO
+    /// rarity filter, carrying the original's upgrade and enchantment across.
+    /// </summary>
+    /// <remarks>
+    /// Claws is the one that needs this. <c>TransformTo</c>'s Basic-only filter is Wood
+    /// Carvings' -- it passes a predicate to <c>FromDeckForTransformation</c> and Claws
+    /// passes none, so Claws will eat any transformable card in the deck.
+    /// <c>CreateMaulFromOriginal</c> then copies the original's upgrade onto the Maul when
+    /// the Maul is upgradable, and its enchantment when that enchantment can take.
+    /// </remarks>
+    TransformToCarrying,
+
     /// <summary>Upgrade the chosen card.</summary>
     Upgrade,
 
@@ -86,6 +99,14 @@ public enum SelectionReturn
 
     /// <summary>On to the map: the room that opened it is finished.</summary>
     Map,
+
+    /// <summary>
+    /// Back to the rest site, with the option that opened it spent. Meat Cleaver's cook is
+    /// the only rest option that asks the player anything, so it is the only one that has
+    /// to come BACK -- and it has to come back to the rest screen, because Miniature Tent
+    /// may still leave another option on it.
+    /// </summary>
+    Rest,
 }
 
 public sealed record ActRooms(
@@ -177,6 +198,19 @@ public sealed class RunState
     public int ExtraCardRewardsOwed;
 
     /// <summary>
+    /// `ForbiddenGrimoirePower.AfterCombatEnd`: card REMOVALS the finished fight owes the
+    /// reward screen, one `CardRemovalReward` per point.
+    /// </summary>
+    /// <remarks>
+    /// Carried on the RUN because the power lives on the COMBAT, and the combat is dropped
+    /// before the rewards are built -- the same seam `ApplyImprovementUpgrades` sits on.
+    /// </remarks>
+    public int CardRemovalsOwed;
+
+    /// <summary>`RoyaltiesPower.AfterCombatEnd`: gold the finished fight owes, as a GoldReward.</summary>
+    public int RoyaltiesGoldOwed;
+
+    /// <summary>
     /// Rest options already taken on THIS visit, as a bitmask of action ids. Only ever
     /// more than one bit with Miniature Tent, which keeps the screen open.
     /// </summary>
@@ -199,7 +233,31 @@ public sealed class RunState
     public Enchantment RewardEnchantment;
     public int CurrentNodeType;
     public int[] NeowOptions = new int[3];
+
     public int[] RewardCards = new int[3];
+
+    /// <summary>
+    /// `LastingCandy.TryModifyCardRewardOptions`: the extra POWER it adds to the screen,
+    /// or 0 when there is none.
+    /// </summary>
+    /// <remarks>
+    /// Its own field rather than a fourth slot on <see cref="RewardCards" />. That array is
+    /// the ROLL -- a dozen paths fill it by length, from Kaleidoscope to a Trade event to
+    /// Silver Crucible's upgrade sweep -- and widening it made every one of them offer a
+    /// fourth card. The candy's option is a different thing: added by a relic after the
+    /// roll, claimed by its own action, and absent from most screens. See E493.
+    /// </remarks>
+    public int LastingCandyRewardCard;
+
+    /// <summary>Whether <see cref="LastingCandyRewardCard" /> is upgraded.</summary>
+    public bool LastingCandyRewardUpgraded;
+
+    /// <summary>
+    /// `CardReward.CanReroll`, which Driftwood sets. One reroll per screen -- the game's
+    /// `Reroll()` clears the flag before it repopulates.
+    /// </summary>
+    public bool CardRewardRerollAvailable;
+
     public int RewardGold;
     public int RewardPotion;
     public bool RewardCardPending;
@@ -458,6 +516,40 @@ public sealed class RunState
     public List<int> PendingBonusRelicRewards = [];
 
     /// <summary>
+    /// The relic ids Toy Box produced, in the order it offered them -- the game's
+    /// <c>RelicModel.IsWax</c>. Every third combat melts the first of these the run is
+    /// still holding, so the order is what decides which one goes.
+    /// </summary>
+    public List<int> WaxRelics = [];
+
+    /// <summary>
+    /// The map coordinates Fur Coat marked, and the act it marked them in. Entering one of
+    /// these rooms puts every enemy in the fight on ONE hp.
+    /// </summary>
+    /// <remarks>
+    /// The act is part of the state because `ModifyGeneratedMapLate` re-marks on every map
+    /// it is handed and `AddMarkedRooms` returns early when the act has moved on -- so a
+    /// coat picked up in act one marks act one and nothing after it.
+    /// </remarks>
+    public List<(int Col, int Row)> FurCoatRooms = [];
+    public int FurCoatAct = -1;
+
+    /// <summary>
+    /// The act Golden Compass replaced the map for. `ModifyGeneratedMap` only answers for
+    /// that one act, and `ModifyUnknownMapPointRoomTypes` narrows the "?" to Event for the
+    /// same act and no other.
+    /// </summary>
+    public int GoldenPathAct = -1;
+
+    /// <summary>
+    /// Lord's Parasol still owes the rest of its sweep. The game awaits each purchase in
+    /// turn, and a bought relic whose own <c>AfterObtained</c> opens a card-select screen
+    /// suspends the sweep until it is answered -- so the sweep is resumable rather than
+    /// one pass.
+    /// </summary>
+    public bool ParasolSweepPending;
+
+    /// <summary>
     /// A card the next combat's reward screen owes outright, rather than as one of three
     /// rolled offers -- the game's `SpecialCardReward`. The Lantern Key's knight fight is
     /// the only one so far: beat it and the key is yours, and it is not a choice.
@@ -587,6 +679,12 @@ public sealed class RunState
     /// selector is open shows the player still at full health.
     /// </summary>
     public int PendingSelectionFollowUpHpLoss;
+
+    /// <summary>
+    /// Max HP the finished selection pays out. Meat Cleaver's cook is the only source:
+    /// remove two, gain nine, and `GainMaxHp` heals by what it adds.
+    /// </summary>
+    public int PendingSelectionFollowUpMaxHpGain;
 
     /// <summary>
     /// The event that opened this selection is not finished by it. The Endless Conveyor's

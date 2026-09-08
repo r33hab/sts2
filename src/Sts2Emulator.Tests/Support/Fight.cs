@@ -274,6 +274,22 @@ internal sealed class Fight
 
     public StepResult EndTurn() => CombatEngine.Step(State, State.Hand.Count, _rng);
 
+    /// <summary>
+    /// Ends the turn and reports the player's HP, for use as a CONTROL.
+    /// </summary>
+    /// <remarks>
+    /// The enemy takes its turn inside an end-turn, so any test about a heal or a
+    /// self-inflicted loss is measuring that effect PLUS whatever the roster did. Running
+    /// the identical fight without the effect and differencing is the only way to say which
+    /// number came from which -- asserting an absolute total silently tests the enemy's
+    /// damage roll as well.
+    /// </remarks>
+    public int EndTurnAndReportHp()
+    {
+        EndTurn();
+        return State.PlayerHp;
+    }
+
     public StepResult Potion(int slot) =>
         CombatEngine.Step(State, State.Hand.Count + 1 + slot, _rng);
 

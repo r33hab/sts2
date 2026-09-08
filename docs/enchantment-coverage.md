@@ -1,24 +1,23 @@
 # Enchantment coverage — what the emulator is missing
 
+**Nothing reachable, as of the relic and sweep work. This file is kept for the port notes
+and the ordering rule, not as a gap list.**
+
 Enchantments are the per-card modifier orthogonal to upgrading: a card's identity is
-`(DefId, Upgraded, Enchantment, EnchantAmount)`. The emulator models **13 of the game's
-22**, and **4 of the 14 relics that grant one** (four more *read* enchantments rather
-than granting them, and need the system to exist before they mean anything). This file is the gap, with the source to
-port from.
+`(DefId, Upgraded, Enchantment, EnchantAmount)`. The emulator models **21 of the game's 22**,
+and the 22nd -- `SlumberingEssence` -- is DEAD CONTENT: its only references in the whole
+decompiled tree are a doc comment in `CardEnergyCost` and the type registry in
+`AbstractModelSubtypes`. Nothing grants it, so nothing can carry it. `EbbPower` is the same
+shape on the power side.
 
-**Why it is not act-2 work.** The implemented four granting relics all happen to be
-`Ancient` rarity, which makes the mechanic look like something the act-2 ancients hand
-out. It is not. Act 1 reaches enchantments by two ordinary routes:
+Every granting relic is modelled and read; `scripts/audit_relics.py` reports 296/296.
 
-- **Events.** Self-Help Book (Sharp/Nimble/Swift at **2**), Stone of All Time (Vigorous)
-  and Symbiote (Corrupted) are in **both** act-1 event pools; Sapphire Seed (Sown) and
-  Wood Carvings (Slither) are in Underdocks'. See `RunMapGenerator.cs:340`.
-- **Shops.** Five `Shop`-rarity relics grant one and a sixth pays off having one,
-  and there are three shops per act.
-
-So an act-1 deck can carry enchantments from roughly floor 5 onward, and a deck-level
-model trained on a distribution that structurally excludes them is biased in a way that
-does not announce itself.
+> **This file said "13 of 22, with 4 of the 14 granting relics" for a long time after it
+> stopped being true.** Instinct and Glam landed with Tri-Boomerang and Glitter, and the Shop
+> granters -- Gnarled Hammer, Royal Stamp, Wing Charm, Punch Dagger, Kifuda -- are all in
+> `RunNonCombatEffects` and `RunRewardGenerator`, named off `Effects.RelicEffects` rather
+> than `RunConstants`. A stale gap list is worse than no gap list: it was quoted as current
+> and sent someone looking for work that was already done. Check the code, not this table.
 
 ## What is already implemented
 
@@ -33,7 +32,13 @@ Shrymp (Imbued), Pael's Growth (Clone at 4) — all in
 
 **Append to the enum, never insert.** The numeric value is what the observation carries,
 so inserting renumbers every enchantment above it and silently invalidates any trained
-policy and every committed fixture. Next free value is **20**.
+policy and every committed fixture. Next free value is **22**.
+
+This rule has been broken once already: Instinct and Glam were first added after `Steady`,
+which moved `Spiral` from 5 to 7 and shifted everything above it. NOTHING caught it -- the
+suite passed and the run traces passed, because the fixtures in play do not happen to carry
+those ordinals, and it would have surfaced later as a silent mismatch against an older
+fixture or a trained policy. They are now 20 and 21, and `Spiral` is 5 again.
 
 ## The three missing enchantments
 

@@ -187,6 +187,15 @@ public static class RunRewardGenerator
             Effects.RelicEffects.ExtraCombatRewardGold(state, finalActBoss)
         );
 
+        // `RoyaltiesPower.AfterCombatEnd` hangs a `GoldReward(Amount)` on the room. Through
+        // `GainGold` like the fight's own gold, so Ectoplasm still zeroes it and Bowler Hat
+        // still raises it -- the power pays out through the run's chokepoint, not past it.
+        if (state.RoyaltiesGoldOwed > 0)
+        {
+            RunNonCombatEffects.GainGold(state, state.RoyaltiesGoldOwed);
+            state.RoyaltiesGoldOwed = 0;
+        }
+
         // `PrayerWheel.TryModifyRewards` after a Monster room and `WhiteStar` after an
         // Elite each add a WHOLE extra CardReward of three. The room type is the gate, and
         // the Star's three come from the BOSS pool rather than the room's own -- which is
@@ -802,10 +811,12 @@ public static class RunRewardGenerator
         return offer;
     }
 
-    internal static void PopulateCardReward(RunState state)
+    internal static void PopulateCardReward(RunState state, bool isReroll = false)
     {
         Array.Clear(state.RewardCards);
         Array.Clear(state.RewardUpgraded);
+        state.LastingCandyRewardCard = 0;
+        state.LastingCandyRewardUpgraded = false;
         bool silverCrucibleUpgrade = ConsumeSilverCrucibleCardRewardUpgrade(state);
         // `LavaLamp.TryModifyCardRewardOptionsLate` upgrades every upgradable option after
         // a combat that landed no unblocked damage. Read once, like Silver Crucible's, so
@@ -862,7 +873,66 @@ public static class RunRewardGenerator
                     .Upgraded;
         }
 
+        // AFTER the three are settled and their blacklist built: the game's hook runs on
+        // the populated screen and skips any Power already on it.
+        if (!isReroll)
+        {
+            AddLastingCandyPowerOption(state, pool, blacklist);
+        }
+
+        // `Driftwood.TryModifyRewardsLate` sets `CanReroll` on the screen it just built.
+        // A REROLLED screen does not get another: the game's `Reroll()` clears the flag
+        // before it repopulates, so one per reward.
+        state.CardRewardRerollAvailable =
+            !isReroll && HasRelic(state, Effects.RelicEffects.Driftwood);
+
         ApplyWingCharmToCardReward(state);
+    }
+
+    /// <summary>
+    /// `LastingCandy.TryModifyCardRewardOptions`: on every SECOND combat, a fourth option
+    /// is ADDED to the card reward, and it is always a POWER.
+    /// </summary>
+    /// <remarks>
+    /// The pool is the screen's own, filtered to Powers the screen is not already offering
+    /// -- `options.TrueForAll(o => o.originalCard.Id != c.Id)` -- and falls back to every
+    /// Power when that leaves nothing. Then ONE card through `CreateForReward` with the
+    /// same `RarityOdds`, which is a rarity roll, a pick and an upgrade roll: three draws
+    /// on the Rewards stream, exactly as each of the other three cost. Spending a different
+    /// number here would move every reward in the rest of the run -- E451's lesson.
+    ///
+    /// `CardCreationSource.Other` with `NoModifyHooks | NoCardPoolModifications`, so the
+    /// relics that widen or enchant a reward do not get a second bite at this one.
+    /// </remarks>
+    private static void AddLastingCandyPowerOption(RunState state, int[] pool, List<int> blacklist)
+    {
+        if (!Effects.RelicEffects.LastingCandyOffersAPower(state))
+        {
+            return;
+        }
+
+        var powers = pool.Where(cardId =>
+                GeneratedData.Cards.Get(cardId).Type == CardType.Power
+                && !blacklist.Contains(cardId)
+            )
+            .ToArray();
+        if (powers.Length == 0)
+        {
+            // "If none is left, take any Power at all" -- the game's second `from` clause,
+            // which drops the not-already-offered filter rather than giving up.
+            powers = pool.Where(cardId => GeneratedData.Cards.Get(cardId).Type == CardType.Power)
+                .ToArray();
+        }
+
+        if (powers.Length == 0)
+        {
+            return;
+        }
+
+        int rarity = RollRewardCardRarity(state);
+        int cardId = ChooseCardWithRarity(powers, rarity, blacklist, state.PlayerRng.Rewards);
+        state.LastingCandyRewardCard = cardId;
+        state.LastingCandyRewardUpgraded = RollCardUpgrade(state, cardId, state.PlayerRng.Rewards);
     }
 
     /// <summary>
@@ -1070,6 +1140,148 @@ public static class RunRewardGenerator
                 state.ShopCosts[i] /= 2;
             }
         }
+
+        if (HasRelic(state, RunConstants.RelicLordsParasol))
+        {
+            state.ParasolSweepPending = true;
+            ContinueLordsParasolSweep(state);
+        }
+    }
+
+    /// <summary>
+    /// `LordsParasol.AfterRoomEntered(MerchantRoom)`: every entry bought with
+    /// <c>ignoreCost: true</c>, in the game's order -- character cards, colourless cards,
+    /// relics, potions -- and then the removal service, <c>cancelable: false</c>.
+    /// </summary>
+    /// <remarks>
+    /// FREE, not merely afforded: `ignoreCost` skips the gold entirely, so the parasol
+    /// never touches the run's gold and never closes Maw Bank. Both are `AfterItemPurchased`
+    /// consequences of gold SPENT, and nothing is spent.
+    ///
+    /// RESUMABLE, because the game awaits every purchase: a relic whose own
+    /// <c>AfterObtained</c> opens a card-select screen stops the sweep where it stands, and
+    /// answering that screen calls back in here to finish. The shelves are the cursor --
+    /// each entry is zeroed as it is taken -- so nothing else has to be remembered.
+    ///
+    /// A potion the belt has no room for is left on the shelf, the way `AddPotion` refuses
+    /// one; the game logs the same as an out-of-stock purchase and moves on.
+    /// </remarks>
+    public static void ContinueLordsParasolSweep(RunState state)
+    {
+        if (!state.ParasolSweepPending)
+        {
+            return;
+        }
+
+        for (int i = 0; i < state.ShopCards.Length; i++)
+        {
+            if (state.ShopCards[i] != 0)
+            {
+                RunNonCombatEffects.AddCardToDeck(
+                    state,
+                    new CardInstance(state.ShopCards[i], Upgraded: false)
+                );
+                state.ShopCards[i] = 0;
+            }
+        }
+
+        for (int i = 0; i < state.ShopRelics.Length; i++)
+        {
+            if (state.ShopRelics[i] == 0)
+            {
+                continue;
+            }
+
+            int relicId = state.ShopRelics[i];
+            state.ShopRelics[i] = 0;
+            RunNonCombatEffects.ApplyRelicPickup(state, relicId, SelectionReturn.Shop);
+
+            // The relic asked the player something. Everything after it -- the rest of the
+            // shelf, the potions, the removal -- waits for the answer, which is what the
+            // game's await does.
+            if (state.PendingSelectionKind != DeckSelection.None)
+            {
+                state.Phase = RunPhase.TransformSelect;
+                return;
+            }
+        }
+
+        for (int i = 0; i < state.ShopPotions.Length; i++)
+        {
+            if (state.ShopPotions[i] != 0 && AddPotion(state, state.ShopPotions[i]))
+            {
+                state.ShopPotions[i] = 0;
+            }
+        }
+
+        state.ParasolSweepPending = false;
+
+        if (
+            !state.ShopRemovalUsedThisVisit
+            && state.Deck.Count > 1
+            && RunNonCombatEffects.BeginDeckSelection(
+                state,
+                DeckSelection.Remove,
+                0,
+                count: 1,
+                returnTo: SelectionReturn.Shop
+            )
+        )
+        {
+            state.ShopRemovalUsedThisVisit = true;
+            state.ShopRemovalsUsed++;
+            state.Phase = RunPhase.TransformSelect;
+        }
+    }
+
+    /// <summary>
+    /// `DelicateFrond.BeforeCombatStart`: fill every OPEN potion slot, one
+    /// `CreateRandomPotionOutOfCombat` off `Rng.CombatPotionGeneration` per slot.
+    /// </summary>
+    /// <remarks>
+    /// The DRAW COUNT is the whole risk, which is why this was declared rather than guessed
+    /// for so long -- a count that is wrong by one moves every later draw on that stream for
+    /// the rest of the run, which is what E451 cost.
+    ///
+    /// The game's loop is `while (HasOpenPotionSlots)`: create, then `TryToProcure`, and
+    /// BREAK if the procure fails. So it is one draw per open slot -- and exactly ONE draw
+    /// when the procure is refused outright, which is Sozu. `AddPotion` already answers
+    /// `TryToProcure`'s question, Sozu's gate included, so the loop reads the same either way.
+    ///
+    /// The blocker recorded against this relic was "the run has no before-combat hook that
+    /// both entry paths share". It has one now: every combat in the run goes through
+    /// `RunEngine.StartCombatWithDeck`, which is where this is called.
+    /// </remarks>
+    public static void FillPotionSlotsForDelicateFrond(RunState state)
+    {
+        if (!HasRelic(state, Effects.RelicEffects.DelicateFrond))
+        {
+            return;
+        }
+
+        int guard = state.PotionSlots.Length + 1;
+        while (guard-- > 0 && HasOpenPotionSlot(state))
+        {
+            if (!AddPotion(state, NextPotion(state, state.Rng.CombatPotionGeneration)))
+            {
+                break;
+            }
+        }
+    }
+
+    /// <summary>`Player.HasOpenPotionSlots`, over the slots that actually exist yet.</summary>
+    private static bool HasOpenPotionSlot(RunState state)
+    {
+        int usable = Math.Min(state.MaxPotionSlots, state.PotionSlots.Length);
+        for (int i = 0; i < usable; i++)
+        {
+            if (state.PotionSlots[i] == 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public static bool AddPotion(RunState state, int potionId)
@@ -1092,6 +1304,7 @@ public static class RunRewardGenerator
             state.PotionSlots[i] = potionId;
             return true;
         }
+
         return false;
     }
 

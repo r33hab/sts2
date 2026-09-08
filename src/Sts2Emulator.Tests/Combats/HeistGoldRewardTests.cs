@@ -73,9 +73,12 @@ public class HeistGoldRewardTests
     {
         var state = FatGremlinHoldingHeistGold(RunConstants.GremlinMercEncounterId);
         state.Enemies[0].Hp = 18;
-        // MoveIndex 0 is its attack; anything else is the escape, which the intent
-        // table reports as a Buff.
-        state.Enemies[0].CurrentIntent = new Intent(IntentType.Buff, 0);
+        // SPAWNED_MOVE is the stun it arrives on; every move after it is FLEE_MOVE, which
+        // loops on itself forever. The flee is announced as an ESCAPE with no magnitude --
+        // the emulator has no Escape in its intent enum and the game's readout reduces to
+        // Unknown. It used to be announced as a Buff, which is what the live sweep caught.
+        state.Enemies[0].MoveIndex = 1;
+        state.Enemies[0].CurrentIntent = new Intent(IntentType.Unknown, 0);
 
         // Its move IS the escape: it zeroes its own HP and leaves.
         EnemyAI.ExecuteIntent(state.Enemies[0], state, new System.Random(0));

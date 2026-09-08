@@ -252,8 +252,11 @@ public sealed class RelicGrabBag
     public static Func<int, bool> AllowedInSoloRun(int totalFloor) =>
         relicId =>
         {
-            string name = GeneratedData.Relics.Get(relicId).Name;
-            if (name == "MassiveScroll")
+            // `MassiveScroll.IsAllowed => Players.Count > 1`. It is not unimplemented --
+            // being absent from a solo run IS the whole of its behaviour, and its
+            // AfterObtained (a three-card reward drawn from the MultiplayerOnly cards) is
+            // unreachable here because nothing can ever hand it over.
+            if (relicId == RunConstants.RelicMassiveScroll)
             {
                 return false;
             }

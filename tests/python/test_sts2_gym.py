@@ -58,7 +58,9 @@ class Sts2GymTests(unittest.TestCase):
                 + layout["scalars"]
                 + layout["max_deck"] * layout["deck_slot_size"]
                 + layout["max_relics"] * layout["relic_slot_size"]
-                + layout["shop_slots"] * layout["shop_slot_size"],
+                + layout["shop_slots"] * layout["shop_slot_size"]
+                # Lasting Candy's extra option, two wide, on the end.
+                + 2,
             )
             self.assertEqual(layout["deck_offset"], layout["scalars"])
             # Wide enough for the Crystal Sphere's board -- 121 cells, either tool --
@@ -633,14 +635,22 @@ class RunShopObservationTests(unittest.TestCase):
         finally:
             env.close()
 
-    def test_the_shop_block_is_the_last_thing_in_the_observation(self):
+    def test_the_blocks_tile_the_observation_up_to_its_end(self):
+        """The shop ends where Lasting Candy's extra option begins, and that ends the run.
+
+        The extra option was APPENDED here rather than placed beside the other three card
+        rewards in the scalars, so that adding it moved neither the deck, the relics nor
+        the shop. This used to assert the shop was last; it is now second to last, and the
+        tiling is what actually matters. See E493.
+        """
         layout = native.RUN_OBS_LAYOUT
-        end = (
+        shop_end = (
             native.OBS_SIZE
             + layout["shop_offset"]
             + layout["shop_slots"] * layout["shop_slot_size"]
         )
-        self.assertEqual(end, native.RUN_OBS_SIZE)
+        self.assertEqual(shop_end, native.OBS_SIZE + layout["fourth_reward_offset"])
+        self.assertEqual(shop_end + 2, native.RUN_OBS_SIZE)
 
 
 class RunEnvCloneTests(unittest.TestCase):

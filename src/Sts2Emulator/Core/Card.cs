@@ -254,6 +254,23 @@ public enum Enchantment
     /// the only one that takes something away. Grave of the Forgotten is the only source.
     /// </summary>
     SoulsPower,
+
+    /// <summary>
+    /// Attacks only; DOUBLES powered damage. Tri-Boomerang is the only source.
+    /// </summary>
+    /// <remarks>
+    /// APPENDED, not inserted. The numeric value is what the observation carries, so
+    /// inserting renumbers every enchantment above it and silently invalidates every
+    /// committed fixture and any trained policy. This pair was originally added after
+    /// `Steady`, which moved `Spiral` from 5 to 7 and everything above it with it.
+    /// </remarks>
+    Instinct,
+
+    /// <summary>
+    /// The card plays one extra time, ONCE per combat. Spiral's effect with a fuse, and
+    /// Glitter -- which stamps it on every eligible card reward -- is the only source.
+    /// </summary>
+    Glam,
 }
 
 /// <summary>
@@ -334,6 +351,18 @@ public readonly record struct CardInstance(
     // so this is the per-copy half of the same question, and it rides on the copy through
     // the piles the way SlyForCombat does.
     bool EtherealForCombat = false,
+    // `CardCmd.ApplyKeyword(card, CardKeyword.Retain)`, which Choices Paradox does to each
+    // of the five cards it generates before offering them. Permanent for the combat like
+    // SlyForCombat, not the single-turn grant `RetainThisTurn` models.
+    bool RetainForCombat = false,
+    // `DampenPower` remembers which cards it downgraded so `AfterRemoved` can put the
+    // upgrade back. The game holds that in a dictionary keyed on the card; the emulator's
+    // cards are values that move between piles, so the card carries the memory instead.
+    bool DampenedUpgrade = false,
+    // `CardCmd.AfflictAndPreview<Bound>`, which ChainsOfBindingPower puts on the cards its
+    // owner draws. An AFFLICTION rather than a keyword in the game; the emulator has no
+    // affliction system and Bound is the only one that does anything, so it rides the card.
+    bool Bound = false,
     // `CardModel.GiveSingleTurnRetain()`, which Well-Laid Plans' power hands to the cards
     // its owner picks just before the hand is flushed. Single-turn like Hand Trick's Sly:
     // it survives one flush and is cleared as the card lands in the next hand.
@@ -393,6 +422,7 @@ public static class CardInstanceExtensions
     {
         var def = GeneratedData.Cards.Get(card.DefId);
         return def.Retain
+            || card.RetainForCombat
             || (card.Upgraded && def.RetainWhenUpgraded)
             || card.Enchantment == Enchantment.Steady
             // `RoyallyApproved.OnEnchant` adds Innate AND Retain -- both keywords, one
@@ -486,6 +516,13 @@ public static class Enchantments
                 == CardType.Attack,
             Enchantment.Nimble => def.Type == CardType.Skill,
             Enchantment.Swift => def.Type == CardType.Power,
+
+            // Instinct.CanEnchantCardType: attacks.
+            Enchantment.Instinct => def.Type == CardType.Attack,
+
+            // Glam has no CanEnchant override, so the base rule is the whole rule -- which
+            // is what lets Glitter reach almost every card a reward can offer.
+            Enchantment.Glam => true,
 
             // Spiral.CanEnchant: Basic rarity, and tagged Strike or Defend.
             Enchantment.Spiral => def.Rarity == CardRarity.Basic && IsStrikeOrDefend(def),

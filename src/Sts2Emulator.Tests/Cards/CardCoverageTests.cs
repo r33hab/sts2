@@ -18,30 +18,7 @@ public class CardCoverageTests
     /// Cards implemented in <c>CardEffects.Apply</c> that no test exercises yet.
     /// Every entry is a card the emulator will happily play wrongly in silence.
     /// </summary>
-    private static readonly HashSet<string> Pending =
-    [
-        "Apparition",
-        "BlackHole",
-        "ByrdSwoop",
-        "Caltrops",
-        "Cascade",
-        "Debris",
-        "Defile",
-        "Disintegration",
-        "Enthralled",
-        "Exterminate",
-        "MinionDiveBomb",
-        "MinionSacrifice",
-        "Outmaneuver",
-        "Peck",
-        "Relax",
-        "RipAndTear",
-        "SpoilsMap",
-        "Squash",
-        "Stack",
-        "SweepingGaze",
-        "Whistle",
-    ];
+    private static readonly HashSet<string> Pending = [];
 
     [Fact]
     public void EveryImplementedCardHasATestSuite()

@@ -46,6 +46,17 @@ public sealed class RunRngSet
     /// solo run's only player is slot 0 — the 1 this used to default to seeded a
     /// different stream, so every Neow offer in every run was the wrong three relics.
     /// </summary>
+    /// <summary>
+    /// A relic's OWN stream: <c>new Rng(owner, Id)</c>, which is
+    /// <c>Seed + slotIndex + hash(Id.Entry)</c> -- the same shape as Neow's, with the
+    /// relic's entry name in place of "NEOW". Fur Coat is the only user.
+    /// </summary>
+    public GameRng RelicRng(string entry, int netId = 0)
+    {
+        uint hash = unchecked((uint)DeterministicHash.GetDeterministicHashCode(entry));
+        return new GameRng(unchecked(Seed + (uint)netId + hash));
+    }
+
     public GameRng NeowRng(int netId = 0)
     {
         uint neowHash = unchecked((uint)DeterministicHash.GetDeterministicHashCode("NEOW"));

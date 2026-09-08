@@ -24,7 +24,10 @@ public static class CombatEngine
         // game's pre-play phase — before the player's first move, not after it. The loop
         // further down drains what an action ITSELF queues; this drains what was already
         // waiting.
-        DrainAutoPlayQueue(state, rng);
+        // Normally a no-op: the combat's creator resolves the pre-play phase so the FIRST
+        // observation already shows it. Kept here for states built without going through an
+        // entry point -- the suite queues auto-plays by hand -- and idempotent either way.
+        ResolvePrePlayPhase(state, rng);
 
         int endTurnAction = state.Hand.Count;
         StepResult result;
@@ -90,30 +93,11 @@ public static class CombatEngine
         var card = state.Hand[handIndex];
         var def = GeneratedData.Cards.Get(card.DefId);
 
-        int effectiveCost = EffectiveCost(card, def, state);
-        int energyToSpend = Math.Max(0, effectiveCost);
-        // `PlayerCombatState.HasEnoughResourcesFor` refuses a play whose STAR cost is more
-        // than the player holds -- a second resource, checked alongside the energy rather
-        // than folded into it. (The excess-energy-for-stars hook is on AbstractModel and
-        // nothing in the game overrides it, so there is no conversion to model.)
-        int starsToSpend = def.HasStarCostX ? state.Stars : Math.Max(0, def.StarCost);
+        ResolveCosts(state, card, def, out int energyToSpend, out int starsToSpend);
 
-        // `VoidFormPower.TryModifyStarCost` zeroes the star cost of the first N cards a turn
-        // alongside their energy. Both hooks, or the card is half free.
-        if (IsFreeUnderVoidForm(state))
-        {
-            starsToSpend = 0;
-        }
-
-        if (
-            def.Unplayable
-            || energyToSpend > state.Energy
-            || starsToSpend > state.Stars
-            || IsBlockedBySmoggy(def, state)
-            || IsBlockedByEnthralled(card, state)
-            || IsBlockedBySloth(state)
-            || Effects.RelicEffects.BlocksFurtherCardPlays(state)
-        )
+        // One predicate, shared with `ValidActions`. These two used to answer the question
+        // separately and disagreed in BOTH directions -- see `CanPlayFromHand`.
+        if (!CanPlayFromHand(state, card))
         {
             return StepResult.Invalid;
         }
@@ -196,9 +180,10 @@ public static class CombatEngine
 
         // `DanseMacabrePower.BeforeCardPlayed`: a card whose RESOLVED cost is 2 or more
         // gains its amount in Unpowered block. Resolved, so a card the player got for free
-        // pays nothing -- `effectiveCost`, not the printed one.
+        // pays nothing -- the resolved cost, not the printed one. Reads the CLAMPED cost,
+        // which is the same test at this threshold: the clamp only moves values below zero.
         int danseMacabre = BuffSystem.Get(state.PlayerBuffs, BuffId.DanseMacabre);
-        if (danseMacabre > 0 && effectiveCost >= 2)
+        if (danseMacabre > 0 && energyToSpend >= 2)
         {
             Effects.CardEffects.GainBlock(state, danseMacabre, rng);
         }
@@ -302,6 +287,14 @@ public static class CombatEngine
         // Spiral.EnchantPlayCount(original) => original + Times, and Times is 1.
         extraPlays += card.EnchantedWith(Enchantment.Spiral);
 
+        // Glam.EnchantPlayCount is the same +Times(1), but it burns out: `AfterCardPlayed`
+        // sets UsedThisCombat and the enchantment goes Disabled. `EnchantSpent` is the
+        // field Vigorous already uses for exactly that once-only shape.
+        if (card.Enchantment == Enchantment.Glam && !card.EnchantSpent)
+        {
+            extraPlays += card.EnchantAmount;
+        }
+
         // Hidden Gem's Replay rides on the copy it was granted to, the same way.
         extraPlays += card.ReplayCount;
         extraPlays += burstPlays;
@@ -329,6 +322,18 @@ public static class CombatEngine
             Effects.CardEffects.Apply(def, card.Upgraded, state, rng, card);
         }
 
+        // `DuplicationPower.ModifyCardPlayCount` adds one play to ANY card and then
+        // `AfterModifyingCardPlayCount` decrements -- so it is spent by the card that used
+        // it, not by the turn. Outside the Attack branch below on purpose: that branch is
+        // `OneTwoPunchPower`, which is a DIFFERENT power of the same shape that refuses
+        // anything but an Attack. Stacking one for the other is E490.
+        int duplication = BuffSystem.Get(state.PlayerBuffs, BuffId.Duplication);
+        if (duplication > 0)
+        {
+            Effects.CardEffects.Apply(def, card.Upgraded, state, rng, card);
+            BuffSystem.Apply(state.PlayerBuffs, BuffId.Duplication, -1);
+        }
+
         if (def.Type == CardType.Attack)
         {
             int oneTwoPunch = BuffSystem.Get(state.PlayerBuffs, BuffId.OneTwoPunch);
@@ -346,6 +351,14 @@ public static class CombatEngine
             }
             QueueAttackPlayLifecycleEffects(state, card);
             BuffSystem.Remove(state.PlayerBuffs, BuffId.Vigor);
+            // `GigantificationPower.AfterAttack` clears its latch and DECREMENTS once the
+            // attack it tripled has finished -- one attack CARD per stack, however many
+            // hits that card threw. All three play paths, because the game's hook is on the
+            // ATTACK and does not care which of them produced it.
+            if (BuffSystem.Get(state.PlayerBuffs, BuffId.Gigantification) > 0)
+            {
+                BuffSystem.Apply(state.PlayerBuffs, BuffId.Gigantification, -1);
+            }
         }
         HandleEnemyDeaths(state, enemyHpsBefore, rng);
 
@@ -625,6 +638,17 @@ public static class CombatEngine
             Effects.CardEffects.ReturnMakeItSosToHand(state);
         }
 
+        // Music Box needs the INSTANCE, not the definition: it clones the card that was
+        // played, so the copy inherits its upgrade and its enchantment.
+        // `ChainsOfBindingPower.BeforeCardPlayed` latches that a BOUND card has been played,
+        // which is what shuts the door on the rest of them for this turn.
+        if (card.Bound)
+        {
+            state.BoundCardPlayedThisTurn = true;
+        }
+
+        Effects.RelicEffects.ApplyMusicBox(state, card, def);
+
         ApplyAfterCardPlayedPowers(state, def, rng, energySpent);
         Effects.RelicEffects.ApplyAfterCardPlayedRares(state, def, rng);
         // The Lamp's latch closes when the card that claimed it finishes resolving.
@@ -680,6 +704,21 @@ public static class CombatEngine
         }
 
         // ── End of player turn ────────────────────────────────────────────────
+
+        // `PaelsEye.BeforeSideTurnEndEarly` exhausts the whole hand -- EARLY, so it lands
+        // before the end-of-turn effects a card in hand would otherwise see. It is the
+        // price of the extra turn granted at the enemy-side seam below, and its guard is
+        // the same one, so the two always agree.
+        if (Effects.RelicEffects.ShouldExhaustHandForPaelsEye(state))
+        {
+            foreach (var handCard in state.Hand.ToList())
+            {
+                Effects.CardEffects.ExhaustCard(state, handCard, rng: rng);
+            }
+
+            state.Hand.Clear();
+        }
+
         TickTheBomb(state);
 
         // Metallicize: gain block at end of player turn.
@@ -774,9 +813,32 @@ public static class CombatEngine
             BuffSystem.Remove(state.PlayerBuffs, BuffId.TemporaryFocus);
         }
 
+        // `RingingPower.AfterSideTurnEnd` asks `participants.Contains(base.Owner)`, and the
+        // OWNER is the creature carrying the power -- the PLAYER. So it goes at the end of
+        // the PLAYER's side turn, not the Beast's: the cry lands during the enemy phase,
+        // gags the player turn that follows, and clears as that turn ends.
+        //
+        // Removing it on the enemy's turn end instead wiped it before the player ever had a
+        // turn under it, which is E480's mistake exactly -- the same hook read against the
+        // wrong side.
+        BuffSystem.Remove(state.PlayerBuffs, BuffId.Ringing);
+
+        // `RegenPower.AfterSideTurnEnd`: HEAL the amount, then DECREMENT -- so a 5 pays
+        // 5+4+3+2+1 and stops, not 5 a turn forever. Guarded on `!base.Owner.IsDead`.
+        int regen = BuffSystem.Get(state.PlayerBuffs, BuffId.Regen);
+        if (regen > 0 && state.PlayerHp > 0)
+        {
+            state.PlayerHp = Math.Min(state.PlayerMaxHp, state.PlayerHp + regen);
+            BuffSystem.Apply(state.PlayerBuffs, BuffId.Regen, -1);
+        }
+
         // Rage expires at end of player turn.
         BuffSystem.Remove(state.PlayerBuffs, BuffId.Rage);
         BuffSystem.Remove(state.PlayerBuffs, BuffId.OneTwoPunch);
+        // `DuplicationPower.AfterSideTurnEnd` REMOVES whatever is left, so a Duplicator
+        // quaffed and not spent expires with the turn. Beside OneTwoPunch because the two
+        // powers are the same shape and different rules -- see the note on the BuffId.
+        BuffSystem.Remove(state.PlayerBuffs, BuffId.Duplication);
         // Battle Trance's NoDrawPower only gags the turn it was played on.
         BuffSystem.Remove(state.PlayerBuffs, BuffId.NoDraw);
 
@@ -945,281 +1007,291 @@ public static class CombatEngine
             BuffSystem.Remove(enemy.Buffs, BuffId.Oblivion);
         }
 
-        // ── Enemy turns ───────────────────────────────────────────────────────
-        state.PlayerTurn = false;
+        // `PaelsEye.ShouldTakeExtraTurn`: a turn in which the owner played NOTHING, once
+        // per combat, skips the enemy side entirely and hands the player another turn.
+        // The game decides this in `SwitchFromPlayerToEnemySide` BEFORE switching, which
+        // is exactly this seam -- and `SwitchSides` then leaves `CurrentSide` on Player
+        // and raises the TURN number without raising the round.
+        bool extraTurn = Effects.RelicEffects.TakeExtraTurnForPaelsEye(state);
+        if (!extraTurn)
+        {
+            // ── Enemy turns ───────────────────────────────────────────────────────
+            state.PlayerTurn = false;
 
-        // SkittishPower.AfterSideTurnEnd fires for the side that is NOT its owner's, so
-        // a gardener may flinch again once the player's turn is over.
-        foreach (var enemy in state.Enemies)
-        {
-            BuffSystem.Remove(enemy.Buffs, BuffId.SkittishSpent);
-        }
-        // Block clears for the WHOLE side before anyone acts, not as each creature takes
-        // its turn. The difference is a creature that GIVES block to another: a Guardbot
-        // hands its Fabricator 15, and when the clear was per-creature the Fabricator --
-        // later in the roster -- wiped it on its own turn. Live showed 15 and the emulator
-        // showed nothing. `BurrowedPower.ShouldClearBlock` is false for its owner, which
-        // is what lets a burrowed Tunneler keep the same 37 across turns.
-        foreach (var enemy in state.Enemies)
-        {
-            if (enemy.Hp > 0 && BuffSystem.Get(enemy.Buffs, BuffId.Burrowed) <= 0)
+            // SkittishPower.AfterSideTurnEnd fires for the side that is NOT its owner's, so
+            // a gardener may flinch again once the player's turn is over.
+            foreach (var enemy in state.Enemies)
             {
-                enemy.Block = 0;
+                BuffSystem.Remove(enemy.Buffs, BuffId.SkittishSpent);
             }
-        }
-
-        state.ExecutedThisEnemyTurn.Clear();
-
-        // A reviving illusion is at 0 HP and still takes its turn -- that turn IS the
-        // revive. It has to stay in the roster's own order while it does, so it comes back
-        // where it stood rather than at one end.
-        foreach (
-            var enemy in state
-                .Enemies.Where(e => e.Hp > 0 || BuffSystem.Get(e.Buffs, BuffId.Reviving) > 0)
-                .ToArray()
-        )
-        {
-            if (BuffSystem.Get(enemy.Buffs, BuffId.Reviving) > 0)
+            // Block clears for the WHOLE side before anyone acts, not as each creature takes
+            // its turn. The difference is a creature that GIVES block to another: a Guardbot
+            // hands its Fabricator 15, and when the clear was per-creature the Fabricator --
+            // later in the roster -- wiped it on its own turn. Live showed 15 and the emulator
+            // showed nothing. `BurrowedPower.ShouldClearBlock` is false for its owner, which
+            // is what lets a burrowed Tunneler keep the same 37 across turns.
+            foreach (var enemy in state.Enemies)
             {
-                // A segment that reattaches waits a whole enemy phase FIRST. `AfterDeath`
-                // puts it in DEAD_MOVE, which it performs on the following turn, and
-                // `DoReattach` runs at the END of that turn -- so the player sees it at 0
-                // for two of their own turns, not none. Reviving is seeded at 2 for a
-                // reattach and 1 for an Illusion, whose revive turn IS the heal; this
-                // spends the extra phase without curing anything.
-                if (BuffSystem.Get(enemy.Buffs, BuffId.Reviving) > 1)
+                if (enemy.Hp > 0 && BuffSystem.Get(enemy.Buffs, BuffId.Burrowed) <= 0)
                 {
-                    BuffSystem.Apply(enemy.Buffs, BuffId.Reviving, -1);
-                    continue;
+                    enemy.Block = 0;
                 }
-
-                // IllusionPower.ReviveMove: Heal(MaxHp - CurrentHp), then back to the move
-                // it was on. It cannot be hit while reviving, which the emulator gets for
-                // free -- everything targets by "alive", and it is not yet.
-                //
-                // A Decimillipede segment reattaches for a FIXED amount instead, so it
-                // comes back hurt: 25 of a 46-to-52 pool.
-                //
-                // The Test Subject comes back as a BIGGER creature, so its max HP moves
-                // too, and it swaps powers on the way.
-                BuffSystem.Remove(enemy.Buffs, BuffId.Reviving);
-                if (enemy.DefId == KE.TestSubject)
-                {
-                    RespawnTestSubject(enemy, state.AscensionLevel);
-                    continue;
-                }
-
-                int reattach = BuffSystem.Get(enemy.Buffs, BuffId.Reattach);
-                enemy.Hp = reattach > 0 ? Math.Min(enemy.MaxHp, enemy.Hp + reattach) : enemy.MaxHp;
-                // REATTACH_MOVE's FollowUpState is the machine's RandomBranchState, not
-                // the cycle -- so a segment that comes back ROLLS its next move rather
-                // than resuming where it fell. The Fogmog's eye returns to the move it was
-                // on, which is why this is keyed on the reattach rather than on reviving.
-                enemy.RollsNextMove = reattach > 0;
-                continue;
             }
 
-            // Poison damage at start of enemy turn.
-            int poison = BuffSystem.Get(enemy.Buffs, BuffId.Poison);
-            if (poison > 0)
+            state.ExecutedThisEnemyTurn.Clear();
+
+            // A reviving illusion is at 0 HP and still takes its turn -- that turn IS the
+            // revive. It has to stay in the roster's own order while it does, so it comes back
+            // where it stood rather than at one end.
+            foreach (
+                var enemy in state
+                    .Enemies.Where(e => e.Hp > 0 || BuffSystem.Get(e.Buffs, BuffId.Reviving) > 0)
+                    .ToArray()
+            )
             {
-                // PoisonPower.AfterSideTurnStart triggers `min(Amount, 1 + Accelerant)`
-                // times, dealing the CURRENT amount and decrementing after each -- so with
-                // Accelerant 1 a poison of 5 deals 5 then 4, and the stack falls by two.
-                // Accelerant lives on the PLAYER and is read from the poisoned creature's
-                // OPPONENTS, which for an enemy is the player.
-                //
-                // PoisonPower runs its own damage through Hook.ModifyDamage with the Cap
-                // flag set, so an intangible creature loses 1 to poison however deep it is.
-                int triggers = Math.Min(
-                    poison,
-                    1 + BuffSystem.Get(state.PlayerBuffs, BuffId.Accelerant)
-                );
-                for (int tick = 0; tick < triggers && enemy.Hp > 0; tick++)
+                if (BuffSystem.Get(enemy.Buffs, BuffId.Reviving) > 0)
                 {
-                    int amount = BuffSystem.Get(enemy.Buffs, BuffId.Poison);
-                    enemy.Hp -= BuffSystem.CapHpLoss(amount, enemy.Buffs);
-                    if (enemy.Hp > 0)
+                    // A segment that reattaches waits a whole enemy phase FIRST. `AfterDeath`
+                    // puts it in DEAD_MOVE, which it performs on the following turn, and
+                    // `DoReattach` runs at the END of that turn -- so the player sees it at 0
+                    // for two of their own turns, not none. Reviving is seeded at 2 for a
+                    // reattach and 1 for an Illusion, whose revive turn IS the heal; this
+                    // spends the extra phase without curing anything.
+                    if (BuffSystem.Get(enemy.Buffs, BuffId.Reviving) > 1)
                     {
-                        BuffSystem.Apply(enemy.Buffs, BuffId.Poison, -1);
+                        BuffSystem.Apply(enemy.Buffs, BuffId.Reviving, -1);
+                        continue;
+                    }
+
+                    // IllusionPower.ReviveMove: Heal(MaxHp - CurrentHp), then back to the move
+                    // it was on. It cannot be hit while reviving, which the emulator gets for
+                    // free -- everything targets by "alive", and it is not yet.
+                    //
+                    // A Decimillipede segment reattaches for a FIXED amount instead, so it
+                    // comes back hurt: 25 of a 46-to-52 pool.
+                    //
+                    // The Test Subject comes back as a BIGGER creature, so its max HP moves
+                    // too, and it swaps powers on the way.
+                    BuffSystem.Remove(enemy.Buffs, BuffId.Reviving);
+                    if (enemy.DefId == KE.TestSubject)
+                    {
+                        RespawnTestSubject(enemy, state.AscensionLevel);
+                        continue;
+                    }
+
+                    int reattach = BuffSystem.Get(enemy.Buffs, BuffId.Reattach);
+                    enemy.Hp =
+                        reattach > 0 ? Math.Min(enemy.MaxHp, enemy.Hp + reattach) : enemy.MaxHp;
+                    // REATTACH_MOVE's FollowUpState is the machine's RandomBranchState, not
+                    // the cycle -- so a segment that comes back ROLLS its next move rather
+                    // than resuming where it fell. The Fogmog's eye returns to the move it was
+                    // on, which is why this is keyed on the reattach rather than on reviving.
+                    enemy.RollsNextMove = reattach > 0;
+                    continue;
+                }
+
+                // Poison damage at start of enemy turn.
+                int poison = BuffSystem.Get(enemy.Buffs, BuffId.Poison);
+                if (poison > 0)
+                {
+                    // PoisonPower.AfterSideTurnStart triggers `min(Amount, 1 + Accelerant)`
+                    // times, dealing the CURRENT amount and decrementing after each -- so with
+                    // Accelerant 1 a poison of 5 deals 5 then 4, and the stack falls by two.
+                    // Accelerant lives on the PLAYER and is read from the poisoned creature's
+                    // OPPONENTS, which for an enemy is the player.
+                    //
+                    // PoisonPower runs its own damage through Hook.ModifyDamage with the Cap
+                    // flag set, so an intangible creature loses 1 to poison however deep it is.
+                    int triggers = Math.Min(
+                        poison,
+                        1 + BuffSystem.Get(state.PlayerBuffs, BuffId.Accelerant)
+                    );
+                    for (int tick = 0; tick < triggers && enemy.Hp > 0; tick++)
+                    {
+                        int amount = BuffSystem.Get(enemy.Buffs, BuffId.Poison);
+                        enemy.Hp -= BuffSystem.CapHpLoss(amount, enemy.Buffs);
+                        if (enemy.Hp > 0)
+                        {
+                            BuffSystem.Apply(enemy.Buffs, BuffId.Poison, -1);
+                        }
+                    }
+
+                    if (enemy.Hp <= 0)
+                    {
+                        continue;
                     }
                 }
 
-                if (enemy.Hp <= 0)
+                int sandpit = BuffSystem.Get(enemy.Buffs, BuffId.Sandpit);
+                if (sandpit > 0)
+                {
+                    BuffSystem.Apply(enemy.Buffs, BuffId.Sandpit, -1);
+                    if (BuffSystem.Get(enemy.Buffs, BuffId.Sandpit) == 0)
+                    {
+                        // `CreatureCmd.Kill(creature, force: true)`, and `force` is
+                        // documented as blocking death prevention -- so no hook, and Lizard
+                        // Tail and Fairy in a Bottle do not save the player from a Sandpit.
+                        state.PlayerHp = 0;
+                        return new StepResult(Terminal: true, PlayerWon: false, Reward: -1f);
+                    }
+                }
+
+                // Recorded AROUND the call, not inside it: `ExecuteIntent` has an early
+                // return, and a before/after pair written inside would be split by it. The
+                // caller is also the only place that knows the call happened at all, which is
+                // the distinction this record exists to draw -- reached, versus did something.
+                int deckBefore = PlayerCardCount(state);
+                state.ExecutedThisEnemyTurn.Add(enemy.DefId);
+                state.ExecutedThisEnemyTurn.Add((int)enemy.CurrentIntent.Type);
+                state.ExecutedThisEnemyTurn.Add(enemy.CurrentIntent.Magnitude);
+                state.ExecutedThisEnemyTurn.Add(deckBefore);
+
+                EnemyAI.ExecuteIntent(enemy, state, rng);
+
+                state.ExecutedThisEnemyTurn.Add(PlayerCardCount(state));
+            }
+
+            // A Gas Bomb kills itself as it explodes and leaves the roster. Left in place at
+            // zero HP it kept announcing an intent every turn, so a Living Fog fight grew an
+            // extra attacker per Bloat where the live game shows one bomb appear and go.
+            state.Enemies.RemoveAll(e => e.Hp <= 0 && e.DefId == KE.GasBomb);
+
+            // Before the duration tick, and over every LIVING enemy rather than the ones that
+            // acted: `HighVoltagePower.AfterSideTurnEnd` pays each PARTICIPANT, which includes
+            // a bot spawned during this very turn.
+            EnemyAI.ApplyEndOfEnemySideTurn(state);
+            TickDurationDebuffs(state);
+            EnemyAI.ToggleNemesisIntangible(state);
+
+            HandleEnemyDeaths(state, enemyHpsBefore, rng);
+
+            // The combat is over the moment the enemy phase leaves nobody standing.
+            // CombatManager.ExecuteEnemyTurn awaits CheckWinCondition after EVERY enemy and
+            // returns as soon as IsInProgress goes false, so the game never begins another
+            // player turn -- while this ran the whole of one, drew a hand and reshuffled to
+            // find it. That reshuffle is not free: Rng.Shuffle is a RUN-level stream, so a
+            // fight whose last enemy dies (or, as a Fat Gremlin does, escapes) on the enemy
+            // turn left it ahead of the game's by the size of a pile, and every hand dealt
+            // for the rest of the run came off the wrong position. The last thing that can
+            // add or remove an enemy is HandleEnemyDeaths -- Gremlin Merc reinforcements and
+            // Phrog Parasite wrigglers both arrive there -- so the check belongs after it.
+            bool playerDeadAfterEnemyTurn = PlayerIsDead(state);
+            bool allDeadAfterEnemyTurn = NoPrimaryEnemyLeft(state);
+            if (playerDeadAfterEnemyTurn || allDeadAfterEnemyTurn)
+            {
+                return new StepResult(
+                    Terminal: true,
+                    PlayerWon: allDeadAfterEnemyTurn && !playerDeadAfterEnemyTurn,
+                    Reward: ComputeReward(
+                        state,
+                        playerDeadAfterEnemyTurn,
+                        allDeadAfterEnemyTurn,
+                        playerHpBefore,
+                        enemyHpsBefore
+                    )
+                );
+            }
+
+            // Restore temporary Strength debuffs applied this turn (e.g. DarkShackles).
+            foreach (var enemy in state.Enemies)
+            {
+                int tempStr = BuffSystem.Get(enemy.Buffs, BuffId.TemporaryStrength);
+                if (tempStr != 0)
+                {
+                    BuffSystem.Apply(enemy.Buffs, BuffId.Strength, tempStr);
+                    BuffSystem.Remove(enemy.Buffs, BuffId.TemporaryStrength);
+                }
+
+                // `StranglePower.AfterSideTurnEnd` removes itself when its OWNER's side turn
+                // ends -- the enemy's, here -- so a Strangle taxes the cards played on the
+                // turn it lands and no longer.
+                BuffSystem.Remove(enemy.Buffs, BuffId.Strangle);
+
+                // `SicEmPower.AfterSideTurnEnd` removes itself the same way.
+                BuffSystem.Remove(enemy.Buffs, BuffId.SicEm);
+
+                // `DebilitatePower.AfterSideTurnEnd` DECREMENTS rather than removing, so its
+                // amount really is a turn count.
+                if (BuffSystem.Get(enemy.Buffs, BuffId.Debilitate) > 0)
+                {
+                    BuffSystem.Apply(enemy.Buffs, BuffId.Debilitate, -1);
+                }
+
+                // `ConquerorPower.AfterSideTurnEnd`, the same shape.
+                if (BuffSystem.Get(enemy.Buffs, BuffId.Conqueror) > 0)
+                {
+                    BuffSystem.Apply(enemy.Buffs, BuffId.Conqueror, -1);
+                }
+            }
+
+            // Dark Embrace: deferred draw for Ethereal cards exhausted at end of turn.
+            int de = BuffSystem.Get(state.PlayerBuffs, BuffId.DarkEmbrace);
+            if (de > 0 && state.EtherealExhaustCount > 0)
+            {
+                Effects.CardEffects.DrawCards(state, de * state.EtherealExhaustCount, rng);
+                state.EtherealExhaustCount = 0;
+            }
+
+            int colossus = BuffSystem.Get(state.PlayerBuffs, BuffId.Colossus);
+            if (colossus > 0)
+            {
+                BuffSystem.Apply(state.PlayerBuffs, BuffId.Colossus, -1);
+            }
+
+            int noBlock = BuffSystem.Get(state.PlayerBuffs, BuffId.NoBlock);
+            if (noBlock == 1)
+            {
+                BuffSystem.Remove(state.PlayerBuffs, BuffId.NoBlock);
+            }
+            else if (noBlock > 1)
+            {
+                BuffSystem.Apply(state.PlayerBuffs, BuffId.NoBlock, -1);
+            }
+
+            // `TemporaryDexterityPower` hands its Dexterity back at the end of the turn --
+            // Anticipate's is the Silent's, and reading its VAR rather than the power it
+            // applies made a 0-cost common a permanent buff.
+            int temporaryDexterity = BuffSystem.Get(state.PlayerBuffs, BuffId.TemporaryDexterity);
+            if (temporaryDexterity > 0)
+            {
+                BuffSystem.Apply(state.PlayerBuffs, BuffId.Dexterity, -temporaryDexterity);
+                BuffSystem.Remove(state.PlayerBuffs, BuffId.TemporaryDexterity);
+            }
+
+            // FlameBarrier expires after enemies have acted.
+            BuffSystem.Remove(state.PlayerBuffs, BuffId.FlameBarrier);
+
+            // `CorrosiveWavePower.AfterSideTurnEnd` removes the power outright, so its
+            // poison-on-draw lasts the turn it was played and no longer.
+            BuffSystem.Remove(state.PlayerBuffs, BuffId.CorrosiveWave);
+
+            // `NoEnergyGainPower.AfterSideTurnEnd` -- the same shape: Expect A Fight's lockout
+            // lasts the turn it was played and no longer.
+            BuffSystem.Remove(state.PlayerBuffs, BuffId.NoEnergyGain);
+
+            // `BattlewornDummyTimeLimitPower.AfterSideTurnEnd`: the dummy's counter ticks at
+            // the end of its OWN side turn, and at 1 it flags the encounter and escapes rather
+            // than decrementing to nothing. Three turns to kill it.
+            foreach (var enemy in state.Enemies)
+            {
+                int limit = BuffSystem.Get(enemy.Buffs, BuffId.BattlewornDummyTimeLimit);
+                if (limit <= 0 || enemy.Hp <= 0)
                 {
                     continue;
                 }
-            }
 
-            int sandpit = BuffSystem.Get(enemy.Buffs, BuffId.Sandpit);
-            if (sandpit > 0)
-            {
-                BuffSystem.Apply(enemy.Buffs, BuffId.Sandpit, -1);
-                if (BuffSystem.Get(enemy.Buffs, BuffId.Sandpit) == 0)
+                if (limit > 1)
                 {
-                    // `CreatureCmd.Kill(creature, force: true)`, and `force` is
-                    // documented as blocking death prevention -- so no hook, and Lizard
-                    // Tail and Fairy in a Bottle do not save the player from a Sandpit.
-                    state.PlayerHp = 0;
-                    return new StepResult(Terminal: true, PlayerWon: false, Reward: -1f);
+                    BuffSystem.Apply(enemy.Buffs, BuffId.BattlewornDummyTimeLimit, -1);
+                    continue;
                 }
+
+                // Zeroing the HP is how the emulator takes a creature out of a fight; the
+                // flag is what tells the event this was an escape and not a kill.
+                enemy.Hp = 0;
+                enemy.Escaped = true;
+                state.BattlewornDummyRanOutOfTime = true;
             }
-
-            // Recorded AROUND the call, not inside it: `ExecuteIntent` has an early
-            // return, and a before/after pair written inside would be split by it. The
-            // caller is also the only place that knows the call happened at all, which is
-            // the distinction this record exists to draw -- reached, versus did something.
-            int deckBefore = PlayerCardCount(state);
-            state.ExecutedThisEnemyTurn.Add(enemy.DefId);
-            state.ExecutedThisEnemyTurn.Add((int)enemy.CurrentIntent.Type);
-            state.ExecutedThisEnemyTurn.Add(enemy.CurrentIntent.Magnitude);
-            state.ExecutedThisEnemyTurn.Add(deckBefore);
-
-            EnemyAI.ExecuteIntent(enemy, state, rng);
-
-            state.ExecutedThisEnemyTurn.Add(PlayerCardCount(state));
-        }
-
-        // A Gas Bomb kills itself as it explodes and leaves the roster. Left in place at
-        // zero HP it kept announcing an intent every turn, so a Living Fog fight grew an
-        // extra attacker per Bloat where the live game shows one bomb appear and go.
-        state.Enemies.RemoveAll(e => e.Hp <= 0 && e.DefId == KE.GasBomb);
-
-        // Before the duration tick, and over every LIVING enemy rather than the ones that
-        // acted: `HighVoltagePower.AfterSideTurnEnd` pays each PARTICIPANT, which includes
-        // a bot spawned during this very turn.
-        EnemyAI.ApplyEndOfEnemySideTurn(state);
-        TickDurationDebuffs(state);
-        EnemyAI.ToggleNemesisIntangible(state);
-
-        HandleEnemyDeaths(state, enemyHpsBefore, rng);
-
-        // The combat is over the moment the enemy phase leaves nobody standing.
-        // CombatManager.ExecuteEnemyTurn awaits CheckWinCondition after EVERY enemy and
-        // returns as soon as IsInProgress goes false, so the game never begins another
-        // player turn -- while this ran the whole of one, drew a hand and reshuffled to
-        // find it. That reshuffle is not free: Rng.Shuffle is a RUN-level stream, so a
-        // fight whose last enemy dies (or, as a Fat Gremlin does, escapes) on the enemy
-        // turn left it ahead of the game's by the size of a pile, and every hand dealt
-        // for the rest of the run came off the wrong position. The last thing that can
-        // add or remove an enemy is HandleEnemyDeaths -- Gremlin Merc reinforcements and
-        // Phrog Parasite wrigglers both arrive there -- so the check belongs after it.
-        bool playerDeadAfterEnemyTurn = PlayerIsDead(state);
-        bool allDeadAfterEnemyTurn = NoPrimaryEnemyLeft(state);
-        if (playerDeadAfterEnemyTurn || allDeadAfterEnemyTurn)
-        {
-            return new StepResult(
-                Terminal: true,
-                PlayerWon: allDeadAfterEnemyTurn && !playerDeadAfterEnemyTurn,
-                Reward: ComputeReward(
-                    state,
-                    playerDeadAfterEnemyTurn,
-                    allDeadAfterEnemyTurn,
-                    playerHpBefore,
-                    enemyHpsBefore
-                )
-            );
-        }
-
-        // Restore temporary Strength debuffs applied this turn (e.g. DarkShackles).
-        foreach (var enemy in state.Enemies)
-        {
-            int tempStr = BuffSystem.Get(enemy.Buffs, BuffId.TemporaryStrength);
-            if (tempStr != 0)
-            {
-                BuffSystem.Apply(enemy.Buffs, BuffId.Strength, tempStr);
-                BuffSystem.Remove(enemy.Buffs, BuffId.TemporaryStrength);
-            }
-
-            // `StranglePower.AfterSideTurnEnd` removes itself when its OWNER's side turn
-            // ends -- the enemy's, here -- so a Strangle taxes the cards played on the
-            // turn it lands and no longer.
-            BuffSystem.Remove(enemy.Buffs, BuffId.Strangle);
-
-            // `SicEmPower.AfterSideTurnEnd` removes itself the same way.
-            BuffSystem.Remove(enemy.Buffs, BuffId.SicEm);
-
-            // `DebilitatePower.AfterSideTurnEnd` DECREMENTS rather than removing, so its
-            // amount really is a turn count.
-            if (BuffSystem.Get(enemy.Buffs, BuffId.Debilitate) > 0)
-            {
-                BuffSystem.Apply(enemy.Buffs, BuffId.Debilitate, -1);
-            }
-
-            // `ConquerorPower.AfterSideTurnEnd`, the same shape.
-            if (BuffSystem.Get(enemy.Buffs, BuffId.Conqueror) > 0)
-            {
-                BuffSystem.Apply(enemy.Buffs, BuffId.Conqueror, -1);
-            }
-        }
-
-        // Dark Embrace: deferred draw for Ethereal cards exhausted at end of turn.
-        int de = BuffSystem.Get(state.PlayerBuffs, BuffId.DarkEmbrace);
-        if (de > 0 && state.EtherealExhaustCount > 0)
-        {
-            Effects.CardEffects.DrawCards(state, de * state.EtherealExhaustCount, rng);
-            state.EtherealExhaustCount = 0;
-        }
-
-        int colossus = BuffSystem.Get(state.PlayerBuffs, BuffId.Colossus);
-        if (colossus > 0)
-        {
-            BuffSystem.Apply(state.PlayerBuffs, BuffId.Colossus, -1);
-        }
-
-        int noBlock = BuffSystem.Get(state.PlayerBuffs, BuffId.NoBlock);
-        if (noBlock == 1)
-        {
-            BuffSystem.Remove(state.PlayerBuffs, BuffId.NoBlock);
-        }
-        else if (noBlock > 1)
-        {
-            BuffSystem.Apply(state.PlayerBuffs, BuffId.NoBlock, -1);
-        }
-
-        // `TemporaryDexterityPower` hands its Dexterity back at the end of the turn --
-        // Anticipate's is the Silent's, and reading its VAR rather than the power it
-        // applies made a 0-cost common a permanent buff.
-        int temporaryDexterity = BuffSystem.Get(state.PlayerBuffs, BuffId.TemporaryDexterity);
-        if (temporaryDexterity > 0)
-        {
-            BuffSystem.Apply(state.PlayerBuffs, BuffId.Dexterity, -temporaryDexterity);
-            BuffSystem.Remove(state.PlayerBuffs, BuffId.TemporaryDexterity);
-        }
-
-        // FlameBarrier expires after enemies have acted.
-        BuffSystem.Remove(state.PlayerBuffs, BuffId.FlameBarrier);
-
-        // `CorrosiveWavePower.AfterSideTurnEnd` removes the power outright, so its
-        // poison-on-draw lasts the turn it was played and no longer.
-        BuffSystem.Remove(state.PlayerBuffs, BuffId.CorrosiveWave);
-
-        // `NoEnergyGainPower.AfterSideTurnEnd` -- the same shape: Expect A Fight's lockout
-        // lasts the turn it was played and no longer.
-        BuffSystem.Remove(state.PlayerBuffs, BuffId.NoEnergyGain);
-
-        // `BattlewornDummyTimeLimitPower.AfterSideTurnEnd`: the dummy's counter ticks at
-        // the end of its OWN side turn, and at 1 it flags the encounter and escapes rather
-        // than decrementing to nothing. Three turns to kill it.
-        foreach (var enemy in state.Enemies)
-        {
-            int limit = BuffSystem.Get(enemy.Buffs, BuffId.BattlewornDummyTimeLimit);
-            if (limit <= 0 || enemy.Hp <= 0)
-            {
-                continue;
-            }
-
-            if (limit > 1)
-            {
-                BuffSystem.Apply(enemy.Buffs, BuffId.BattlewornDummyTimeLimit, -1);
-                continue;
-            }
-
-            // Zeroing the HP is how the emulator takes a creature out of a fight; the
-            // flag is what tells the event this was an escape and not a kill.
-            enemy.Hp = 0;
-            enemy.Escaped = true;
-            state.BattlewornDummyRanOutOfTime = true;
         }
 
         // ── Start of next player turn ─────────────────────────────────────────
@@ -1377,11 +1449,17 @@ public static class CombatEngine
         // was moved off RELOAD_MOVE onto the power -- so the turret carried 50 where the
         // game gives it 25. Settled by comparing enemy BLOCK, which nothing did until
         // now; see O18.
-        int rampart = state
-            .Enemies.Where(e => e.Hp > 0)
-            .Select(e => BuffSystem.Get(e.Buffs, BuffId.Rampart))
-            .DefaultIfEmpty(0)
-            .Max();
+        // `RampartPower.AfterSideTurnStart` returns early when
+        // `PlayersTakingExtraTurn.Count > 0` -- the turret does NOT re-armour on a turn the
+        // player took for free. It is the only thing in the game that reads that, and Pael's
+        // Eye is the only thing that grants one, so this pair is the whole interaction.
+        int rampart = extraTurn
+            ? 0
+            : state
+                .Enemies.Where(e => e.Hp > 0)
+                .Select(e => BuffSystem.Get(e.Buffs, BuffId.Rampart))
+                .DefaultIfEmpty(0)
+                .Max();
         if (rampart > 0)
         {
             foreach (
@@ -1404,6 +1482,25 @@ public static class CombatEngine
         if (prepTime > 0)
         {
             BuffSystem.Apply(state.PlayerBuffs, BuffId.Vigor, prepTime);
+        }
+
+        // `RadiancePower.AfterEnergyReset`: `PlayerCmd.GainEnergy(1)` and DECREMENT, so the
+        // counter is TURNS and the energy is always one. Added to the bar the reset just
+        // filled rather than to the maximum -- a relic that raises max energy and this are
+        // not the same quantity, and only one of them survives a Void Form.
+        int radiance = BuffSystem.Get(state.PlayerBuffs, BuffId.Radiance);
+        if (radiance > 0)
+        {
+            // `PlayerCmd.GainEnergy`, which is what the power actually calls -- so a
+            // NoEnergyGain standing on the player zeroes it. Incrementing the energy field
+            // directly here built it where nothing could stop it, and the chokepoint guard
+            // in `BlockChokepointTests` is what caught it; its own comment records Seal of
+            // Gold making the identical mistake. (That guard counts TEXTUAL matches, so do
+            // not spell the raw increment out even in a comment -- this one used to.)
+            Effects.CardEffects.GainEnergy(state, 1);
+            // The DECREMENT is unconditional: the game awaits the gain and then decrements
+            // whatever the gain did, so a turn spent under NoEnergyGain still burns one.
+            BuffSystem.Apply(state.PlayerBuffs, BuffId.Radiance, -1);
         }
 
         // `LightningRodPower.AfterEnergyReset` channels a Lightning orb and DECREMENTS,
@@ -1450,11 +1547,12 @@ public static class CombatEngine
             Effects.RelicEffects.GainPlayerStrength(state, demonForm);
         }
 
-        // Aggression: add random upgraded card at start of player turn.
+        // `AggressionPower.BeforeSideTurnStart`: ATTACKS out of the DISCARD PILE into hand,
+        // upgraded. The player's own cards, moved -- not new ones rolled up.
         int aggression = BuffSystem.Get(state.PlayerBuffs, BuffId.Aggression);
         if (aggression > 0)
         {
-            Effects.CardEffects.AddRandomUpgradedIroncladCardToHand(state, aggression, rng);
+            Effects.CardEffects.MoveDiscardedAttacksToHandForAggression(state, aggression, rng);
         }
 
         int infernoSelfDamage = BuffSystem.Get(state.PlayerBuffs, BuffId.InfernoSelfDamage);
@@ -1484,8 +1582,17 @@ public static class CombatEngine
             }
         }
 
-        BuffSystem.Remove(state.PlayerBuffs, BuffId.Smoggy);
         BuffSystem.Remove(state.PlayerBuffs, BuffId.FeralUsed);
+
+        // `SmoggyPower.AfterSideTurnEnd` clears the SMOG AFFLICTION off the cards; it does
+        // NOT remove the power, which has no self-removal at all and stands for the rest of
+        // the fight. `SkillPlayedWhileSmoggy` is the emulator's affliction -- one Skill a
+        // turn -- so clearing THAT is the faithful half.
+        //
+        // Removing the power here wiped it at the START of the player's turn, immediately
+        // after the enemy phase that applied it, so the player never paid it at all: the
+        // underdocks sweep has the Living Fog's gas landing SMOGGY_POWER on the live player
+        // at turn two against nothing on the emulator's.
         state.SkillPlayedWhileSmoggy = false;
         state.AttackCardsPlayedThisTurn = 0;
         state.SkillCardsPlayedThisTurn = 0;
@@ -1671,16 +1778,30 @@ public static class CombatEngine
                     // raises max energy -- both every turn, not once.
                     + BuffSystem.Get(state.PlayerBuffs, BuffId.Demesne)
                     + Effects.RelicEffects.ExtraHandDraw(state)
+                    // `DrawCardsNextTurnPower.ModifyHandDraw`: part of the HAND DRAW, not a
+                    // draw of its own. It was a separate `DrawCards` after this one, which
+                    // Fiddle's `ShouldDraw` then refused -- it vetoes every draw that is
+                    // not the hand draw, and the game's hand draw is exactly what this is.
+                    // A run holding Fiddle lost every next-turn draw it was owed.
+                    + BuffSystem.Get(state.PlayerBuffs, BuffId.NextTurnDraw)
+                    // `ClarityPower.ModifyHandDraw` adds ONE, however many turns are left
+                    // on it -- the counter is turns, not cards, which is the whole of what
+                    // the game's remark means by "distinct due to its stacking behavior".
+                    // Summing the amount here would pay three cards on the first turn and
+                    // none on the other two.
+                    + (BuffSystem.Get(state.PlayerBuffs, BuffId.Clarity) > 0 ? 1 : 0)
                     - BuffSystem.Get(state.PlayerBuffs, BuffId.MindRot)
             ),
             rng,
             fromHandDraw: true
         );
-        int nextTurnDraw = BuffSystem.Get(state.PlayerBuffs, BuffId.NextTurnDraw);
-        if (nextTurnDraw > 0)
+        // `AfterSideTurnStart` removes it once it has been spent on that draw.
+        BuffSystem.Remove(state.PlayerBuffs, BuffId.NextTurnDraw);
+        // `ClarityPower.AfterSideTurnStart` decrements once per turn of the owner's, AFTER
+        // the draw it just paid for -- decrementing first would cost the last turn's card.
+        if (BuffSystem.Get(state.PlayerBuffs, BuffId.Clarity) > 0)
         {
-            Effects.CardEffects.DrawCards(state, nextTurnDraw, rng);
-            BuffSystem.Remove(state.PlayerBuffs, BuffId.NextTurnDraw);
+            BuffSystem.Apply(state.PlayerBuffs, BuffId.Clarity, -1);
         }
         // `TyrannyPower.AfterPlayerTurnStart`: EXHAUST that many cards CHOSEN from hand --
         // `CardSelectorPrefs(prompt, Amount)`, whose single count sets min and max alike, so
@@ -1839,6 +1960,27 @@ public static class CombatEngine
     /// stops accepting plays once the count is reached. It counts EVERY card, which is
     /// why it reads the plain per-turn total rather than one of the typed ones.
     /// </remarks>
+    /// <summary>
+    /// `ChainsOfBindingPower.ShouldPlay`: a BOUND card is refused once a bound card has
+    /// already been played this turn -- so the chains allow exactly one a turn, whatever
+    /// else is in hand.
+    /// </summary>
+    /// <summary>
+    /// `RingingPower.ShouldPlay`: a RINGING card is refused once ANY card has been played
+    /// this turn -- so the Beast's cry costs the player every card after their first.
+    /// </summary>
+    /// <remarks>
+    /// `BeastCryMove` afflicts every card the player holds and `AfterCardEnteredCombat`
+    /// catches the ones made later, so while the power stands the whole deck is Ringing and
+    /// the gate is the power alone. The game skips a card that ALREADY carries an affliction
+    /// -- one slot per card -- which in this fight has no other source to compete with it.
+    /// </remarks>
+    private static bool IsBlockedByRinging(CombatState state) =>
+        BuffSystem.Get(state.PlayerBuffs, BuffId.Ringing) > 0 && state.CardPlaysThisTurn > 0;
+
+    private static bool IsBlockedByBound(CardInstance card, CombatState state) =>
+        card.Bound && state.BoundCardPlayedThisTurn;
+
     private static bool IsBlockedBySloth(CombatState state)
     {
         int sloth = BuffSystem.Get(state.PlayerBuffs, BuffId.Sloth);
@@ -1890,6 +2032,12 @@ public static class CombatEngine
                 break;
             case Enchantment.Swift when !card.EnchantSpent:
                 Effects.CardEffects.DrawCards(state, card.EnchantAmount, rng);
+                state.PlayedCardEnchantSpent = true;
+                break;
+            case Enchantment.Glam when !card.EnchantSpent:
+                // `Glam.AfterCardPlayed` sets UsedThisCombat on the FIRST play. The extra
+                // play the enchantment bought is a repeat of the same card, and a repeat
+                // does not re-arm it -- so the fuse burns here, on the play that lit it.
                 state.PlayedCardEnchantSpent = true;
                 break;
             case Enchantment.Vigorous when !card.EnchantSpent:
@@ -1956,6 +2104,13 @@ public static class CombatEngine
         // `VoidFormPower.TryModifyEnergyCostInCombatLate` -- a Late hook, so it sits with
         // the other zero-returns rather than with the additive terms.
         if (IsFreeUnderVoidForm(state))
+        {
+            return 0;
+        }
+
+        // `BrilliantScarf.TryModifyEnergyCostInCombatLate` -- also Late, and also a flat
+        // zero rather than a discount.
+        if (Effects.RelicEffects.IsFreeUnderBrilliantScarf(state))
         {
             return 0;
         }
@@ -2125,6 +2280,80 @@ public static class CombatEngine
             _ => true,
         };
 
+    /// <summary>
+    /// What a play costs: the energy after every cost hook, and the stars after theirs.
+    /// </summary>
+    /// <remarks>
+    /// `PlayerCombatState.HasEnoughResourcesFor` refuses a play whose STAR cost is more
+    /// than the player holds -- a second resource, checked alongside the energy rather than
+    /// folded into it. (The excess-energy-for-stars hook is on AbstractModel and nothing in
+    /// the game overrides it, so there is no conversion to model.) `BrilliantScarf
+    /// .TryModifyStarCost` and `VoidFormPower.TryModifyStarCost` each zero the stars
+    /// alongside the energy -- both hooks, or the card is half free.
+    ///
+    /// Shared so that the question "can this be played" and the act of paying for it cannot
+    /// price the card differently.
+    /// </remarks>
+    private static void ResolveCosts(
+        CombatState state,
+        CardInstance card,
+        CardDef def,
+        out int energyToSpend,
+        out int starsToSpend
+    )
+    {
+        energyToSpend = Math.Max(0, EffectiveCost(card, def, state));
+        starsToSpend = def.HasStarCostX ? state.Stars : Math.Max(0, def.StarCost);
+        if (Effects.RelicEffects.IsFreeUnderBrilliantScarf(state) || IsFreeUnderVoidForm(state))
+        {
+            starsToSpend = 0;
+        }
+    }
+
+    /// <summary>
+    /// `CardModel.CanPlay` for a card in hand -- every reason a play is refused, in ONE
+    /// predicate, shared by <see cref="ValidActions" />, <see cref="PlayCard" /> and
+    /// Whispering Earring.
+    /// </summary>
+    /// <remarks>
+    /// It is one predicate because it used to be two, and they disagreed in BOTH
+    /// directions. `ValidActions` omitted the star cost, Sloth, Bound and Ringing, so it
+    /// offered actions `PlayCard` then refused -- the agent spent a step and the state did
+    /// not move, which `StepResult.Invalid` cannot be told apart from a legal play that
+    /// happened to earn nothing. `PlayCard` omitted `IsPlayableNow`, so the native
+    /// `Sts2_Step` -- which takes any index, not just a listed one -- would play Grand
+    /// Finale on a full draw pile or Clash out of a mixed hand, neither of which the game
+    /// allows.
+    ///
+    /// Unifying them WIDENS what `ValidActions` hides and NARROWS what `PlayCard` accepts,
+    /// so the legal-action set changes. That is the point: both edits move it toward
+    /// `CanPlay`, which is the only definition the game has. See E487.
+    ///
+    /// ONE clause of `CanPlay` is deliberately not here: the NoLivingAllies refusal that
+    /// stops an ally-targeted card in a solo run. Every such card is `MultiplayerOnly` and
+    /// `CardFactory.FilterForPlayerCount` drops it from every pool, so no solo agent can
+    /// hold one -- while the suite constructs them on purpose to pin the card BODIES, the
+    /// convention Largesse's comment describes. Enforcing it here would delete that
+    /// affordance to fix nothing reachable. It lives instead on the one caller that can
+    /// actually pick a card the player did not: see <see cref="NeedsAnAllyToPlay" />.
+    /// </remarks>
+    internal static bool CanPlayFromHand(CombatState state, CardInstance card)
+    {
+        var def = GeneratedData.Cards.Get(card.DefId);
+        ResolveCosts(state, card, def, out int energyToSpend, out int starsToSpend);
+
+        return !def.Unplayable
+            && IsPlayableNow(state, def)
+            && energyToSpend <= state.Energy
+            && starsToSpend <= state.Stars
+            && !IsBlockedBySmoggy(def, state)
+            && !IsBlockedByEnthralled(card, state)
+            && !IsBlockedBySloth(state)
+            && !IsBlockedByBound(card, state)
+            && !IsBlockedByRinging(state)
+            && !Effects.RelicEffects.BlocksFurtherCardPlays(state);
+    }
+
     public static int[] ValidActions(CombatState state)
     {
         var actions = new List<int>();
@@ -2148,17 +2377,7 @@ public static class CombatEngine
 
         for (int i = 0; i < state.Hand.Count; i++)
         {
-            var def = GeneratedData.Cards.Get(state.Hand[i].DefId);
-            int effectiveCost = EffectiveCost(state.Hand[i], def, state);
-            int energyToSpend = Math.Max(0, effectiveCost);
-            if (
-                !def.Unplayable
-                && IsPlayableNow(state, def)
-                && energyToSpend <= state.Energy
-                && !IsBlockedBySmoggy(def, state)
-                && !IsBlockedByEnthralled(state.Hand[i], state)
-                && !Effects.RelicEffects.BlocksFurtherCardPlays(state)
-            )
+            if (CanPlayFromHand(state, state.Hand[i]))
             {
                 actions.Add(i);
             }
@@ -2546,11 +2765,19 @@ public static class CombatEngine
                 )
                 {
                     state.Hand.Add(
-                        new CardInstance(
-                            selection.GeneratedCandidates[index],
-                            selection.GeneratedUpgraded,
-                            FreeThisTurn: true
-                        )
+                        selection.GeneratedRetained
+                            ? new CardInstance(
+                                selection.GeneratedCandidates[index],
+                                selection.GeneratedUpgraded
+                            )
+                            {
+                                RetainForCombat = true,
+                            }
+                            : new CardInstance(
+                                selection.GeneratedCandidates[index],
+                                selection.GeneratedUpgraded,
+                                FreeThisTurn: true
+                            )
                     );
                 }
 
@@ -2812,6 +3039,23 @@ public static class CombatEngine
                 int possessed = BuffSystem.Get(state.Enemies[i].Buffs, BuffId.PossessStrength);
                 Effects.RelicEffects.GainPlayerStrength(state, possessed);
                 BuffSystem.Remove(state.Enemies[i].Buffs, BuffId.PossessStrength);
+            }
+
+            // `DampenPower.AfterDeath`: the power tracks the CASTERS that applied it and
+            // lifts once the last of them is gone -- and `AfterRemoved` is what gives the
+            // upgrades back. Read off the roster rather than a caster set, because the Magi
+            // Knight is the only source: no living Knight means no caster left.
+            if (
+                BuffSystem.Get(state.PlayerBuffs, BuffId.Dampen) > 0
+                && state.Enemies[i].DefId == KE.MagiKnight
+                && !state.Enemies.Any(other =>
+                    other.DefId == KE.MagiKnight
+                    && other.Hp > 0
+                    && !ReferenceEquals(other, state.Enemies[i])
+                )
+            )
+            {
+                Effects.CardEffects.RemoveDampen(state);
             }
 
             // The revive chain proper: at most one of these applies, and the ones that
@@ -3100,6 +3344,11 @@ public static class CombatEngine
             BuffSystem.Apply(other.Buffs, BuffId.Strength, Run.RunConstants.CrabRageStrength);
             // BlockVar(99, ValueProp.Unpowered): Dexterity does not touch it.
             other.Block += Run.RunConstants.CrabRageBlock;
+            // `PowerCmd.Remove(this)` -- the rage is spent on the partner it mourned. With
+            // exactly two crabs there is no third death to reach it, so this changes no
+            // reachable outcome; it is here so the power cannot fire twice if one ever
+            // joins them.
+            BuffSystem.Remove(other.Buffs, BuffId.CrabRage);
             enraged = true;
         }
 
@@ -3733,6 +3982,14 @@ public static class CombatEngine
             }
             QueueAttackPlayLifecycleEffects(state, card);
             BuffSystem.Remove(state.PlayerBuffs, BuffId.Vigor);
+            // `GigantificationPower.AfterAttack` clears its latch and DECREMENTS once the
+            // attack it tripled has finished -- one attack CARD per stack, however many
+            // hits that card threw. All three play paths, because the game's hook is on the
+            // ATTACK and does not care which of them produced it.
+            if (BuffSystem.Get(state.PlayerBuffs, BuffId.Gigantification) > 0)
+            {
+                BuffSystem.Apply(state.PlayerBuffs, BuffId.Gigantification, -1);
+            }
         }
         HandleEnemyDeaths(state, enemyHpsBefore, rng);
 
@@ -4086,6 +4343,165 @@ public static class CombatEngine
         }
     }
 
+    /// <summary>
+    /// `PlayerTurnPhase.AutoPrePlay`: everything that plays itself before the player is
+    /// allowed to act. Must run before the combat is OBSERVED, not merely before the first
+    /// action is applied.
+    /// </summary>
+    /// <remarks>
+    /// It used to run at the top of <see cref="Step" /> and nowhere else, which put it on
+    /// the wrong side of the observation. `ValidActions` is queried on the state as it
+    /// stands BEFORE `Step`, so the action the caller chose was chosen against a hand these
+    /// auto-plays were about to change -- and since the end-turn action is `Hand.Count`,
+    /// every index could shift underneath it. With Imbued that was one card; Whispering
+    /// Earring made it up to thirteen, which is what turned a latent wart into a real
+    /// defect. See E487.
+    ///
+    /// Idempotent, and deliberately so: the drain is a no-op on an empty queue and the
+    /// earring is latched, so an entry point that calls it and a `Step` that calls it again
+    /// cost nothing. That is what lets it be added at the entry points WITHOUT having to
+    /// prove every construction path was found.
+    /// </remarks>
+    internal static void ResolvePrePlayPhase(CombatState state, Random rng)
+    {
+        DrainAutoPlayQueue(state, rng);
+
+        // `WhisperingEarring.AfterAutoPrePlayPhaseEnteredLate` -- LATE, and the game's own
+        // remark says why: "we want this to trigger after all other triggers fire (i.e.
+        // Imbued)". The drain above IS Imbued, so the earring goes after it and the hand it
+        // walks is the one Imbued left behind.
+        RunWhisperingEarringAutoPlay(state, rng);
+    }
+
+    /// <summary>The game's `WhisperingEarring.maxCardsToPlay`.</summary>
+    private const int WhisperingEarringMaxCards = 13;
+
+    /// <summary>
+    /// `WhisperingEarring.AfterAutoPrePlayPhaseEnteredLate`: on turn ONE, the relic plays
+    /// up to thirteen cards for the player before they act.
+    /// </summary>
+    /// <remarks>
+    /// This was declared unmodelled for a reason that turned out to be wrong -- "an AI
+    /// standing in for the player", so approximating it would be worse than admitting the
+    /// gap. There is no AI. `pile.Cards.FirstOrDefault(c =&gt; c.CanPlay())` is the LEFTMOST
+    /// playable card, `GetTarget` gives the LEFTMOST hittable enemy, and the
+    /// `VakuuCardSelector` pushed for the duration answers every selection screen with
+    /// `options.Take(maxSelect)` -- the first ones. Three first-in-order rules, all
+    /// deterministic, all transcribable. See E486.
+    ///
+    /// The plays go through <see cref="PlayCard" /> because that is precisely what the
+    /// game does here: `SpendResources()` and then `CardCmd.AutoPlay(skipXCapture: true)`.
+    /// AutoPlay alone plays a card FOR FREE -- that is its documented purpose -- and the
+    /// explicit spend in front of it is what makes this an ordinary paid play rather than
+    /// an Imbued-style freebie. Routing it through the auto-play path instead would have
+    /// handed the player thirteen free cards.
+    /// </remarks>
+    internal static void RunWhisperingEarringAutoPlay(CombatState state, Random rng)
+    {
+        // `TurnNumber > 1` returns, and the game's TurnNumber is this counter PLUS ONE --
+        // so the only turn this fires on is the one where `Turn` is still zero.
+        if (
+            state.WhisperingEarringSpent
+            || state.Turn != 0
+            || !Effects.RelicEffects.Has(state.Relics, Effects.RelicEffects.WhisperingEarring)
+        )
+        {
+            return;
+        }
+
+        state.WhisperingEarringSpent = true;
+        int startTurn = state.Turn;
+
+        for (int played = 0; played < WhisperingEarringMaxCards; played++)
+        {
+            // `CombatManager.Instance.IsOverOrEnding`.
+            if (PlayerIsDead(state) || NoPrimaryEnemyLeft(state))
+            {
+                return;
+            }
+
+            // `PlayerCombatState.TurnNumber != startTurn`: a card that ended the turn under
+            // it -- Void Form's, which `PlayCard` resolves by calling EndTurn -- stops the
+            // loop rather than spilling thirteen plays across two turns.
+            if (state.Turn != startTurn)
+            {
+                return;
+            }
+
+            int index = state.Hand.FindIndex(card =>
+                CanPlayFromHand(state, card) && !NeedsAnAllyToPlay(card)
+            );
+            if (index < 0)
+            {
+                return;
+            }
+
+            var def = GeneratedData.Cards.Get(state.Hand[index].DefId);
+            // `GetTarget`: AnyEnemy takes `HittableEnemies.FirstOrDefault()`, the LEFTMOST,
+            // and it is GIVEN to AutoPlay rather than left null -- so the CombatTargets
+            // stream is NOT drawn from here. Rolling one would desync every later target.
+            int target = def.Target == CardTarget.AnyEnemy ? FirstHittableEnemy(state) : -1;
+            if (def.Target == CardTarget.AnyEnemy && target < 0)
+            {
+                // AutoPlay files an untargetable AnyEnemy card away without playing it.
+                // Nothing living is targetable, so no later card would fare better either.
+                return;
+            }
+
+            state.TargetEnemyIndex = target;
+            PlayCard(state, index, rng);
+
+            // What the play itself queued -- a Hellraiser, a Knife Trap's Shivs. `Step`
+            // drains this after the player's action; the earring's plays are actions too.
+            DrainAutoPlayQueue(state, rng);
+
+            // `CardSelectCmd.PushSelector(new VakuuCardSelector())` is held for the whole
+            // loop, and it answers with `options.Take(maxSelect)`. The emulator asks one
+            // pick at a time and reopens, so taking candidate ZERO until the screen closes
+            // is the same "first ones, in order" answer.
+            AnswerSelectionsAsVakuu(state, rng);
+        }
+    }
+
+    /// <summary>
+    /// `CanPlay` refuses an ally-targeted card on NoLivingAllies, and a solo run has no
+    /// living allies ever.
+    /// </summary>
+    /// <remarks>
+    /// Only the earring asks. The player cannot hold one of these -- they are all
+    /// `MultiplayerOnly` and filtered out of every pool -- but the earring picks FOR the
+    /// player out of whatever is in hand, so a test hand or a future generator that put one
+    /// there would otherwise have it auto-played, which the game would never do. See the
+    /// remarks on <see cref="CanPlayFromHand" /> for why it is not in the shared predicate.
+    /// </remarks>
+    private static bool NeedsAnAllyToPlay(CardInstance card) =>
+        GeneratedData.Cards.Get(card.DefId).Target == CardTarget.AnyAlly;
+
+    /// <summary>`ICombatState.HittableEnemies.FirstOrDefault()` as an index, or -1.</summary>
+    private static int FirstHittableEnemy(CombatState state) =>
+        state.Enemies.FindIndex(EnemyAI.IsTargetable);
+
+    /// <summary>
+    /// Drains any card-selection screen the way the game's `VakuuCardSelector` does:
+    /// always the first candidate, never the skip.
+    /// </summary>
+    private static void AnswerSelectionsAsVakuu(CombatState state, Random rng)
+    {
+        // A screen that reopens per pick (Purity, Survivor) needs one pass per pick, and
+        // the hand it draws from shrinks each time, so this terminates on its own. The
+        // bound is a backstop against a screen that refuses to close, not the mechanism.
+        int guard = WhisperingEarringMaxCards * 16;
+        while (guard-- > 0 && state.PendingSelection is { } selection)
+        {
+            if (selection.Candidates.Count == 0)
+            {
+                return;
+            }
+
+            ResolveCardSelection(state, 0, rng);
+        }
+    }
+
     private static void AutoPlay(CombatState state, CardInstance card, Random rng)
     {
         bool wasAutoPlaying = state.AutoPlaying;
@@ -4164,6 +4580,14 @@ public static class CombatEngine
         {
             QueueAttackPlayLifecycleEffects(state, card);
             BuffSystem.Remove(state.PlayerBuffs, BuffId.Vigor);
+            // `GigantificationPower.AfterAttack` clears its latch and DECREMENTS once the
+            // attack it tripled has finished -- one attack CARD per stack, however many
+            // hits that card threw. All three play paths, because the game's hook is on the
+            // ATTACK and does not care which of them produced it.
+            if (BuffSystem.Get(state.PlayerBuffs, BuffId.Gigantification) > 0)
+            {
+                BuffSystem.Apply(state.PlayerBuffs, BuffId.Gigantification, -1);
+            }
         }
 
         // Resolve status effects (Juggling, Rupture, etc. already handled in Apply or below).

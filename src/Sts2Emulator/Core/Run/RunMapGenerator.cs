@@ -443,8 +443,101 @@ public static class RunMapGenerator
         return true;
     }
 
+    /// <summary>
+    /// `GoldenPathActMap`'s fixed sequence, from row one up. The compass replaces the
+    /// act's whole map with this single column.
+    /// </summary>
+    /// <remarks>
+    /// SIXTEEN rooms, with the boss on row seventeen -- one row PAST the standard map's
+    /// <see cref="RunConstants.MapBossRow"/>. The golden path is a taller map, not a
+    /// re-typed one, which is why the boss row is read off the generated map rather than
+    /// assumed: see <c>BossRow</c>.
+    ///
+    /// `_defaultPointTypes` in the game drops index 2 in multiplayer; solo keeps all
+    /// sixteen.
+    /// </remarks>
+    private static readonly int[] GoldenPathRooms =
+    [
+        RunConstants.NodeNormal,
+        RunConstants.NodeNone, // Unknown -- resolved on arrival, and always an Event here.
+        RunConstants.NodeNormal,
+        RunConstants.NodeRest,
+        RunConstants.NodeNormal,
+        RunConstants.NodeRest,
+        RunConstants.NodeNone,
+        RunConstants.NodeRelic,
+        RunConstants.NodeNone,
+        RunConstants.NodeRelic,
+        RunConstants.NodeNone,
+        RunConstants.NodeShop,
+        RunConstants.NodeElite,
+        RunConstants.NodeRest,
+        RunConstants.NodeElite,
+        RunConstants.NodeRest,
+    ];
+
+    /// <summary>
+    /// The row this map puts its boss on. The standard map's is
+    /// <see cref="RunConstants.MapBossRow"/>; the golden path is one taller.
+    /// </summary>
+    /// <remarks>
+    /// Read off the generated nodes rather than computed, so it answers for whatever map
+    /// the run is actually standing on. The fallback is the constant, for a state whose
+    /// map has not been generated yet.
+    /// </remarks>
+    public static int BossRow(RunState state)
+    {
+        foreach (var node in state.MapNodes.Values)
+        {
+            if (node.NodeType == RunConstants.NodeBoss)
+            {
+                return node.Row;
+            }
+        }
+
+        return RunConstants.MapBossRow;
+    }
+
+    /// <summary>
+    /// `GoldenCompass.ModifyGeneratedMap` returns a <c>GoldenPathActMap</c> for the act the
+    /// compass was picked up in: one column, a fixed sequence, no choices at all.
+    /// </summary>
+    private static bool GenerateGoldenPath(RunState state)
+    {
+        if (
+            !state.Relics.Any(relic => relic.DefId == RunConstants.RelicGoldenCompass)
+            || state.GoldenPathAct != state.CurrentActIndex
+        )
+        {
+            return false;
+        }
+
+        state.MapNodes = [];
+        state.CurrentMapCoord = (RunConstants.MapStartCol, 0);
+        Array.Clear(state.MapOptionCoords);
+
+        int col = RunConstants.MapStartCol;
+        for (int row = 1; row <= GoldenPathRooms.Length; row++)
+        {
+            GetOrCreate(state, col, row).NodeType = GoldenPathRooms[row - 1];
+            AddEdge(state, (col, row - 1), (col, row));
+        }
+
+        int bossRow = GoldenPathRooms.Length + 1;
+        GetOrCreate(state, col, bossRow).NodeType = RunConstants.NodeBoss;
+        AddEdge(state, (col, GoldenPathRooms.Length), (col, bossRow));
+        GetOrCreate(state, col, 0).NodeType = RunConstants.NodeAncient;
+        RefreshMapOptions(state);
+        return true;
+    }
+
     public static void GenerateActMap(RunState state)
     {
+        if (GenerateGoldenPath(state))
+        {
+            return;
+        }
+
         state.MapNodes = [];
         state.CurrentMapCoord = (RunConstants.MapStartCol, 0);
         Array.Clear(state.MapOptionCoords);
@@ -522,7 +615,55 @@ public static class RunMapGenerator
         // to, so the emulator got away without the type entirely. Every act after opens
         // on the map with this node as the only thing to walk to.
         GetOrCreate(state, RunConstants.MapStartCol, 0).NodeType = RunConstants.NodeAncient;
+        MarkRoomsForFurCoat(state);
         RefreshMapOptions(state);
+    }
+
+    /// <summary>
+    /// `FurCoat.AddMarkedRooms`, called from both `AfterObtained` and
+    /// `ModifyGeneratedMapLate`: seven Monster-or-Elite points, shuffled off the relic's
+    /// OWN stream, marked for the act the coat was picked up in.
+    /// </summary>
+    /// <remarks>
+    /// The act check is the game's early return: a coat obtained in act one marks act one
+    /// and leaves every later map alone, which is why this is not simply "seven rooms per
+    /// act". Re-generating the SAME act re-marks it -- the game re-reads its saved
+    /// coordinates and only re-rolls when they no longer land on fights, which is the same
+    /// answer for a map generated from the same seed.
+    /// </remarks>
+    private static void MarkRoomsForFurCoat(RunState state)
+    {
+        state.FurCoatRooms.Clear();
+        if (
+            !state.Relics.Any(relic => relic.DefId == RunConstants.RelicFurCoat)
+            || state.FurCoatAct != state.CurrentActIndex
+        )
+        {
+            return;
+        }
+
+        var fights = state
+            .MapNodes.Values.Where(node =>
+                node.NodeType is RunConstants.NodeNormal or RunConstants.NodeElite
+            )
+            .OrderBy(node => node.Col)
+            .ThenBy(node => node.Row)
+            .ToList();
+
+        state.Rng.RelicRng("FurCoat").Shuffle(fights);
+        state.FurCoatRooms.AddRange(
+            fights.Take(RunConstants.FurCoatCombats).Select(node => (node.Col, node.Row))
+        );
+    }
+
+    /// <summary>
+    /// `FurCoat.AfterObtained`: the coat latches the act it arrived in and marks that act's
+    /// map straight away, rather than waiting for the next one to be generated.
+    /// </summary>
+    public static void MarkRoomsWhenFurCoatArrives(RunState state)
+    {
+        state.FurCoatAct = state.CurrentActIndex;
+        MarkRoomsForFurCoat(state);
     }
 
     private static void PruneAndRepair(RunState state, GameRng rng, int restCount, int unknownCount)

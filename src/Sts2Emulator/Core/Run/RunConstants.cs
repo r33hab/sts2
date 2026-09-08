@@ -74,7 +74,20 @@ public static class RunConstants
     public const int ShopSlotSize = 2;
 
     public const int ShopObsOffset = RelicObsOffset + MaxObservedRelics * RelicSlotSize;
-    public const int RunExtraObsSize = ShopObsOffset + ShopSlots * ShopSlotSize;
+
+    /// <summary>
+    /// Lasting Candy's FOURTH card-reward option: its id, then whether it is upgraded.
+    /// </summary>
+    /// <remarks>
+    /// APPENDED, at the very end of the run's observation, rather than sat beside the
+    /// other three at `RunScalarObsSize + 9`. Putting it there would shift the deck, the
+    /// relics and the shop along by one and renumber the whole observation for every
+    /// trained policy -- the same rule the `Enchantment` enum learned the hard way. On the
+    /// end it costs two slots and moves nothing.
+    /// </remarks>
+    public const int FourthRewardObsOffset = ShopObsOffset + ShopSlots * ShopSlotSize;
+
+    public const int RunExtraObsSize = FourthRewardObsOffset + 2;
     public const int RunObsSize = CombatObsSize + RunExtraObsSize;
     public const int RunInfoSize = 11;
 
@@ -169,6 +182,60 @@ public static class RunConstants
     /// own leave. The gap at three is why the rest options run 0, 1, 2, 4, 5.
     /// </remarks>
     public const int RestHatchAction = 6;
+
+    /// <summary>
+    /// `MeatCleaver.TryModifyRestSiteOptions` adds `CookRestSiteOption`: remove TWO cards
+    /// and gain 9 max HP. Its `IsEnabled` wants two REMOVABLE cards in the deck, so a deck
+    /// of Eternals leaves the option on the screen greyed out rather than absent.
+    /// </summary>
+    /// <summary>
+    /// `PaelsWing.TryModifyCardRewardAlternatives` adds a "SACRIFICE" alternative to the
+    /// card reward: take no card, and every SECOND sacrifice pulls a relic from the front
+    /// of the grab bag. `PostAlternateCardRewardAction.EndSelectionAndCompleteReward`, so
+    /// it finishes the screen exactly as claiming a card does.
+    /// </summary>
+    /// <remarks>
+    /// Four, because the card reward's own actions are the three cards and the skip at
+    /// three -- the first id the screen does not already use.
+    /// </remarks>
+    public const int RewardSacrificeAction = 4;
+
+    /// <summary>The game's `CardReward.OptionCount`: three cards roll onto the screen.</summary>
+    /// <remarks>
+    /// The array behind them is FOUR wide, because Lasting Candy adds an option rather than
+    /// replacing one. This constant is the roll count and the action count for the ordinary
+    /// three; the fourth is claimed by `RewardFourthCardAction` and is not part of the loop
+    /// that fills the screen.
+    /// </remarks>
+    public const int CardRewardOptionCount = 3;
+
+    /// <summary>
+    /// `LastingCandy.TryModifyCardRewardOptions` adds a fourth option -- a POWER -- to the
+    /// card reward of every second combat.
+    /// </summary>
+    /// <remarks>
+    /// FIVE, not three. The screen's own actions are the three cards, the skip at three and
+    /// Pael's Wing's sacrifice at four, so three is taken and taking it would turn every
+    /// existing skip into a claim. Appending keeps every action id the run already had.
+    /// This is why the relic was declared unmodelled for so long: the assumption was that a
+    /// fourth card meant renumbering the screen, and it does not. See E493.
+    /// </remarks>
+    public const int RewardFourthCardAction = 5;
+
+    /// <summary>
+    /// `Driftwood.TryModifyRewardsLate` sets `CanReroll` on every card reward: the three
+    /// options are thrown away and three more rolled, ONCE per screen.
+    /// </summary>
+    public const int RewardRerollAction = 6;
+
+    public const int RestCookAction = 7;
+
+    /// <summary>
+    /// `PumpkinCandle.TryModifyRestSiteOptions` adds `KindleRestSiteOption`, whose whole
+    /// body is `Rekindle()` -- KindleCount += 5. Offered whenever the relic is held, with
+    /// no cap, so a run can keep the candle burning indefinitely by never sleeping.
+    /// </summary>
+    public const int RestKindleAction = 8;
     public const int ShopRemoveAction = 13;
     public const int ShopSkipAction = 14;
     public const int EventSkipAction = 3;
@@ -531,6 +598,67 @@ public static class RunConstants
 
     // The ancients' blessings that DO something when taken.
     public const int RelicElectricShrymp = 71;
+    public const int RelicBeautifulBracelet = 12;
+    public const int RelicClaws = 50;
+    public const int RelicDistinguishedCape = 62;
+    public const int RelicPreservedFog = 207;
+    public const int RelicMeatCleaver = 148;
+    public const int RelicPumpkinCandle = 209;
+    public const int RelicSereTalon = 235;
+
+    /// <summary>Toy Box's `DynamicVar("Relics", 4m)`: four wax relics on the screen.</summary>
+    public const int ToyBoxRelics = 4;
+
+    /// <summary>Toy Box's `DynamicVar("Combats", 3m)`: one melts every third fight.</summary>
+    public const int ToyBoxCombats = 3;
+
+    /// <summary>Pael's Wing's `DynamicVar("Sacrifices", 2m)`: a relic every second one.</summary>
+    public const int PaelsWingSacrifices = 2;
+
+    public const int RelicFurCoat = 95;
+    public const int RelicGoldenCompass = 104;
+
+    /// <summary>Fur Coat's `DynamicVar("Combats", 7m)`: seven rooms marked.</summary>
+    public const int FurCoatCombats = 7;
+
+    public const int RelicPaelsWing = 184;
+    public const int RelicToyBox = 271;
+    public const int RelicLordsParasol = 139;
+    public const int RelicMassiveScroll = 145;
+    public const int RelicArchaicTooth = 6;
+    public const int RelicTouchOfOrobas = 268;
+    public const int RelicTriBoomerang = 272;
+
+    /// <summary>
+    /// `ArchaicTooth.TranscendenceUpgrades`: the five starter cards that have a
+    /// transcendent form, and what each becomes. The relic transforms the FIRST card in
+    /// the deck that is a key here -- Bash, for an Ironclad run.
+    /// </summary>
+    public static readonly (int Starter, int Ancient)[] TranscendenceUpgrades =
+    [
+        (30, 59), // Bash -> Break
+        (323, 482), // Neutralize -> Suppress
+        (524, 368), // Unleash -> Protector
+        (179, 304), // FallingStar -> MeteorShower
+        (156, 375), // Dualcast -> Quadcast
+    ];
+
+    /// <summary>
+    /// `TouchOfOrobas.RefinementUpgrades`: each character's starter relic and its refined
+    /// form. A starter not in this table becomes a Circlet, which is the game's fallback
+    /// rather than a failure.
+    /// </summary>
+    public static readonly (int Starter, int Upgraded)[] RefinementUpgrades =
+    [
+        (36, 19), // BurningBlood -> BlackBlood
+        (221, 220), // RingOfTheSnake -> RingOfTheDrake
+        (64, 63), // DivineRight -> DivineDestiny
+        (30, 197), // BoundPhylactery -> PhylacteryUnbound
+        (52, 116), // CrackedCore -> InfusedCore
+    ];
+
+    /// <summary>`ModelDb.Relic&lt;Circlet&gt;()`, Touch of Orobas's fallback.</summary>
+    public const int RelicCirclet = 49;
     public const int RelicGlassEye = 101;
     public const int RelicSandCastle = 229;
     public const int RelicAlchemicalCoffer = 2;

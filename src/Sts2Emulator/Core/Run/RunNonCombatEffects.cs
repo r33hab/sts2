@@ -495,6 +495,33 @@ public static class RunNonCombatEffects
             case RunConstants.RelicOldCoin:
                 GainGold(state, 300);
                 break;
+            case RunConstants.RelicGoldenCompass:
+                // `AfterObtained` latches the act and then calls `GenerateMap()` outright:
+                // the map the run is standing on is REPLACED, not the next one.
+                state.GoldenPathAct = state.CurrentActIndex;
+                RunMapGenerator.GenerateActMap(state);
+                break;
+
+            case RunConstants.RelicFurCoat:
+                // `AfterObtained` latches the CURRENT act and marks its map at once. Seven
+                // fights in this act only -- the coat does not follow the run upstairs.
+                RunMapGenerator.MarkRoomsWhenFurCoatArrives(state);
+                break;
+
+            case RunConstants.RelicToyBox:
+                // FOUR relics off the FRONT of the grab bag, offered on a screen the way
+                // Small Capsule's one is. Each is marked WAX, and every third combat melts
+                // one -- so this is four relics on loan, not four relics.
+                state.PendingBonusRelicRewards.Clear();
+                for (int i = 0; i < RunConstants.ToyBoxRelics; i++)
+                {
+                    int wax = RunRewardGenerator.NextRelic(state);
+                    state.PendingBonusRelicRewards.Add(wax);
+                    state.WaxRelics.Add(wax);
+                }
+
+                RunRewardGenerator.OfferNextBonusRelic(state);
+                return RunFollowUp.BonusRelicRewards;
             case RunConstants.RelicSmallCapsule:
                 // RewardsCmd.OfferCustom with a single RelicReward: the relic goes on a
                 // SCREEN the player claims from, not straight into the run. Granting it
@@ -640,6 +667,162 @@ public static class RunNonCombatEffects
                     card => IsBasicStrike(card)
                 );
                 break;
+            case RunConstants.RelicArchaicTooth:
+            {
+                // `GetTranscendenceStarterCard` is `Deck.Cards.FirstOrDefault(...)` -- the
+                // FIRST match in deck order, not a choice and not a roll. The transform
+                // carries nothing across: `CardCmd.Transform(starter, transformed)` builds
+                // the new card fresh.
+                int index = state.Deck.FindIndex(card =>
+                    RunConstants.TranscendenceUpgrades.Any(pair => pair.Starter == card.DefId)
+                );
+                if (index >= 0)
+                {
+                    int ancient = RunConstants
+                        .TranscendenceUpgrades.First(pair =>
+                            pair.Starter == state.Deck[index].DefId
+                        )
+                        .Ancient;
+                    state.Deck[index] = new CardInstance(ancient, Upgraded: false);
+                }
+
+                break;
+            }
+
+            case RunConstants.RelicTouchOfOrobas:
+            {
+                // `RelicCmd.Replace(starter, refined)` -- the starter relic is GONE, not
+                // kept alongside. A starter with no entry in the table becomes a Circlet,
+                // which is the game's fallback rather than a no-op.
+                // `GetStarterRelic` is `Relics.FirstOrDefault(r => r.Rarity == Starter)`,
+                // so it finds the relic by RARITY rather than by table membership -- which
+                // is what makes the Circlet fallback reachable at all.
+                int index = state.Relics.FindIndex(relic =>
+                    GeneratedData.Relics.Get(relic.DefId).Rarity == RelicRarity.Starter
+                );
+                if (index >= 0)
+                {
+                    int starter = state.Relics[index].DefId;
+                    var match = RunConstants.RefinementUpgrades.FirstOrDefault(pair =>
+                        pair.Starter == starter
+                    );
+                    state.Relics[index] = new RelicInstance(
+                        match.Starter == starter ? match.Upgraded : RunConstants.RelicCirclet
+                    );
+                }
+
+                break;
+            }
+
+            case RunConstants.RelicTriBoomerang:
+                // `FromDeckForEnchantment` with Instinct at 1, on three cards. Instinct
+                // takes Attacks only, so a deck of nothing but Skills is offered nothing.
+                return BeginDeckSelection(
+                    state,
+                    DeckSelection.Enchant,
+                    (int)Enchantment.Instinct,
+                    count: 3,
+                    enchantAmount: 1
+                )
+                    ? RunFollowUp.TransformSelect
+                    : RunFollowUp.None;
+
+            case RunConstants.RelicSereTalon:
+            {
+                // TWO curses off `Rng.Niche`, drawn WITHOUT replacement -- the game removes
+                // each pick from its own list -- and then THREE Wishes. The curse list is
+                // ordered by Id, which `RollGeneratableCurse` matches, but the removal is
+                // the reason this cannot just call it twice.
+                var curses = GeneratedData
+                    .CardPools.Curse.ToArray()
+                    .Where(id => GeneratedData.Cards.Get(id).CanBeGeneratedByModifiers)
+                    .OrderBy(id => GeneratedData.Cards.Get(id).Entry, StringComparer.Ordinal)
+                    .ToList();
+                for (int i = 0; i < 2 && curses.Count > 0; i++)
+                {
+                    int curse = state.Rng.Niche.NextItem(curses);
+                    curses.Remove(curse);
+                    AddCardToDeck(state, new CardInstance(curse, Upgraded: false));
+                }
+
+                for (int i = 0; i < 3; i++)
+                {
+                    AddCardToDeck(state, new CardInstance(541, Upgraded: false));
+                }
+
+                break;
+            }
+
+            case RunConstants.RelicPumpkinCandle:
+                // `AfterObtained` is `Rekindle()`, which is `KindleCount += 5`. The count
+                // rides the relic's Counter because it is RUN state -- it survives the
+                // fight that spends it.
+                {
+                    int index = state.Relics.FindIndex(relic =>
+                        relic.DefId == RunConstants.RelicPumpkinCandle
+                    );
+                    if (index >= 0)
+                    {
+                        state.Relics[index] = state.Relics[index] with
+                        {
+                            Counter = state.Relics[index].Counter + 5,
+                        };
+                    }
+                }
+
+                break;
+
+            case RunConstants.RelicDistinguishedCape:
+                // `LoseMaxHp(9)` and then THREE Apparitions into the deck. No selection --
+                // it takes the HP and hands over the cards, which is why it is the only one
+                // of this batch that resolves in place.
+                state.PlayerMaxHp = Math.Max(1, state.PlayerMaxHp - 9);
+                state.PlayerHp = Math.Min(state.PlayerHp, state.PlayerMaxHp);
+                for (int i = 0; i < 3; i++)
+                {
+                    AddCardToDeck(state, new CardInstance(17, Upgraded: false));
+                }
+
+                break;
+
+            case RunConstants.RelicPreservedFog:
+                // `FromDeckForRemoval` for THREE, and then a Folly whatever was removed.
+                // The curse rides the follow-up rather than being added here, so it arrives
+                // after the removals the way the game orders it.
+                return BeginDeckSelection(
+                    state,
+                    DeckSelection.Remove,
+                    0,
+                    count: 3,
+                    followUpCard: 10028,
+                    followUpCount: 1
+                )
+                    ? RunFollowUp.TransformSelect
+                    : RunFollowUp.None;
+
+            case RunConstants.RelicBeautifulBracelet:
+                // `FromDeckForEnchantment` with Swift at THREE, on three cards. Swift only
+                // takes Powers, so a deck with none is offered nothing -- the count is what
+                // the screen asks for, not what it is guaranteed to get.
+                return BeginDeckSelection(
+                    state,
+                    DeckSelection.Enchant,
+                    (int)Enchantment.Swift,
+                    count: 3,
+                    enchantAmount: 3
+                )
+                    ? RunFollowUp.TransformSelect
+                    : RunFollowUp.None;
+
+            case RunConstants.RelicClaws:
+                // `FromDeckForTransformation` into Maul, SIX cards. The game preserves the
+                // original's upgrade on the Maul when the Maul is upgradable; the emulator's
+                // TransformTo does not carry that across yet, which is the one thing this
+                // arm approximates.
+                return BeginDeckSelection(state, DeckSelection.TransformToCarrying, 299, count: 6)
+                    ? RunFollowUp.TransformSelect
+                    : RunFollowUp.None;
+
             case RunConstants.RelicElectricShrymp:
                 // FromDeckForEnchantment with Imbued: ONE card the player picks, and
                 // Imbued takes skills only, so a deck with no skill left is offered
@@ -985,6 +1168,82 @@ public static class RunNonCombatEffects
         state.PendingNeowsBonesCurse = false;
         AddCardToDeck(state, new CardInstance(RollGeneratableCurse(state), Upgraded: false));
     }
+
+    /// <summary>
+    /// `ToyBox.AfterCombatEnd`: count the fight, and on every third one melt the first wax
+    /// relic still held. `RelicCmd.Melt` takes it away -- the box lends four relics for
+    /// twelve fights, it does not give four.
+    /// </summary>
+    public static void MeltAToyBoxRelic(RunState state)
+    {
+        int box = state.Relics.FindIndex(relic => relic.DefId == RunConstants.RelicToyBox);
+        if (box < 0)
+        {
+            return;
+        }
+
+        int seen = state.Relics[box].Counter + 1;
+        state.Relics[box] = state.Relics[box] with { Counter = seen };
+        if (seen % RunConstants.ToyBoxCombats != 0)
+        {
+            return;
+        }
+
+        // `FirstOrDefault(r => r.IsWax && !r.IsMelted)` -- the first still HELD, which is
+        // why a wax relic the player never claimed is skipped rather than counted.
+        int melting = state.WaxRelics.FindIndex(id => state.Relics.Any(relic => relic.DefId == id));
+        if (melting >= 0)
+        {
+            int relicId = state.WaxRelics[melting];
+            state.WaxRelics.RemoveAt(melting);
+            state.Relics.RemoveAll(relic => relic.DefId == relicId);
+        }
+    }
+
+    /// <summary>
+    /// `PaelsWing.OnSacrifice`: the card reward is given up instead of claimed, and every
+    /// SECOND sacrifice pulls a relic from the FRONT of the grab bag -- the same end an
+    /// elite reward and Shovel's dig pull from.
+    /// </summary>
+    public static void SacrificeACardReward(RunState state)
+    {
+        int index = state.Relics.FindIndex(relic => relic.DefId == RunConstants.RelicPaelsWing);
+        if (index < 0)
+        {
+            return;
+        }
+
+        int sacrificed = state.Relics[index].Counter + 1;
+        state.Relics[index] = state.Relics[index] with { Counter = sacrificed };
+        if (sacrificed % RunConstants.PaelsWingSacrifices == 0)
+        {
+            ApplyRelicPickup(state, RunRewardGenerator.NextRelic(state));
+        }
+    }
+
+    /// <summary>
+    /// `PumpkinCandle.AfterCombatEnd`: <c>KindleCount = Math.Max(KindleCount - 1, 0)</c>.
+    /// Fires whether or not the fight was won, so it sits with the other unconditional
+    /// end-of-combat work rather than behind the victory check.
+    /// </summary>
+    public static void BurnPumpkinCandle(RunState state)
+    {
+        int index = state.Relics.FindIndex(relic => relic.DefId == RunConstants.RelicPumpkinCandle);
+        if (index >= 0)
+        {
+            state.Relics[index] = state.Relics[index] with
+            {
+                Counter = Math.Max(state.Relics[index].Counter - 1, 0),
+            };
+        }
+    }
+
+    /// <summary>
+    /// `CookRestSiteOption.IsEnabled`: two REMOVABLE cards in the deck. Removability is
+    /// `!Keywords.Contains(Eternal)`, the same rule a plain removal screen uses.
+    /// </summary>
+    public static bool CanCook(RunState state) =>
+        state.Deck.Count(card => !GeneratedData.Cards.Get(card.DefId).Eternal) >= 2;
 
     private static int StartingRelicCounter(int relicId)
     {
@@ -1367,6 +1626,7 @@ public static class RunNonCombatEffects
         int followUpCard = 0,
         int followUpCount = 0,
         int followUpHpLoss = 0,
+        int followUpMaxHpGain = 0,
         string? eventEntry = null,
         int enchantAmount = 0,
         SelectionReturn returnTo = SelectionReturn.EventResult
@@ -1379,6 +1639,7 @@ public static class RunNonCombatEffects
         state.PendingSelectionFollowUpCard = followUpCard;
         state.PendingSelectionFollowUpCount = followUpCount;
         state.PendingSelectionFollowUpHpLoss = followUpHpLoss;
+        state.PendingSelectionFollowUpMaxHpGain = followUpMaxHpGain;
         state.PendingSelectionEnchantAmount = enchantAmount;
         state.PendingSelectionReturn = returnTo;
         if (!Enumerable.Range(0, state.Deck.Count).Any(i => CanSelectCard(state, i)))
@@ -1399,6 +1660,7 @@ public static class RunNonCombatEffects
         state.PendingSelectionFollowUpCard = 0;
         state.PendingSelectionFollowUpCount = 0;
         state.PendingSelectionFollowUpHpLoss = 0;
+        state.PendingSelectionFollowUpMaxHpGain = 0;
         state.PendingSelectionEnchantAmount = 0;
         state.PendingSelectionReturn = SelectionReturn.EventResult;
         state.PendingSelectionReturnsToEvent = false;
@@ -1419,6 +1681,17 @@ public static class RunNonCombatEffects
         }
 
         state.PlayerHp = Math.Max(0, state.PlayerHp - state.PendingSelectionFollowUpHpLoss);
+
+        // `CreatureCmd.GainMaxHp` HEALS by the same amount it raises the maximum, which is
+        // why the cook is worth taking at full HP as well as hurt.
+        if (state.PendingSelectionFollowUpMaxHpGain > 0)
+        {
+            state.PlayerMaxHp += state.PendingSelectionFollowUpMaxHpGain;
+            state.PlayerHp = Math.Min(
+                state.PlayerMaxHp,
+                state.PlayerHp + state.PendingSelectionFollowUpMaxHpGain
+            );
+        }
     }
 
     /// <summary>Whether the pending selection would take the card at this deck index.</summary>
@@ -1440,6 +1713,8 @@ public static class RunNonCombatEffects
             // -- Wood Carvings carves a Basic card into a Peck or a Toric Toughness.
             DeckSelection.TransformTo => GeneratedData.Cards.Get(card.DefId).Rarity
                 == CardRarity.Basic,
+            // Claws passes no predicate, so every transformable card is on the table.
+            DeckSelection.TransformToCarrying => true,
             DeckSelection.Upgrade => RunConstants.IsRunCardUpgradable(card),
             // Dolly's Mirror excludes only Quest cards; a curse is a legal copy.
             DeckSelection.Duplicate => GeneratedData.Cards.Get(card.DefId).Type != CardType.Quest,
@@ -1509,6 +1784,33 @@ public static class RunNonCombatEffects
                     Upgraded: false
                 );
                 break;
+            case DeckSelection.TransformToCarrying:
+            {
+                // `CreateMaulFromOriginal`: the upgrade rides across when the NEW card is
+                // upgradable, and the enchantment when it can take on the new card. Both
+                // are the new card's own rules, not the old one's -- transforming an
+                // upgraded Strike into something unupgradable loses the upgrade.
+                var made = new CardInstance(state.PendingSelectionArg, Upgraded: false);
+                if (card.Upgraded && RunConstants.IsRunCardUpgradable(made))
+                {
+                    made = made with { Upgraded = true };
+                }
+
+                if (
+                    card.Enchantment != Enchantment.None
+                    && Enchantments.CanEnchant(made, card.Enchantment)
+                )
+                {
+                    made = made with
+                    {
+                        Enchantment = card.Enchantment,
+                        EnchantAmount = card.EnchantAmount,
+                    };
+                }
+
+                state.Deck[deckIndex] = made;
+                break;
+            }
             case DeckSelection.Upgrade:
                 state.Deck[deckIndex] = card with { Upgraded = true };
                 break;

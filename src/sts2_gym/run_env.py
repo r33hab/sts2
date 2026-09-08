@@ -353,7 +353,11 @@ class Sts2RunEnv(gym.Env):
             "gold": int(info_buf[4]),
             "player_hp": int(info_buf[5]),
             "player_max_hp": int(info_buf[6]),
-            "potions": native.run_state_list(self._run_handle, 2, 3),
+            # The belt's full CAPACITY, not three. `RunConstants.PotionSlotCapacity` is 6
+            # and Potion Belt alone takes a run from two slots to four, so asking for three
+            # silently truncated the fourth -- the potion was added correctly and then
+            # dropped on the way out. See E492.
+            "potions": native.run_state_list(self._run_handle, 2, 6),
             "relics": native.run_state_list(self._run_handle, 1, 64),
             "current_node_type": int(info_buf[8]),
             "card_rewards": tuple(int(obs[run_offset + 9 + i]) for i in range(3)),

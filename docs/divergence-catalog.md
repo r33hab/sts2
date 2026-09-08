@@ -2331,3 +2331,663 @@ That matters for exactly one consumer -- a determinization needs to know how muc
 to leave alone -- and the length of that known prefix moves as the game goes: two Headbutts
 make it two, a draw shortens it by one, a reshuffle erases it. `TopDeck` is right about where
 the card goes and silent about what the player knows, which is all it ever needed to be.
+
+### E476 -- the Kin Followers were not marked as minions
+
+`KinFollower.AfterAddedToRoom` applies `MinionPower(1)`, and the emulator's factory applied
+none. Every other minion in the game already had the marker; this one was simply missed.
+
+It is not cosmetic. `MinionPower.ShouldOwnerDeathTriggerFatal` answers false, and Feed, Hand
+of Greed and The Hunt all gate their payout on it -- so killing a Kin Follower was paying a
+fatal bonus the game does not pay. The Kin is a three-creature fight in which only the PRIEST
+is worth a Feed, and the emulator made all three worth one.
+
+Found by the overgrowth sweep: every other section matched -- HP, intents, piles, roster,
+deck order -- and the enemy-powers line read
+`emu [[STRENGTH_POWER 2], [], []] vs live [[MINION_POWER 1, STRENGTH_POWER 2], [MINION_POWER 1], []]`.
+
+### E477 -- the Axe Raider swung without blocking
+
+`AxeRubyRaider.SwingMove` deals `SwingDamage` and then gains `SwingBlock`; both SWING states
+carry a `DefendIntent` beside their attack. `BIG_SWING` carries none. The emulator executed
+the attack and granted nothing, so the live game showed 5 block from turn two onward against
+the emulator's 0 -- and the two never reconciled, because the raider re-earns it every swing.
+
+The two swings are told apart by DAMAGE, which is the same discriminator the Slithering
+Strangler's Thwack already uses: Swing is the smaller number, Big Swing the larger.
+
+### E478 -- a branch with nothing eligible took the wrong move AND skipped a draw
+
+`RandomBranchState.GetNextState` sums its branch weights, rolls `rng.NextFloat(total)`, and
+walks the list subtracting. When EVERY branch is blocked the total is zero -- and two things
+follow that the emulator got wrong.
+
+`Rng.NextFloat` is `Counter++` and then the draw, unconditionally: a roll over a total of
+zero still SPENDS one. And the walk then subtracts zero and returns on the first entry, so
+the game takes the FIRST DECLARED branch.
+
+The emulator returned the LAST branch and spent NOTHING. Two defects in one line: the wrong
+move, and a MonsterAi stream one draw behind the game for the rest of the fight.
+
+The Flyconid is where it surfaced -- its three moves can all be blocked at once, SMASH by
+`CannotRepeat` and the two spore moves by cooldowns of two and three. Any turn with at least
+one eligible branch hides it completely, because the roll lands somewhere valid either way,
+which is why it took seven turns to appear. The sweep named the cause outright:
+`turn 7 rng drift (emu vs live): MonsterAi 6/7`.
+
+Three fallbacks were wrong the same way and all three are fixed: `PickWeightedBranch`'s
+zero-total case, the Flyconid's own `eligible.Count > 0 ? ... : smash`, and the
+`PickBranch(enemy, ...)` overload, which fell back to ALL branches -- the right draw count
+but a uniform answer where the game always takes the first.
+
+**This was systemic, not a Flyconid bug.** Any enemy able to block all of its branches was
+affected, and because the miss is a DRAW rather than a value, the desync compounds for the
+remainder of the fight.
+
+### E479 -- the Matriarch's Plating never thinned
+
+`PlatingPower.AfterSideTurnStart` decrements for its owner whatever else is true of it, and
+`AsleepPower` says nothing about the decay -- only that the Plating comes off on the LAST
+sleeping turn and the instant she is struck. The emulator excluded the Lagavulin Matriarch
+from the decay by def id.
+
+That clause carried no reason, which is unusual for this file: every guard around it explains
+itself, and `git log -S` puts this one in the initial commit with no rationale anywhere. The
+underdocks sweep settled it -- at the third turn the live game holds `PLATING_POWER 11` and
+block 11 where the emulator held 12 and 12, having never decayed once.
+
+The `state.Turn > 0` half of the guard is real and stays: `AfterSideTurnStart` skips round one
+for enemies, so a plated enemy ends its FIRST turn on the full amount.
+
+### E480 -- Smoggy was wiped before the player could ever pay it
+
+`SmoggyPower.AfterSideTurnEnd` clears the SMOG AFFLICTION off the cards. It does not remove
+the power -- `SmoggyPower` has no self-removal at all and stands for the rest of the fight.
+
+The emulator removed the POWER, and did it at the START of the player's turn: immediately
+after the enemy phase that applied it. So the Living Fog's ADVANCED_GAS landed a Smoggy that
+evaporated before a single card could be played under it, and the debuff cost nothing ever.
+
+`SkillPlayedWhileSmoggy` is the emulator's model of the affliction -- one Skill a turn -- and
+clearing THAT at the boundary is the faithful half, which it already did. Only the power's
+removal was wrong.
+
+### E481 -- the Fat Gremlin announced a buff instead of fleeing
+
+`FatGremlin`'s machine is SPAWNED_MOVE with a `StunIntent`, then FLEE_MOVE with an
+`EscapeIntent` looping on itself forever. Neither is a buff. The emulator announced the flee
+as `Buff 0`; the live readout is an escape with no magnitude, which the sweep sees as
+`(4, None)`.
+
+The escape BEHAVIOUR was already right -- it just lived inside `ApplyBuffIntent`, which is
+why it had to be announced as a buff to fire at all. Moved beside the Thieving Hopper's
+escape, which is the same thing done the same way, and announced as Unknown: the emulator has
+no Escape in its intent enum and Unknown is what the game's readout reduces to.
+
+A test had encoded the old announcement in a comment -- "the escape, which the intent table
+reports as a Buff" -- describing the EMULATOR rather than the game. The same trap as the
+Aggression test in the powers work, and the same fix: rewrite the test against the source.
+
+### E482 -- the Ceremonial Beast's second loop did not exist, and could not have been reached
+
+The Beast has TWO move loops with a stun as the door between them:
+
+    STAMP -> PLOW -> PLOW -> PLOW ...          (PLOW_MOVE follows ITSELF)
+    STUN  -> BEAST_CRY -> STOMP -> CRUSH -> BEAST_CRY ...
+
+Nothing in the declared FollowUps ever crosses from the first to the second. The only way in
+is `PlowPower` firing, which stuns the Beast onto STUN_MOVE and points it at BEAST_CRY.
+
+Two things were wrong and each hid the other.
+
+**The threshold was never real.** `StampMove` applies `PlowPower` at `PlowAmount` -- 150, or
+160 against DeadlyEnemies -- which is an HP THRESHOLD near the Beast's full 262, so it stuns
+soon after it is wounded. The emulator passed the INTENT's magnitude, and a `BuffIntent`
+carries none, so the threshold was zero and the power could never fire. While `BuffId.Plow`
+was read by nothing the wrong amount cost nothing; wiring the trigger is what made it matter.
+
+**The second loop was not modelled at all**, so a stunned Beast simply went on plowing.
+
+Fixing only the threshold would have been WORSE than leaving it: the Beast would stun
+correctly and then have no valid move to make. It was complete-it-or-revert-it.
+
+Now modelled: the cry loop's intents (BEAST_CRY as a DebuffIntent, StompDamage 15/17,
+CrushDamage 17/19), CRUSH's paired `CrushStrength`, and `RingingPower`, which BEAST_CRY
+applies -- while it stands a card is refused once ANY card has been played that turn, so the
+cry costs the player everything after their first.
+
+**Two follow-on defects this introduced, both caught by the sweep:**
+
+`PlowStrength` is 2 and a pre-existing handler granted it on any `MoveIndex > 0`. Correct for
+the PLOW loop, wrong the moment a second loop existed -- STOMP takes nothing and CRUSH takes
+`CrushStrength`, and both were collecting a Plow's worth. Now scoped to the first loop.
+
+Ringing's removal was put on the ENEMY's side turn end. `AfterSideTurnEnd` asks
+`participants.Contains(base.Owner)` and the owner is the creature CARRYING the power -- the
+player -- so it belongs on the PLAYER's turn end. On the enemy's it was wiped before the
+player ever had a turn under it. **This is E480's mistake repeated within the same session**:
+the same hook read against the wrong side, on a power applied to the player by an enemy.
+
+Only reachable past turn TWELVE. Every six-turn sweep of this encounter was clean; the
+twelve-turn run failed on all three seeds at once.
+
+### E483 -- the Punch Construct's opening move was a coin flip
+
+`PunchConstruct.StartsWithFastPunch` decides which state the machine starts in: FAST_PUNCH
+when true, READY_MOVE -- a `DefendIntent` for 10 block -- when false. It is set in exactly
+ONE place in the whole game, `PunchOffEventEncounter`, and defaults false everywhere else.
+
+The emulator rolled for it:
+
+    CreatePunchConstruct(rng, startsWithFastPunch: rng.Next(2) == 0)
+
+So an ordinary Punch Construct opened on a 10-damage Fast Punch about half the time, landing
+a Frail the game never applied, where the live capture opens on Defend. It also spent an RNG
+draw the game does not.
+
+**This is why the sweep runs several seeds.** The flip agreed half the time, so it failed on
+ONE seed in three -- a single-seed run had even odds of never seeing it at all. The Punch Off
+event encounter was already passing `true` correctly; only the plain encounter was guessing.
+
+### E484 -- Thorns bypassed block
+
+`ThornsPower.BeforeDamageReceived` is `CreatureCmd.Damage(dealer, Amount, Unpowered |
+SkipHurtAnim)` -- real DAMAGE, which BLOCK ABSORBS. The emulator took it straight off HP:
+
+    state.PlayerHp = Math.Max(0, state.PlayerHp - CapIncomingDamage(thorns, ...));
+
+The underdocks sweep found it as a ONE point gap on a single Toadpole capture. The player was
+holding 1 block: the game let it eat 1 of the 2 Thorns and the emulator charged both to HP.
+
+**The lesson was already written in this codebase**, beside Constrict:
+
+> Both of these deal DAMAGE (CreatureCmd.Damage with ValueProp.Unpowered), so block absorbs
+> them. Taking it off HP directly is indistinguishable in a capture that plays no cards and
+> so holds no block, and wrong in every fight that does.
+
+That comment predicts this bug AND its invisibility condition exactly. Constrict and the
+Disintegration tick were fixed for it; Thorns is the third call site of the same rule and was
+missed. It is now `DealDamageToPlayer`, which spends block first.
+
+What settled it was a discriminating experiment rather than more reading: the same capture,
+same seed, same turns, with NO cards played came back clean through ten turns. That killed
+every wrong-move and wrong-damage theory at once and left only something reachable when the
+player acts -- which is also the only time the player holds block.
+
+### E485 -- Delicate Frond is modelled; its stated blocker had gone stale
+
+`DelicateFrond.BeforeCombatStart` fills every OPEN potion slot, one
+`CreateRandomPotionOutOfCombat` off `Rng.CombatPotionGeneration` per slot.
+
+It was declared in `RelicEffects.UnmodelledInRun` for two reasons. One was real and stays
+respected: the DRAW COUNT is the risk, because a count wrong by one moves every later draw on
+that stream for the rest of the run -- E451 is what that costs. The other had gone stale:
+"the run has no before-combat hook that both entry paths share". It has one. All SEVEN combat
+entry paths funnel through `RunEngine.StartCombatWithDeck`, which is also where the Fur Coat
+bite was hung during the overgrowth sweep.
+
+The count comes straight off the game's loop: `while (HasOpenPotionSlots)` -- create, then
+`TryToProcure`, and BREAK if the procure fails. So it is one draw per open slot, and exactly
+ONE draw when the procure is refused outright, which is Sozu. `AddPotion` already answers
+`TryToProcure`'s question with Sozu's gate included, so the transcription is direct.
+
+It is called BEFORE the belt is snapshotted into the combat. Placed after, the fight is
+handed the belt as it stood a moment earlier and the potions exist only on the run -- which
+is how it was written first.
+
+The remaining three declared relics are NOT stale and stay declared: Lasting Candy and
+Driftwood both need an ACTION-SPACE change (a fourth reward slot, a reroll button), which
+renumbers the screen for every trained policy and the Python bridge; Whispering Earring's
+auto-play is a POLICY, and approximating one is worse than admitting there is one.
+
+(That last clause is wrong, and E486 is the correction.)
+
+## E486 -- Whispering Earring plays the first thirteen cards it can, and nothing chooses
+
+`WhisperingEarring.AfterAutoPrePlayPhaseEnteredLate` auto-plays up to thirteen cards on turn
+ONE. Only the +1 max energy was modelled; the auto-play was declared in
+`RelicEffects.UnmodelledInRun` on the grounds that it is "an AI standing in for the player",
+so approximating a policy would be worse than admitting the gap.
+
+There is no policy. Reading the relic is what showed it, and all three of its choices are the
+same rule:
+
+- the card is `pile.Cards.FirstOrDefault(c => c.CanPlay())` -- the LEFTMOST playable card;
+- the target is `HittableEnemies.FirstOrDefault()` -- the LEFTMOST enemy;
+- the `VakuuCardSelector` pushed for the duration of the loop answers every selection screen
+  with `options.Take(maxSelect)` -- the FIRST ones.
+
+First, first and first. Nothing in it weighs anything against anything else.
+
+Two details decide whether the transcription is right. The plays are PAID, not free:
+`CardCmd.AutoPlay` plays a card "for free" by its own documentation, and the relic calls
+`card.SpendResources()` in front of it with `skipXCapture: true` precisely so the X value
+comes from that spend. So `SpendResources() + AutoPlay()` is an ordinary play, which is what
+`CombatEngine.PlayCard` already is -- routing this through the auto-play path instead would
+have handed the player thirteen free cards. And the target is GIVEN rather than left null,
+so `AutoPlay` does not draw from `CombatTargets` for it; rolling one would have moved every
+later target in the fight.
+
+The loop stops on the game's four conditions: combat over, the turn moving under it (Void
+Form's end-turn, which `PlayCard` resolves by calling `EndTurn`), nothing playable left, and
+the thirteen-card cap. It is latched with `CombatState.WhisperingEarringSpent` because the
+game enters the pre-play phase once per turn while `Step` runs once per ACTION.
+
+`CanPlay` needed writing out, and doing so turned up something worth recording on its own:
+the two guards that already existed each check a strict SUBSET of it, and not the same
+subset. `ValidActions` omits the star cost, Sloth, Bound and Ringing; `PlayCard` omits
+`IsPlayableNow` (Grand Finale, Clash). So `ValidActions` can offer a card `PlayCard` then
+refuses -- the agent spends a step and the state does not move. That is a live defect, it is
+NOT the earring's, and closing it changes which actions are legal, so it is left standing
+here rather than folded into a relic change.
+
+Two of the four originally declared relics have now left the list, and for different reasons:
+Delicate Frond's argument had gone STALE (E485), and this one was simply UNSOUND. A declared
+gap is an argument, so re-reading it against the source has to be part of the check -- not
+just asking whether it still holds.
+
+## E487 -- one playability predicate, and a pre-play phase on the right side of the observation
+
+Two defects found while writing E486, both older than it and neither belonging to a relic.
+Recorded separately because fixing them changes the ACTION SPACE, which E486 did not.
+
+### The two guards disagreed
+
+`ValidActions` and `PlayCard` each decided whether a card could be played, separately, and
+they checked different things. `ValidActions` omitted the star cost, Sloth, Bound and
+Ringing; `PlayCard` omitted `IsPlayableNow`. So the disagreement ran BOTH ways:
+
+- `ValidActions` offered actions `PlayCard` then refused. The agent spends a step and the
+  state does not move -- and `StepResult.Invalid` is `new(false, false, 0f)`, which cannot be
+  told apart from a legal play that earned nothing. A Bound card under Ringing looked exactly
+  like a bad play.
+- `PlayCard` accepted cards `ValidActions` hid. `Sts2_Step` takes any index, not only a
+  listed one, so Grand Finale would go off for sixty damage on a full draw pile.
+
+Both now go through `CanPlayFromHand`, with the cost arithmetic shared through `ResolveCosts`
+so the question and the payment cannot price a card differently. This WIDENS what
+`ValidActions` hides and NARROWS what `PlayCard` accepts; both directions move toward
+`CardModel.CanPlay`, which is the game's only definition.
+
+One clause of `CanPlay` is deliberately left out: the NoLivingAllies refusal on ally-targeted
+cards. Every such card is `MultiplayerOnly` and dropped from every pool by
+`FilterForPlayerCount`, so no solo agent can hold one -- while the suite constructs them on
+purpose to pin the card bodies, the convention Largesse's comment describes. Enforcing it in
+the shared predicate breaks 17 of those tests to fix nothing reachable. It lives instead on
+Whispering Earring, the one caller that picks a card the player did not.
+
+### The pre-play phase ran after the observation
+
+`PlayerTurnPhase.AutoPrePlay` was resolved at the top of `CombatEngine.Step` and nowhere
+else. But `ValidActions` is queried on the state BEFORE `Step`, so the caller chose an action
+against a hand the auto-plays were about to change -- and since the end-turn action is
+`Hand.Count`, every index could shift underneath it.
+
+Latent with Imbued, which moves one card. Whispering Earring moves up to thirteen, which is
+what made it worth fixing rather than noting.
+
+`ResolvePrePlayPhase` is now called by whoever CREATES the combat, before it can be observed:
+`RunEngine.StartCombatWithDeck` (after the Fur Coat bites -- the coat is `BeforeCombatStart`
+and pre-play is inside turn one, so a creature pinned to 1hp must be pinned before an
+auto-played attack can reach it), and every `NativeCombat` build, each of which is followed
+by a `WriteObs`. It stays on `Step` as well, because it is idempotent -- the drain is a no-op
+on an empty queue and the earring is latched -- which is what lets the entry points be
+covered without having to prove every construction path was found.
+
+## E488 -- the combat sweep threw away the alias table it shares with the run replay
+
+`buff_map.py` exists so the sweep and the full-run replay answer one question the same way,
+and says so: "Shared by the combat sweep and the full-run replay: both ask the same question
+-- what does the game call this buff -- and two copies of the answer would drift."
+
+They drifted anyway, in the one direction the file did not guard. `replay_full_run_trace.py`
+resolves a live power through `canonical_power`. `combat_sweep.py` never called it: it asked
+`set(BUFF_ID_TO_LIVE.values())` alone, which holds ONE representative name per BuffId. So
+every ALIASED power -- nineteen of them -- failed that test, went into `unmapped`, and was
+dropped from the comparison.
+
+The aliases were not missing. They were written, curated, commented, and used by the other
+harness.
+
+Nineteen powers were invisible to the sweep, all of them
+`: TemporaryStrengthPower` / `: TemporaryDexterityPower` / `: TemporaryFocusPower` subclasses
+that the emulator models as their base buff: Dark Shackles, Piercing Wail, Mangle, Setup
+Strike, Enfeebling Touch, Crush Under, Dying Star, Feeding Frenzy, Monarch's Gaze, Reptile
+Trinket, Flex/Speed/Shackling Potion, Anticipate, Helical Dart, Focused Strike, Hotfix,
+Synchronize, Coordinate.
+
+Not theoretical: `SETUP_STRIKE_POWER` appears in TEN of the thirty-two real run-trace
+fixtures. Run one of those captured status blocks through the fixed resolver and
+`('STRENGTH_POWER', 2), ('SETUP_STRIKE_POWER', 2)` now folds to
+`{STRENGTH_POWER: 2, TEMPORARY_STRENGTH_POWER: 2}` with nothing unmapped; before, the second
+half was discarded and a wrong amount on it could not have failed a sweep.
+
+### Folding is a sum, not a match
+
+The mapping is MANY-to-one, so resolution alone is not enough. A creature carrying Mangle -2
+and Dark Shackles -2 is two live powers against ONE emulator buff of -4; matching them
+pairwise calls that a divergence. `_fold` sums per canonical name, and `_drop_empty` then
+treats a zero TOTAL as absent -- needed because the sum can reach zero when no contributor
+was zero (Mangle -2 and a Flex Potion +2), which is exactly the case the emulator's own
+"amount of zero counts as absent" rule already produces on its side.
+
+The presence sentinel is the string `"present"` rather than the obvious `-1`, because `-1` is
+a real amount -- one point of Strength drain -- and a sentinel that can be mistaken for data
+is how a compared buff quietly becomes an unchecked one.
+
+### What was NOT changed
+
+`replay_full_run_trace.py` canonicalises but does not aggregate, so it carries the same
+many-to-one exposure. Left alone deliberately: no status block in any of the thirty-two
+fixtures has two live powers folding to one buff, so the bug is latent there, and editing the
+comparison the ground truths are pinned against to fix something unobserved trades a real
+32/32 for a hypothetical.
+
+The twenty-two powers neither harness resolves stay unresolved and stay REPORTED. Eight are
+co-op card powers (`MultiplayerOnly`, dropped from every pool by `FilterForPlayerCount`) that
+a solo run cannot reach. The rest -- Heist, Thievery, Regen, Duplication, Radiance, Gravity
+and friends -- are not modelled as buffs at all, so naming them in the map would assert a
+correspondence that does not exist. An unmapped power is printed on every sweep whether the
+row passed or failed, which is the honest combination: green run, visible gap.
+
+## E489 -- Heist is not comparable in the combat sweep, and the reason is gold
+
+E488 left two live powers the sweep could not resolve, both on the Gremlin Merc, and both
+reported as unknown on every capture of that encounter. This is the investigation that
+turned them from unknown into DECLARED. The conclusion is negative -- neither becomes a
+comparison -- so what matters is the reasons, which are specific and were both wrong at
+first guess.
+
+### Thievery's amount is a rate, not the takings
+
+`ThieveryPower.Steal` takes `Min(Amount, Gold)` and banks the running total in
+`DynamicVars.Gold`. So `Amount` is the RATE. The obvious mapping -- `THIEVERY_POWER` against
+`EnemyState.StolenGold`, the field the emulator accumulates into -- sets a rate against a
+total and would agree only at the single moment they coincide.
+
+Confirmed against the live game rather than inferred: a gremlin-merc capture reported
+`THIEVERY_POWER` at a constant 20 across four turns while the stash grew to 80.
+
+### Heist's amount IS the takings, and still cannot be compared here
+
+`HeistPower.Amount` is what the merc took; the Fat Gremlin carries it and `BeforeDeath`
+hands it back as a `GoldReward`. The emulator models this: `StealGremlinMercGold` accumulates
+into `EnemyState.StolenGold`, and on the merc's death `SpawnGremlinMercReinforcements` passes
+it to `fatGremlin.HeistGold`, which `CombatEngine` turns into `StolenBackGold`. One field,
+one power, a clean correspondence.
+
+The blocker was assumed to be plumbing: `HeistGold` is a field and the sweep's emulator side
+is decoded from the OBSERVATION, which carries only buffs. Widening the observation renumbers
+it for every trained policy and the Python bridge -- the same blocker that keeps Lasting
+Candy and Driftwood declared.
+
+That assumption was wrong, and worth recording. A side-channel export costs none of that:
+`Sts2_GetEnemies` already reads state outside the observation for exactly this harness. The
+export was written, bound and driven, and it worked.
+
+Wiring it up is what found the real blocker. The comparison fired and failed:
+`turn 6 enemy powers: emu [[], []] vs live [[], [('HEIST_POWER', 80)]]`.
+
+**The combat sweep has no player gold.** Every non-arena `CombatFactory.Reset` passes
+`playerGold: 0`, so the emulator's merc computes `Min(20, 0)` and steals nothing while the
+live merc robs a real run. The two sides cannot agree on any capture, ever. Enabling the
+comparison would have turned a reported gap into a permanent red row -- strictly worse, because
+a check that always fails stops being read.
+
+So the export was reverted rather than left as dead code, and both powers are declared in
+`combat_sweep.DECLARED_NO_QUANTITY` with the reason each.
+
+### Where Heist actually is checked
+
+The run traces, which carry real gold and compare `player.gold` per ACTION. Six of the
+thirty-two fixtures fight this encounter and they pass. The stash's whole observable
+consequence is the gold it returns, so that is the check that matters -- the sweep would only
+have watched an intermediate.
+
+Giving the sweep gold means routing every capture through the arena reset to carry one
+number, on a harness eighty captures depend on, to duplicate a check that already exists.
+Not worth it, and now written down so the next person does not re-derive it.
+
+`DECLARED_NO_QUANTITY` is pinned by MEMBERSHIP in `test_sweep_buff_map.py`, the same shape as
+`RelicEffects.UnmodelledInRun`: a third power cannot be parked there without arguing for it,
+and a test asserts a declared power does not mask a real one standing beside it.
+
+## E490 -- the last thirteen powers, and a Duplicator that had the wrong power behind it
+
+E489 left thirteen powers the sweep could not resolve and that a solo run could reach. Read
+against the source they were not thirteen of anything -- they were five different situations,
+and only six were missing implementations.
+
+### The bug found on the way
+
+The Duplicator potion applies `DuplicationPower`, which adds a play to ANY card. The emulator
+stacked `BuffId.OneTwoPunch` for it. The game has BOTH classes and keeps them apart for one
+reason: `OneTwoPunchPower.ModifyCardPlayCount` returns early on `card.Type != CardType.Attack`.
+
+So a Duplicator spent on a Skill or a Power did nothing in the emulator and doubled it in the
+game. An Uncommon potion, wrong on most of the cards a player would want it for. Nothing
+caught it because the sweep could not see `DUPLICATION_POWER` at all -- the blind spot and
+the bug were the same gap, which is the argument for closing blind spots even when the
+current row is green.
+
+### Six implemented
+
+| Power | Potion | Rule |
+|---|---|---|
+| `ClarityPower` | Clarity, 3 | +1 HAND DRAW for three turns -- turns, not cards |
+| `DemisePower` | Powdered Demise, 9 | 9 `Unblockable` to one enemy at its own turn end, forever |
+| `DuplicationPower` | Duplicator, 1 | next card played twice, ANY type |
+| `GigantificationPower` | Gigantification, 1 | next attack CARD deals triple |
+| `RadiancePower` | Radiant Tincture, 3 | +1 energy for three turns, after the reset |
+| `RegenPower` | Regen Potion, 5 | heal, then decrement -- 5+4+3+2+1 and done |
+
+Three of the six are counters of TURNS whose payout is fixed at one, and summing the amount
+instead would pay the whole counter on the first turn. Two more resolve at the end of a side
+turn and differ in whether they wind down: Regen decrements, Demise never does. Gigantification
+is multiplicative and so lands last, after every additive bonus, and it is spent per CARD
+rather than per hit -- the game latches the first `AttackCommand` and triples that card's
+`ModelSource`, so a multi-hit attack is tripled throughout and the next card is not.
+
+Radiance is the one that needed a second attempt: it calls `PlayerCmd.GainEnergy`, and writing
+to the energy field directly built energy that `NoEnergyGainPower` could not stop. The
+chokepoint guard in `BlockChokepointTests` caught it, and its own comment records Seal of Gold
+making the identical mistake. That guard counts TEXTUAL matches, so the fix also meant not
+spelling the raw increment out in the comment explaining the fix.
+
+### One aliased, six declared, nine co-op
+
+`SelfFormingClayPower` was already implemented as `BuffId.BlockNextTurn` -- same amount, same
+net effect -- so it needed an alias, not code.
+
+Declared in `combat_sweep.DECLARED_NO_QUANTITY`, with the reason each: Thievery and Heist
+(E489), plus `GRAVITY_POWER`, `LEADERSHIP_POWER` and `MAGIC_BOMB_POWER`, which are applied by
+NOTHING -- referenced only by their own class and by `AbstractModelSubtypes`, the registry
+that lists every power whether or not anything uses it. Dead content, and reporting it as a
+gap invites someone to model a power the game never grants.
+
+`DIE_FOR_YOU_POWER` joins them for the opposite reason: it is modelled THOROUGHLY, sponge
+capacity and overkill spill included, keyed on `state.OstyHp > 0` in `EnemyAI`. It is not a
+buff here, its live amount is a marker of 1 carrying no information, and it rides a creature
+the emulator puts in no status list.
+
+`COVERED_POWER` and `GUARDED_POWER` moved to `COOP_ONLY_POWERS`, which now holds nine. Both
+name their applier through `base.Applier.Player.NetId` and both come from `MultiplayerOnly`
+cards, so a solo run cannot produce them.
+
+### The invariant this closes
+
+Every one of the game's 261 powers is now in exactly one of three buckets: 246 resolved by the
+buff map, 6 declared with a written argument, 9 co-op-only. `test_sweep_buff_map.py` asserts
+the leftover set is EMPTY, so a patch that ships a new power fails there instead of being
+quietly dropped from every comparison.
+
+One test had to change its subject to say this honestly. The "an unresolvable power is still
+reported" case used `REGEN_POWER` as its example, and this entry implemented it -- a test
+whose subject can be fixed out from under it is pinning the backlog rather than the mechanism.
+It now uses a name no patch has shipped.
+
+## E491 -- Crimson Mantle was never wrong, and the capture was
+
+The oldest of the four run-trace divergences, and the only one outside `player.potions`:
+`XTLVVPKFBF-a8-heftytablet` step 147, reference `[('CRIMSON_MANTLE_POWER', 8)]` against an
+empty emulator status. The manifest recorded it as "the emulator holds no mantle there",
+which reads as a missing power. It is not.
+
+The mechanic is modelled correctly. `CrimsonMantle` is a 1-cost Power applying
+`CrimsonMantlePower` at 8 (10 upgraded) and calling `IncrementSelfDamage()`, so each play
+adds one to the HP it costs; `AfterPlayerTurnStart` takes that HP as `Unblockable | Unpowered`
+and THEN grants the block. Playing one and ending a turn in the emulator gives block 8,
+self-damage 1, the buff intact and the hp paid -- which is the whole of the card.
+
+What step 147 actually is: `state_type=game_over`, `hp=0`. The player ended a turn on 2 hp
+behind 18 block, and the Fogmog broke it.
+
+Three things say the game clears powers there and the emulator is right:
+
+- **The game's own code.** `CreatureCmd.Kill` calls `Creature.RemoveAllPowersAfterDeath`,
+  which keeps only what overrides `ShouldPowerBeRemovedAfterOwnerDeath` or is spared by
+  `Hook.ShouldPowerBeRemovedOnDeath`. `CrimsonMantlePower` overrides neither -- it declares
+  a type, a stack type, hover tips, vars, one turn-start hook and its incrementer, and
+  nothing else.
+- **Nine other fixtures.** Every game_over capture whose player died holding a power --
+  Frail, Vulnerable, Dexterity, Strength, Constrict, Smoggy, Weak, Setup Strike -- reports an
+  EMPTY status. Ten deaths with powers, nine cleared.
+- **A re-capture.** Replaying this seed with `--neow-option 2` reached the same death: an
+  `end_turn` while holding CRIMSON_MANTLE_POWER at 8, then `game_over` at 0 hp. That
+  capture's status is EMPTY. Same power, same amount, same shape of death, opposite result --
+  so the retained power is non-deterministic.
+
+That is H14's category exactly: "the capture sampled a frame mid-resolution". The tell there
+was what the reference does next; here it is that the reference cannot do it twice.
+
+### Why the fixture stays
+
+Re-recording would end the divergence and cost more than it saves. The replay desynced at 51
+steps against the original's 148, so replacing it trades ninety-seven steps of otherwise
+correct ground truth for a cosmetic artifact in the final frame -- and that frame is the run's
+last, after which nothing is decided.
+
+The entry stays in `KNOWN_DIVERGENCES` with its reason corrected, which is the only part that
+was actually broken. The manifest is read by whoever picks up the remaining divergences, and
+"the emulator holds no mantle" would have sent them to fix a card that already works.
+
+Three known run-trace divergences remain, and all three are potion tracking.
+
+## E492 -- three potion divergences, three different bugs, none of them in a potion
+
+The three surviving run-trace divergences were all `player.potions`, which read like one
+cause. They were three, in three different layers, and the potions themselves were correct
+throughout.
+
+### 1. The belt was reported from the wrong side of a fight
+
+`RunNativeExports` state list 2 read `run.State.PotionSlots`. A combat is handed a COPY of
+the run's slots and syncs back only when it ends, so during a fight the reported belt was the
+one the player walked in with. `DPUJR117FL` is a Fairy in a Bottle that revives the player
+mid-boss -- hp 1 to 24, the potion consumed -- and the emulator kept listing it for the rest
+of the fight. The mechanic was right: in isolation the fairy fires, clears its slot and heals
+to exactly 24.
+
+The observation had always spelled the rule correctly (`activeCombat?.PotionSlots ??
+State.PotionSlots`); only the state list had not. Copying it WITHOUT the phase guard cost
+twenty-four traces on the first attempt, because `State.ActiveCombat` is nulled only on
+`Reset` -- a finished combat lingers, and its belt then answers for the whole run. The guard
+is why this is a named method now.
+
+### 2. A fight believed in three potion slots
+
+`CombatState.MaxPotionSlots` defaults to 3 and was never set from the run. `7WGQ2VNJ4M` holds
+Petrified Toad, whose `BeforeCombatStartLate` procures a Shaped Rock into the first FREE
+slot -- so on a run with TWO slots and two potions, the game's `TryToProcure` fails silently
+and gives nothing while the emulator invented a third slot to put a rock in.
+
+The assignment has to happen BEFORE `CombatFactory.Reset`, because that is what runs
+`RelicEffects.ApplyCombatStart` and the toad procures from inside it. Written after the reset
+first, which is one relic too late and fixed nothing.
+
+### 3. The fourth slot was truncated on the way out
+
+`8QKMNR4T2W` holds Potion Belt, which takes the run from two slots to four. The emulator
+rolled the Fire Potion, found the free slot and stored it -- `added 23 at 3`, belt `max=4` --
+and `run_env.py` then asked for the list with a buffer of THREE. The fourth potion existed in
+the emulator and never left it.
+
+This one is worth the retelling. The evidence said "the emulator refuses a potion it has no
+room for", and three separate things agreed: the belt mechanic, `AddPotion`'s bounds, and
+`ApplyRelicPickup`'s +2 were each verified correct in isolation, which should have been the
+clue. It was only a probe printing the slots at the moment of the add -- `[5,14,14,23,0,0]`,
+plainly four -- that moved the question from "why was it refused" to "why is it not reported",
+and the answer was a hardcoded 3 one layer above.
+
+### The remaining one is not ours
+
+`XTLVVPKFBF-a8-heftytablet` stays, and E491 records why: the CAPTURE kept a power the game's
+own death path removes, and a re-capture of the same seed cleared it. The emulator is right.
+
+The manifest is down from four entries to one, and the one that is left is a note about a
+fixture rather than a gap in the emulator.
+
+## E493 -- the last two relics, and an action-space argument that was overstated
+
+`RelicEffects.UnmodelledInRun` is now EMPTY. Lasting Candy and Driftwood were the last two,
+held back by the one argument in that list that had survived every earlier re-reading: both
+change the card-reward SCREEN, which is an action-space change, and renumbering the action
+space breaks every trained policy and the Python bridge.
+
+The argument was real. It was also overstated, and the overstatement is the whole entry.
+
+### Appending is not renumbering
+
+The card-reward screen's actions were the three cards at 0-2, the SKIP at 3, and Pael's Wing's
+sacrifice at 4. The declared-gap comment read "a fourth card and the skip would be the same
+action", which is true only if the fourth card has to be action 3. It does not. The fourth
+option is `RewardFourthCardAction = 5` and the reroll is 6 -- both past everything the screen
+already used, both inside a mask that has been 256 wide since the Crystal Sphere -- so every
+action id the run already had means exactly what it meant before.
+
+The observation took the same treatment: the extra option's two slots sit at the very END of
+the run block rather than beside the other three at `RunScalarObsSize + 9`, where they would
+have shifted the deck, the relics and the shop along by one. It is appended to
+`Sts2Run_ObsLayout` too, which exists so consumers do not hard-code offsets that move.
+
+This is the `Enchantment` enum's rule -- append, never insert -- applied to an action space
+and an observation, and it is what turned "renumbers everything" into "costs two slots".
+
+### The fourth option is not a fourth slot
+
+The first implementation widened `RunState.RewardCards` to four. That broke eleven tests, and
+the tests were right: a dozen paths fill that array BY LENGTH -- Kaleidoscope, a Trade event,
+Silver Crucible's upgrade sweep, the pre-rolled offers -- so widening it offered a fourth card
+on every screen in the run.
+
+`LastingCandyRewardCard` is its own field now, and the churn went to zero. The array is the
+ROLL; the candy's option is something a relic adds after it, claimed by its own action and
+absent from most screens. Those are different things and modelling them as one was the
+mistake.
+
+The draws are transcribed rather than guessed: the game filters the screen's pool to Powers
+not already offered -- falling back to every Power when that leaves none -- and runs ONE card
+through `CreateForReward` with the same `RarityOdds`. That is a rarity roll, a pick and an
+upgrade roll: three draws on Rewards, the same as each of the other three cost. E451 is what
+a wrong count costs.
+
+### Driftwood
+
+`Reroll()` clears `CanReroll`, drops the cards and calls `Populate()` again -- so one reroll
+per screen, costing exactly what the first roll cost. It does NOT close the screen, which is
+why the action returns without falling through to the clear-and-advance every other answer
+takes.
+
+One detail worth having: a rerolled screen gets no Lasting Candy option. `Populate` only
+consults `TryModifyCardRewardOptions` on the `!_hasBeenRerolled` branch, so the relic that
+added the fourth card does not add it again.
+
+### What the list was for
+
+Four relics were declared over its life and all four left. Only ONE of the four arguments held
+up on re-reading: Fake Snecko Eye's was overtaken by Confused, Delicate Frond's had gone stale
+(E485), Whispering Earring's was unsound (E486), and this one was overstated. Three of four
+wrong, and none wrong in a way a count or a staleness sweep would have caught.
+
+The list is kept, pinned empty by the membership guard, because what it was ever worth was the
+bar for adding to it.

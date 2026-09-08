@@ -386,6 +386,13 @@ public sealed class CombatState
     /// </summary>
     public CountingRandom? EnergyCostRng;
 
+    /// <summary>
+    /// Whispering Earring's turn-one auto-play has run. The game enters the pre-play phase
+    /// ONCE per turn; <c>CombatEngine.Step</c> is called many times inside that turn, so
+    /// without this the loop would re-enter on every action the player took on turn one.
+    /// </summary>
+    public bool WhisperingEarringSpent;
+
     // Turn tracking
     public int Turn;
     public bool PlayerTurn = true;
@@ -498,6 +505,33 @@ public sealed class CombatState
     /// for the same reason every other per-turn tally here is.
     /// </summary>
     public int SkillCardsPlayedThisTurn;
+
+    /// <summary>
+    /// `MusicBox.WasUsedThisTurn`: the box copies the FIRST Attack of each turn and then
+    /// sits out the rest of it. Cleared at the player turn boundary and at combat end,
+    /// which is where the game clears it too.
+    /// </summary>
+    /// <summary>
+    /// `ChainsOfBindingPower`: how many cards it has BOUND this turn, and whether a bound
+    /// card has already been played. The first caps the affliction at the power's amount;
+    /// the second is the restriction -- at most ONE bound card may be played per turn.
+    /// </summary>
+    public int BoundCardsThisTurn;
+
+    public bool BoundCardPlayedThisTurn;
+
+    public bool MusicBoxUsedThisTurn;
+
+    /// <summary>
+    /// `FurCoat`: this fight is in one of the coat's marked rooms, so every enemy in it
+    /// arrives on ONE hp -- the opening roster and anything that joins later alike.
+    /// </summary>
+    /// <remarks>
+    /// A COMBAT flag rather than a run lookup, because the thing that has to answer it is
+    /// `AfterCreatureAddedToCombat` -- which fires mid-fight, where the map coordinate is
+    /// not in reach.
+    /// </remarks>
+    public bool FurCoatBites;
 
     /// <summary>
     /// `CardPlaysFinished.Count(HappenedLastPlayerTurn)`. Pale Blue Dot draws more only when

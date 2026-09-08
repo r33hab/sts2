@@ -1,111 +1,46 @@
+using System.Linq;
 using Sts2Emulator.Core;
-using Sts2Emulator.Core.Effects;
 using Xunit;
 
 namespace Sts2Emulator.Tests;
 
 /// <summary>
-/// PunchConstructNormal: one Punch Construct. Read off
-/// MegaCrit.Sts2.Core.Models.Monsters/PunchConstruct: HP a flat 60 at A8 (55 below),
-/// FastPunchDamage 6 (5 below A9) as two hits, StrongPunchDamage 16 (14).
+/// `PunchConstruct.StartsWithFastPunch` decides which state the machine starts in, and it is
+/// set in exactly ONE place in the game -- `PunchOffEventEncounter`. Everywhere else it is
+/// false, so an ordinary Punch Construct opens on READY_MOVE: a DefendIntent, not an attack.
 /// </summary>
+/// <remarks>
+/// The emulator ROLLED for it, so half the time it agreed -- which is why the underdocks
+/// sweep failed on one seed in three and a single-seed run had even odds of never seeing it.
+/// </remarks>
 public class PunchConstructTests
 {
-    private static Fight Encounter(int ascension = Ascension.DefaultLevel) =>
-        Fight.Encounter(CombatFactory.ActOneEncounter.PunchConstruct, ascension);
-
-    [Fact]
-    public void RosterIsOneConstruct()
+    /// <summary>The plain encounter opens on READY: a Defend, deterministically.</summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(7)]
+    public void ThePlainEncounterAlwaysOpensOnReady(int seed)
     {
-        var fight = Encounter();
+        var fight = Fight.Encounter(CombatFactory.ActOneEncounter.PunchConstruct, seed: seed);
 
-        Assert.Equal([KE.PunchConstruct], fight.EnemyDefIds);
-    }
+        var construct = fight.State.Enemies.First(e => e.DefId == KE.PunchConstruct);
 
-    [Fact]
-    public void HpIsFixedAtSixty()
-    {
-        var fight = Encounter();
-
-        Assert.Equal(60, fight.State.Enemies[0].MaxHp);
-    }
-
-    [Fact]
-    public void HpIsLowerBelowAscensionEight()
-    {
-        var fight = Encounter(ascension: 7);
-
-        Assert.Equal(55, fight.State.Enemies[0].MaxHp);
-    }
-
-    [Fact]
-    public void PunchesUseTheAscensionEightDamage()
-    {
-        var fight = Encounter();
-        var announced = new List<(IntentType, int)>();
-
-        for (int turn = 0; turn < 3; turn++)
-        {
-            announced.Add(fight.Intents.First());
-            fight.EndTurn();
-        }
-
-        // Fast Punch 5x2 and Strong Punch 14 — not 12 and 16.
-        Assert.Equal(
-            [(IntentType.Defend, 10), (IntentType.Attack, 10), (IntentType.Attack, 14)],
-            announced
-        );
-    }
-
-    [Fact]
-    public void PunchesAreHarderAtAscensionNine()
-    {
-        var fight = Encounter(ascension: 9);
-        fight.EndTurn();
-
-        Assert.Equal((IntentType.Attack, 12), fight.Intents.First());
-        fight.EndTurn();
-        Assert.Equal((IntentType.Attack, 16), fight.Intents.First());
+        Assert.Equal(IntentType.Defend, construct.CurrentIntent.Type);
     }
 
     /// <summary>
-    /// FAST_PUNCH_MOVE is <c>MultiAttackIntent(FastPunchDamage, FastPunchRepeat)</c> plus
-    /// a <c>DebuffIntent</c>, and <c>FastPunchMove</c> ends in
-    /// <c>PowerCmd.Apply&lt;FrailPower&gt;(..., 1m, ...)</c>.
+    /// The Punch Off EVENT encounter is the one place that sets it, and it opens on the
+    /// Fast Punch instead -- so the flag is real, it was just being guessed at.
     /// </summary>
-    /// <remarks>
-    /// The Frail was unreachable: the attack branch used to break out as soon as an intent
-    /// declared more than one hit, and every per-monster rider sits past that break. So the
-    /// construct's own signature move dealt its damage and left the player undebuffed --
-    /// which reads as an emulator that hits for the right number and then blocks too much
-    /// on the turn after.
-    /// </remarks>
     [Fact]
-    public void FastPunchAppliesFrailAlongsideItsTwoHits()
+    public void ThePunchOffEventOpensOnTheFastPunch()
     {
-        var fight = Encounter();
-        var construct = fight.State.Enemies[0];
-        construct.MoveIndex = 1;
-        construct.CurrentIntent = new Intent(IntentType.Attack, 6, Hits: 2);
-        int hpBefore = fight.State.PlayerHp;
+        var fight = Fight.Encounter(CombatFactory.ActOneEncounter.PunchOff);
 
-        EnemyAI.ExecuteIntent(construct, fight.State, new Random(0));
+        var construct = fight.State.Enemies.First(e => e.DefId == KE.PunchConstruct);
 
-        Assert.Equal(hpBefore - 12, fight.State.PlayerHp);
-        Assert.Equal(1, fight.PlayerBuffAmount(BuffId.Frail));
-    }
-
-    /// <summary>STRONG_PUNCH is a bare <c>SingleAttackIntent</c> and debuffs nothing.</summary>
-    [Fact]
-    public void StrongPunchAppliesNoFrail()
-    {
-        var fight = Encounter();
-        var construct = fight.State.Enemies[0];
-        construct.MoveIndex = 2;
-        construct.CurrentIntent = new Intent(IntentType.Attack, 16);
-
-        EnemyAI.ExecuteIntent(construct, fight.State, new Random(0));
-
-        Assert.Equal(0, fight.PlayerBuffAmount(BuffId.Frail));
+        Assert.Equal(IntentType.Attack, construct.CurrentIntent.Type);
     }
 }

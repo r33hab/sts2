@@ -282,7 +282,12 @@ public class RunObservationTests
         );
         Assert.Equal(
             RunConstants.ShopObsOffset + RunConstants.ShopSlots * RunConstants.ShopSlotSize,
-            RunConstants.RunExtraObsSize
+            RunConstants.FourthRewardObsOffset
         );
+
+        // Lasting Candy's extra option is the LAST block, two wide -- the card and whether
+        // it is upgraded. It sits on the end rather than beside the other three options
+        // precisely so that adding it moved none of the offsets above. See E493.
+        Assert.Equal(RunConstants.FourthRewardObsOffset + 2, RunConstants.RunExtraObsSize);
     }
 }

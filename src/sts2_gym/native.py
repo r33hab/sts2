@@ -544,7 +544,7 @@ def _run_obs_layout() -> dict[str, int]:
         RuntimeError: if the native library reports a layout this build cannot read.
 
     """
-    size = 12
+    size = 13
     buf = (ctypes.c_int * size)()
     written = int(_lib.Sts2Run_ObsLayout(buf, size))
     if written != size:
@@ -565,6 +565,9 @@ def _run_obs_layout() -> dict[str, int]:
         "shop_slot_size",
         "map_choices",
         "map_node_type_offset",
+        # Lasting Candy's extra card-reward option: its id, then whether it is upgraded.
+        # Appended to the observation AND to this layout, so neither renumbers.
+        "fourth_reward_offset",
     )
     return dict(zip(keys, (int(value) for value in buf), strict=True))
 

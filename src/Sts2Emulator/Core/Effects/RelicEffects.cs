@@ -295,6 +295,27 @@ public static class RelicEffects
     /// <summary>The token potion Petrified Toad procures before every combat.</summary>
     private const int PotionShapedRock = 45;
 
+    /// <summary>`DiamondDiadem`: two cards or fewer this turn and the next enemy turn hits at half.</summary>
+    public const int DiamondDiadem = 60;
+
+    /// <summary>`BrilliantScarf`: the FIFTH card each turn is free.</summary>
+    public const int BrilliantScarf = 33;
+
+    /// <summary>`MusicBox`: the first Attack each turn is copied into hand, Ethereal.</summary>
+    public const int MusicBox = 159;
+
+    /// <summary>`ChoicesParadox`: five generated cards on turn one, one of them kept, Retained.</summary>
+    public const int ChoicesParadox = 47;
+
+    /// <summary>Diamond Diadem's `DynamicVar("CardThreshold", 2m)`.</summary>
+    private const int DiamondDiademCardThreshold = 2;
+
+    /// <summary>Brilliant Scarf's `CardsVar(5)`: the card AFTER four is the free one.</summary>
+    private const int BrilliantScarfCards = 5;
+
+    /// <summary>Choices Paradox's `CardsVar(5)`: five offered, one kept.</summary>
+    private const int ChoicesParadoxCards = 5;
+
     /// <summary>
     /// The relics whose ModifyMaxEnergy adds an EnergyVar(1). Every one of them is the same
     /// +1; what separates them is the price, which each pays through a different hook.
@@ -315,9 +336,9 @@ public static class RelicEffects
         // which is why only this half lives here.
         BloodSoakedRose,
         // `WhisperingEarring.ModifyMaxEnergy`: EnergyVar(1). Its OTHER half auto-plays up
-        // to thirteen cards on turn one through the game's own card selector, which is an
-        // AI standing in for the player -- see `UnmodelledInRun` for why that is declared
-        // rather than approximated.
+        // to thirteen cards on turn one -- modelled since E486, in
+        // `CombatEngine.RunWhisperingEarringAutoPlay`. This entry is the ENERGY only, the
+        // same as Prismatic Gem's and Blood-Soaked Rose's above.
         WhisperingEarring,
     ];
 
@@ -349,6 +370,94 @@ public static class RelicEffects
     /// </summary>
     public static int ExtraEnergyCost(CombatState state, CardDef def) =>
         def.Type == CardType.Power && HasRelic(state, SpikedGauntlets) ? 1 : 0;
+
+    /// <summary>
+    /// `Glitter.TryModifyCardRewardOptionsLate`: every card reward the Glam enchantment can
+    /// take gets it, at amount 1. Not one option chosen off a stream like Wing Charm's --
+    /// ALL of them, which is why this is asked per-card and draws nothing.
+    /// </summary>
+    public static Enchantment GlitterEnchantmentFor(Run.RunState state, CardInstance card) =>
+        state.Relics.Any(relic => relic.DefId == Glitter)
+        && Enchantments.CanEnchant(card, Enchantment.Glam)
+            ? Enchantment.Glam
+            : Enchantment.None;
+
+    /// <summary>`Glitter`: every eligible card reward arrives Glam-enchanted.</summary>
+    public const int Glitter = 102;
+
+    /// <summary>`PaelsEye`: one wasted turn a combat is refunded as an extra turn.</summary>
+    public const int PaelsEye = 177;
+
+    /// <summary>
+    /// `PaelsEye.ShouldTakeExtraTurn`: not used this combat, and NO cards played this turn.
+    /// Consumes the relic for the rest of the fight when it fires -- `AfterTakingExtraTurn`
+    /// sets `UsedThisCombat`, which rides the relic's Counter here.
+    /// </summary>
+    /// <remarks>
+    /// `WasOwnerPartOfLastPlayerTurn` is the multiplayer half: it exists so a player who
+    /// was auto-ended out of a turn they never took does not bank it. Solo, the owner is
+    /// part of every player turn, so it is always true.
+    ///
+    /// `AnyCardsPlayedThisTurn` returns TRUE on turn one for a run holding Whispering
+    /// Earring, whether or not the earring played anything -- the game refuses to let the
+    /// two relics combine rather than counting the auto-plays.
+    ///
+    /// The hand is exhausted by `BeforeSideTurnEndEarly`, which is a separate hook and
+    /// fires whether or not the extra turn is granted -- but its guard is the same, so in
+    /// practice the two go together. See `ExhaustHandForPaelsEye`.
+    /// </remarks>
+    public static bool TakeExtraTurnForPaelsEye(CombatState state)
+    {
+        if (!PaelsEyeWouldFire(state))
+        {
+            return false;
+        }
+
+        SetCounter(state, PaelsEye, 1);
+        return true;
+    }
+
+    private static bool PaelsEyeWouldFire(CombatState state) =>
+        HasRelic(state, PaelsEye)
+        && GetCounter(state, PaelsEye) == 0
+        && state.CardsPlayedThisTurn == 0
+        && !(state.Turn == 0 && HasRelic(state, WhisperingEarring));
+
+    /// <summary>
+    /// `PaelsEye.BeforeSideTurnEndEarly`: the hand is exhausted -- the price of the extra
+    /// turn, paid before the end-of-turn effects the hand might otherwise survive.
+    /// </summary>
+    public static bool ShouldExhaustHandForPaelsEye(CombatState state) => PaelsEyeWouldFire(state);
+
+    /// <summary>
+    /// `MusicBox.BeforeCardPlayed` latches the first ATTACK of the turn and its
+    /// `AfterCardPlayed` puts a CLONE of it in hand, Ethereal. Both halves collapse to
+    /// one check here because the emulator plays a card in one step: the latch exists in
+    /// the game only to survive the await between them.
+    /// </summary>
+    /// <remarks>
+    /// A CLONE, so the copy carries the original's upgrade and enchantment -- and its own
+    /// Ethereal grant on top, which is per-copy rather than on the definition.
+    /// </remarks>
+    public static void ApplyMusicBox(CombatState state, CardInstance card, CardDef def)
+    {
+        if (!HasRelic(state, MusicBox) || state.MusicBoxUsedThisTurn || def.Type != CardType.Attack)
+        {
+            return;
+        }
+
+        state.MusicBoxUsedThisTurn = true;
+        state.Hand.Add(card with { EtherealForCombat = true });
+    }
+
+    /// <summary>
+    /// `BrilliantScarf.ShouldModifyCost`: <c>CardsPlayedThisTurn == Cards.BaseValue - 1</c>,
+    /// so with CardsVar(5) it is the card played when four are already down -- the FIFTH.
+    /// Both `TryModifyEnergyCostInCombatLate` and `TryModifyStarCost` return zero, so the
+    /// card is free in both resources rather than half free.
+    /// </summary>
+    public static bool IsFreeUnderBrilliantScarf(CombatState state) =>
+        HasRelic(state, BrilliantScarf) && state.CardsPlayedThisTurn == BrilliantScarfCards - 1;
 
     /// <summary>Ectoplasm's ModifyGoldGained returns 0m: the owner gains no gold, ever.</summary>
     public static int ModifyGoldGained(IEnumerable<RelicInstance> relics, int amount)
@@ -540,6 +649,12 @@ public static class RelicEffects
         // to reach MaxEnergy (which each turn refills from) and the energy already handed
         // out for turn one.
         int extraEnergy = state.Relics.Count(relic => MaxEnergyRelics.Contains(relic.DefId));
+        // `PumpkinCandle.ModifyMaxEnergy` is the same EnergyVar(1), but only while the
+        // candle is lit: KindleCount rides the relic's Counter and burns down a point per
+        // fight, so this one relic can be in the list on one combat and out of it the next.
+        extraEnergy += state.Relics.Count(relic =>
+            relic.DefId == Run.RunConstants.RelicPumpkinCandle && relic.Counter > 0
+        );
         state.MaxEnergy += extraEnergy;
         // NOT through GainEnergy: this is part of turn one's RESET catching up with the
         // new maximum, not a `PlayerCmd.GainEnergy`, and the reset is a different path
@@ -819,12 +934,56 @@ public static class RelicEffects
             BuffSystem.Apply(enemy.Buffs, BuffId.Strength, 1);
         }
 
+        // `FurCoat.AfterCreatureAddedToCombat`: in a marked room the coat bites whatever
+        // joins, exactly as `BeforeCombatStart` bit the roster it opened on. Reinforcements
+        // are the reason the relic needs both hooks -- a Decimillipede that reattaches, or
+        // an egg that hatches, would otherwise arrive at full health in a fight where
+        // nothing else did.
+        BiteForFurCoat(state, enemy);
+
         return enemy;
+    }
+
+    /// <summary>
+    /// `CreatureCmd.SetCurrentHp(creature, 1m)` on a hittable enemy, in a Fur Coat room.
+    /// </summary>
+    /// <remarks>
+    /// `HittableEnemies` is the filter on both of the coat's hooks, so a creature that is
+    /// not a target yet -- a reviving corpse, a Steam Eruption remnant -- is passed over
+    /// rather than pinned at one hp while it is out of reach.
+    /// </remarks>
+    public static void BiteForFurCoat(CombatState state, EnemyState enemy)
+    {
+        if (state.FurCoatBites && EnemyAI.IsTargetable(enemy))
+        {
+            enemy.Hp = 1;
+        }
     }
 
     public static void ApplyStartOfPlayerTurn(CombatState state, Random? rng = null)
     {
         int turnNumber = state.Turn + 1;
+
+        // `ChoicesParadox.AfterPlayerTurnStart` on TURN ONE only: five distinct cards off
+        // the character's own pool, each granted Retain, and one of them is kept. Turn one
+        // reaches here through `CombatFactory` calling this straight after
+        // `ApplyCombatStart`, which is after the opening hand -- the same place the game's
+        // AfterPlayerTurnStart sits.
+        if (turnNumber == 1 && HasRelic(state, ChoicesParadox))
+        {
+            CardEffects.OpenChoicesParadoxOffer(state, ChoicesParadoxCards, rng);
+        }
+
+        // `MusicBox.BeforeSideTurnStart` clears its used flag -- the box is once a TURN,
+        // not once a combat.
+        // `ChainsOfBindingPower.BeforeSideTurnEnd` clears the played latch AND strips Bound
+        // off every card the player owns -- the affliction lasts the turn it was dealt in,
+        // so the next turn's draws are bound afresh rather than inheriting it.
+        state.BoundCardPlayedThisTurn = false;
+        state.BoundCardsThisTurn = 0;
+        CardEffects.ClearBoundCards(state);
+
+        state.MusicBoxUsedThisTurn = false;
 
         // Every "N cards played this turn" relic counts from zero again; the game resets
         // them in BeforeSideTurnStart, which is this same boundary.
@@ -1748,6 +1907,22 @@ public static class RelicEffects
             CardEffects.GainUnpoweredBlock(state, 4, rng);
         }
 
+        // `DiamondDiadem.BeforeSideTurnEnd`: two cards or fewer this turn and the owner
+        // gains the power. A turn that plays NOTHING qualifies -- the comparison is <=, so
+        // the relic pays best when it is doing the least.
+        if (
+            HasRelic(state, DiamondDiadem)
+            && state.CardsPlayedThisTurn <= DiamondDiademCardThreshold
+        )
+        {
+            // `PowerStackType.Single`: it is on or off, so a second grant is not a second
+            // stack. Two quiet turns in a row leave the same one power.
+            if (!BuffSystem.Has(state.PlayerBuffs, BuffId.DiamondDiadem))
+            {
+                BuffSystem.Apply(state.PlayerBuffs, BuffId.DiamondDiadem, 1);
+            }
+        }
+
         // `PaelsTears.BeforeSideTurnEnd` records whether energy was left over; the
         // turn-start half reads it and pays two. The counter IS that flag, written every
         // turn so a spendthrift turn clears what a thrifty one set.
@@ -1846,26 +2021,28 @@ public static class RelicEffects
     /// modelled and pinned by <c>LastingCandyTests</c> so the remaining work is the screen
     /// alone.
     /// </remarks>
-    public static readonly int[] UnmodelledInRun =
-    [
-        LastingCandy,
-        // `Driftwood.TryModifyRewardsLate` sets `CanReroll` on every CardReward. The run
-        // has no reroll at all -- not a missing relic effect but a missing ACTION, so
-        // wiring the flag would model a button the agent cannot press.
-        Driftwood,
-        // `DelicateFrond.BeforeCombatStart` fills every open potion slot off
-        // `Rng.CombatPotionGeneration`, one `CreateRandomPotionOutOfCombat` per slot.
-        // The draws are the problem: getting the COUNT wrong desyncs that stream for the
-        // rest of the run, and the run has no before-combat hook that both entry paths
-        // share to hang it on. Declared rather than guessed -- see E451 for what a
-        // wrong draw count costs.
-        DelicateFrond,
-        // `WhisperingEarring.AfterAutoPrePlayPhaseEnteredLate` auto-plays up to thirteen
-        // cards on turn one through the game's `VakuuCardSelector` -- an AI choosing the
-        // player's cards for them. Its +1 max energy IS modelled; only the auto-play is
-        // declared, because approximating a policy is worse than admitting there is one.
-        WhisperingEarring,
-    ];
+    /// <summary>
+    /// EMPTY, and the emptying is the point.
+    /// </summary>
+    /// <remarks>
+    /// Every relic in the game is now modelled. The list is kept rather than deleted
+    /// because its VALUE was never the entries -- it was the bar for adding one, and the
+    /// membership guard in `ActOneObtainableRelicTests` still enforces it. A relic that
+    /// cannot be modelled goes here with a written argument, and the guard turns red until
+    /// the argument is in the comment.
+    ///
+    /// The four that were here all left, and only one of the four reasons survived contact:
+    /// Fake Snecko Eye went when Confused arrived; Delicate Frond's blocker had gone STALE
+    /// (E485); Whispering Earring's was UNSOUND -- it called a first-in-order rule a policy
+    /// (E486); and Lasting Candy and Driftwood were held back by an action-space argument
+    /// that was real but overstated (E493). A fourth card-reward option does not renumber
+    /// the screen if it is APPENDED, and neither does a reroll.
+    ///
+    /// Which is the lesson worth keeping: a declared gap is an argument, and three of these
+    /// four arguments were wrong in a way that only re-reading them against the source
+    /// showed.
+    /// </remarks>
+    public static readonly int[] UnmodelledInRun = [];
 
     /// <summary>
     /// `LastingCandy.IsInTriggeringCombat`: `CombatsSeen > 0 &amp;&amp; CombatsSeen % 2 == 0`,

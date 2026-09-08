@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
+import re
 import sys
 import unittest
 
@@ -24,6 +25,9 @@ assert _SPEC.loader is not None
 combat_sweep = importlib.util.module_from_spec(_SPEC)
 sys.modules["combat_sweep"] = combat_sweep
 _SPEC.loader.exec_module(combat_sweep)
+
+sys.path.insert(0, str(_REPO / "scripts"))
+import buff_map  # noqa: E402 -- after the path insert above
 
 
 class SweepBuffMapTests(unittest.TestCase):
@@ -171,6 +175,183 @@ class SweepBuffMapTests(unittest.TestCase):
 
     def test_a_roster_length_mismatch_disagrees(self) -> None:
         live = [{"status": []}, {"status": []}]
+        emu = [{"status": []}]
+
+        agree, _ = combat_sweep.enemy_buff_sets(live, emu)
+        self.assertFalse(agree)
+
+
+class AliasedPowerTests(unittest.TestCase):
+    """Live powers the emulator models as their BASE power -- see E488.
+
+    The sweep used to resolve a live power against `BUFF_ID_TO_LIVE.values()` alone, which
+    holds one representative name per BuffId. Every aliased power failed that test and was
+    dropped, while the full-run replay resolved the same names correctly through
+    `canonical_power`. `SETUP_STRIKE_POWER` appears in ten of the thirty-two run-trace
+    fixtures, so this was a live blind spot on an ordinary Ironclad card.
+    """
+
+    TS = "TEMPORARY_STRENGTH_POWER"
+
+    @staticmethod
+    def _emu_of(*pairs: tuple[str, int]) -> dict[str, object]:
+        ordinal_of = {value: key for key, value in combat_sweep.BUFF_ID_TO_LIVE.items()}
+        return {"status": [{"id": ordinal_of[name], "amount": amount} for name, amount in pairs]}
+
+    def test_an_aliased_power_resolves_instead_of_being_reported_unmapped(self) -> None:
+        live = [{"status": [{"id": "SETUP_STRIKE_POWER", "amount": 2}]}]
+        emu = [self._emu_of((self.TS, 2))]
+
+        self.assertEqual(combat_sweep.enemy_buff_sets(live, emu), (True, []))
+
+    def test_two_aliases_of_one_buff_are_summed_not_matched_pairwise(self) -> None:
+        """Many-to-one: two live powers against ONE emulator buff of their total."""
+        live = [
+            {
+                "status": [
+                    {"id": "MANGLE_POWER", "amount": -2},
+                    {"id": "DARK_SHACKLES_POWER", "amount": -2},
+                ],
+            },
+        ]
+        emu = [self._emu_of((self.TS, -4))]
+
+        self.assertEqual(combat_sweep.enemy_buff_sets(live, emu), (True, []))
+
+    def test_a_wrong_total_across_two_aliases_still_disagrees(self) -> None:
+        """Summing must not turn the comparison into a rubber stamp."""
+        live = [
+            {
+                "status": [
+                    {"id": "MANGLE_POWER", "amount": -2},
+                    {"id": "DARK_SHACKLES_POWER", "amount": -2},
+                ],
+            },
+        ]
+        emu = [self._emu_of((self.TS, -3))]
+
+        agree, _ = combat_sweep.enemy_buff_sets(live, emu)
+        self.assertFalse(agree)
+
+    def test_aliases_that_cancel_to_zero_count_as_absent(self) -> None:
+        """The sum can reach zero with no contributor zero, and the emulator sheds it."""
+        live = [
+            {
+                "status": [
+                    {"id": "MANGLE_POWER", "amount": -2},
+                    {"id": "FLEX_POTION_POWER", "amount": 2},
+                ],
+            },
+        ]
+        emu = [{"status": []}]
+
+        self.assertEqual(combat_sweep.enemy_buff_sets(live, emu), (True, []))
+
+    def test_a_real_minus_one_is_not_mistaken_for_the_presence_sentinel(self) -> None:
+        """One point of Strength drain is `-1`, which is why the sentinel is a string."""
+        live = [{"status": [{"id": "STRENGTH_POWER", "amount": -1}]}]
+
+        self.assertEqual(
+            combat_sweep.enemy_buff_sets(live, [self._emu_of(("STRENGTH_POWER", -1))]),
+            (True, []),
+        )
+        agree, _ = combat_sweep.enemy_buff_sets(
+            live,
+            [self._emu_of(("STRENGTH_POWER", -2))],
+        )
+        self.assertFalse(agree)
+
+    def test_a_power_neither_harness_resolves_is_still_reported(self) -> None:
+        """Aliasing must not quietly absorb a power nobody has accounted for.
+
+        Deliberately a name that exists in NO bucket, rather than a real gap. It used to be
+        `REGEN_POWER`, which E490 then implemented -- and a test whose subject can be fixed
+        out from under it is testing the backlog rather than the mechanism. A future patch
+        adding a power should land here as an unmapped report, and that is what this asks.
+        """
+        live = [{"status": [{"id": "A_POWER_NO_PATCH_HAS_SHIPPED_POWER", "amount": 5}]}]
+        emu = [{"status": []}]
+
+        agree, unmapped = combat_sweep.enemy_buff_sets(live, emu)
+        self.assertTrue(agree)
+        self.assertEqual(unmapped, ["A_POWER_NO_PATCH_HAS_SHIPPED_POWER"])
+
+
+class DeclaredNoQuantityTests(unittest.TestCase):
+    """Powers that go QUIET with a reason, rather than being reported as unknown -- E489.
+
+    The distinction this pins is the whole point of the set. An unmapped power is a gap
+    nobody has looked at; a declared one has been looked at and found to have no comparable
+    quantity on this harness. Both are silent in the pass/fail sense, and only one of them
+    should be silent in the REPORT.
+    """
+
+    def test_thievery_and_heist_are_declared_rather_than_reported(self) -> None:
+        live = [
+            {
+                "status": [
+                    {"id": "THIEVERY_POWER", "amount": 20},
+                    {"id": "HEIST_POWER", "amount": 80},
+                ],
+            },
+        ]
+        emu = [{"status": []}]
+
+        agree, unmapped = combat_sweep.enemy_buff_sets(live, emu)
+        self.assertTrue(agree)
+        self.assertEqual(unmapped, [])
+
+    def test_the_declared_set_is_exactly_the_six_that_are_argued_for(self) -> None:
+        """Pinned by MEMBERSHIP, so a seventh cannot be parked here without an argument."""
+        self.assertEqual(
+            combat_sweep.DECLARED_NO_QUANTITY,
+            {
+                "THIEVERY_POWER",
+                "HEIST_POWER",
+                "GRAVITY_POWER",
+                "LEADERSHIP_POWER",
+                "MAGIC_BOMB_POWER",
+                "DIE_FOR_YOU_POWER",
+            },
+        )
+
+    def test_every_power_in_the_game_is_resolved_or_argued_for(self) -> None:
+        """The closing invariant -- see E490.
+
+        Each of the game's powers is in exactly one of three buckets: the buff map resolves
+        it, it is DECLARED with a written reason, or it is co-op content a solo run cannot
+        reach. A power that falls out of all three is a genuine unknown, and this is what
+        turns "we think we got them all" into something that fails when a patch adds one.
+        """
+        powers = {
+            re.sub(r"(?<!^)(?=[A-Z])", "_", path.stem).upper()
+            for path in (
+                _REPO / "decompiled" / "MegaCrit.Sts2.Core.Models.Powers"
+            ).glob("*.cs")
+        }
+        if not powers:  # pragma: no cover - the decompiled tree is gitignored
+            self.skipTest("decompiled sources not present")
+
+        resolved = set(buff_map.BUFF_ID_TO_LIVE.values()) | set(buff_map.LIVE_ALIASES)
+        unaccounted = (
+            powers
+            - resolved
+            - combat_sweep.DECLARED_NO_QUANTITY
+            - combat_sweep.COOP_ONLY_POWERS
+        )
+
+        self.assertEqual(unaccounted, set())
+
+    def test_a_declared_power_does_not_mask_a_real_one_beside_it(self) -> None:
+        """Declaring one power must not make the whole creature stop being compared."""
+        live = [
+            {
+                "status": [
+                    {"id": "THIEVERY_POWER", "amount": 20},
+                    {"id": "STRENGTH_POWER", "amount": 3},
+                ],
+            },
+        ]
         emu = [{"status": []}]
 
         agree, _ = combat_sweep.enemy_buff_sets(live, emu)

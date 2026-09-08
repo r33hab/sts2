@@ -797,9 +797,18 @@ public static class CombatFactory
 
             ActOneEncounter.FossilStalker => [CreateFossilStalker(rng)],
 
+            // `StartsWithFastPunch` is set in exactly ONE place in the game --
+            // `PunchOffEventEncounter` -- and it defaults false everywhere else. So an
+            // ordinary Punch Construct opens on READY_MOVE, a DefendIntent for 10 block,
+            // and the loop is READY -> FAST_PUNCH -> STRONG_PUNCH.
+            //
+            // The emulator COIN-FLIPPED it, which is why this only failed on one seed in
+            // three: half the time the flip happened to agree. The live capture opened on
+            // Defend where the emulator opened on a 10-damage Fast Punch and landed a Frail
+            // the game never applied. It also spent a draw the game does not.
             ActOneEncounter.PunchConstruct =>
             [
-                CreatePunchConstruct(rng, startsWithFastPunch: rng.Next(2) == 0),
+                CreatePunchConstruct(rng, startsWithFastPunch: false),
             ],
 
             ActOneEncounter.SewerClam => [CreateSewerClam(rng)],
@@ -1945,7 +1954,10 @@ public static class CombatFactory
         // it pays no fatal bonus: Feed, Hand of Greed and The Hunt all gate on
         // `ShouldOwnerDeathTriggerFatal`, which MinionPower answers false. E459 was this
         // same marker missing on an illusion.
-        if (enemy.DefId == KE.TorchHeadAmalgam)
+        // `KinFollower.AfterAddedToRoom` applies the same marker. Both followers carry it
+        // from the moment the fight is built, so killing one pays no fatal bonus -- the Kin
+        // is a three-creature fight where only the PRIEST is worth a Feed.
+        if (enemy.DefId is KE.TorchHeadAmalgam or KE.KinFollower)
         {
             BuffSystem.Apply(enemy.Buffs, BuffId.Minion, 1);
         }

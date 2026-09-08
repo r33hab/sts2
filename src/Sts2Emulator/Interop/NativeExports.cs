@@ -53,6 +53,11 @@ public static class NativeExports
             Seed = seed;
             Rng = new CountingRandom(seed);
             CombatFactory.Reset(State, Rng);
+            // Every build in this class is followed by the pre-play phase, because every
+            // one of them is followed by a `WriteObs` -- and an observation taken before
+            // the cards that play themselves have played is a hand the agent will not get
+            // to act on. See `CombatEngine.ResolvePrePlayPhase`.
+            CombatEngine.ResolvePrePlayPhase(State, Rng);
         }
 
         /// <summary>
@@ -104,18 +109,21 @@ public static class NativeExports
         {
             SeedStreams();
             CombatFactory.Reset(State, Rng);
+            CombatEngine.ResolvePrePlayPhase(State, Rng);
         }
 
         public void Reset(ReadOnlySpan<int> deckIds)
         {
             SeedStreams();
             CombatFactory.Reset(State, Rng, deckIds);
+            CombatEngine.ResolvePrePlayPhase(State, Rng);
         }
 
         public void Reset(ReadOnlySpan<int> deckIds, int encounterId)
         {
             SeedStreams();
             CombatFactory.Reset(State, Rng, deckIds, encounterId);
+            CombatEngine.ResolvePrePlayPhase(State, Rng);
         }
 
         // Same as above plus the run's TotalFloor, which is the missing term in the
@@ -147,18 +155,21 @@ public static class NativeExports
                 completedCombatRooms,
                 encounterRngSeed
             );
+            CombatEngine.ResolvePrePlayPhase(State, Rng);
         }
 
         public void Reset(ReadOnlySpan<int> deckIds, int encounterId, int completedCombatRooms)
         {
             SeedStreams();
             CombatFactory.Reset(State, Rng, deckIds, encounterId, completedCombatRooms);
+            CombatEngine.ResolvePrePlayPhase(State, Rng);
         }
 
         public void Reset(ReadOnlySpan<int> deckIds, int encounterId, ReadOnlySpan<int> relicIds)
         {
             SeedStreams();
             CombatFactory.Reset(State, Rng, deckIds, encounterId, relicIds);
+            CombatEngine.ResolvePrePlayPhase(State, Rng);
         }
 
         /// <summary>
@@ -240,6 +251,7 @@ public static class NativeExports
                 aiRng: null,
                 completedCombatRoomsBeforeCurrent: completedCombatRooms
             );
+            CombatEngine.ResolvePrePlayPhase(State, Rng);
         }
     }
 

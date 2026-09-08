@@ -26,26 +26,33 @@ FIXTURES = REPO / "tests" / "fixtures" / "run_trace"
 REPLAY = REPO / "scripts" / "replay_full_run_trace.py"
 
 # fixture stem -> the field its first divergence appears in, and what it is.
+#
+# `P5E6EWCMDW-a8-stonehumidifier` used to live here as "SMOGGY_POWER: the Stone Humidifier's
+# power is not modelled". It WAS modelled; what was wrong is that the emulator removed the
+# POWER at the start of the player's turn, immediately after the enemy phase that applied it,
+# so it evaporated before a card could be played under it. See E480. This entry is retired
+# rather than reworded -- the trace matches.
 KNOWN_DIVERGENCES = {
-    "P5E6EWCMDW-a8-stonehumidifier": (
-        "player.status",
-        "SMOGGY_POWER: the Stone Humidifier's power is not modelled",
-    ),
+    # NOT an emulator gap -- a CAPTURE RACE, and the emulator has the game's own behaviour.
+    # `CreatureCmd.Kill` calls `RemoveAllPowersAfterDeath`, which keeps only powers that
+    # override `ShouldPowerBeRemovedAfterOwnerDeath` or are spared by
+    # `Hook.ShouldPowerBeRemovedOnDeath`; `CrimsonMantlePower` overrides neither, so the
+    # game clears it on death exactly as the emulator does. Nine other fixtures die holding
+    # powers -- Frail, Vulnerable, Dexterity, Strength, Constrict, Smoggy, Setup Strike --
+    # and every one of them shows an EMPTY status at game_over.
+    #
+    # Proven rather than argued: re-capturing this seed with `--neow-option 2` reached the
+    # same death, `end_turn` while holding CRIMSON_MANTLE_POWER at 8, and that capture's
+    # game_over cleared it. Same situation, opposite result, so the retained power is
+    # non-deterministic. This is H14's category -- a snapshot taken mid-resolution.
+    #
+    # Kept rather than re-recorded: the fixture is 148 steps of otherwise-correct ground
+    # truth, and the replacement run desynced at 51. Trading 97 steps of coverage to tidy a
+    # cosmetic artifact in the final frame is the wrong way round. See E491.
     "XTLVVPKFBF-a8-heftytablet": (
         "player.status",
-        "CRIMSON_MANTLE_POWER at step 147 -- the emulator holds no mantle there",
-    ),
-    "7WGQ2VNJ4M-a8-buff400": (
-        "player.potions",
-        "the emulator keeps a POTION_SHAPED_ROCK the run does not have",
-    ),
-    "DPUJR117FL-a8": (
-        "player.potions",
-        "the emulator keeps a FAIRY_IN_A_BOTTLE the run has already spent",
-    ),
-    "8QKMNR4T2W-a8-buff200": (
-        "player.potions",
-        "the run gains a FIRE_POTION the emulator does not",
+        "CRIMSON_MANTLE_POWER at step 147 -- the CAPTURE kept a power the game's own "
+        "death path removes; the emulator is right and the frame is mid-resolution (E491)",
     ),
 }
 

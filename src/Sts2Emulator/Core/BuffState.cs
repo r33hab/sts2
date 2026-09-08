@@ -814,6 +814,80 @@ public enum BuffId
     /// `HeistGold`.
     /// </summary>
     Swipe,
+
+    /// <summary>
+    /// `DiamondDiademPower`: halves POWERED attack damage its owner receives, and
+    /// `AfterSideTurnEnd` removes it when the ENEMY side's turn ends -- so it covers
+    /// exactly the one enemy turn that follows the player turn that earned it.
+    /// </summary>
+    DiamondDiadem,
+
+    /// <summary>
+    /// `RingingPower`, from the Ceremonial Beast's BEAST_CRY. Every card the player holds
+    /// is afflicted with Ringing, and a Ringing card may only be played while NOTHING has
+    /// been played this turn -- so the cry costs the player every card after their first.
+    /// Removed at the end of the Beast's own side turn, which clears the afflictions with it.
+    /// </summary>
+    Ringing,
+
+    /// <summary>
+    /// `ClarityPower` (the Clarity POTION, 3): one extra card at the start of each of the
+    /// owner's next N turns. Distinct from `DrawCardsNextTurnPower` "due to its stacking
+    /// behavior", as the game's own remark puts it -- this is a Counter that pays one card
+    /// per turn and decrements, not a pile of cards owed to one turn.
+    /// </summary>
+    Clarity,
+
+    /// <summary>
+    /// `DemisePower` (the Powdered Demise POTION, 9), a DEBUFF on one enemy: at the end of
+    /// that enemy's own side turn it takes N `Unblockable | Unpowered` damage.
+    /// </summary>
+    /// <remarks>
+    /// It never decrements and never removes itself -- the game's power has no
+    /// `Decrement` or `Remove` at all, so nine a turn runs for the whole fight. Worth
+    /// stating because every other damage-over-time power here winds down.
+    /// </remarks>
+    Demise,
+
+    /// <summary>
+    /// `DuplicationPower` (the Duplicator POTION, 1): the next N cards are played an extra
+    /// time, decrementing per card, and whatever is left is removed at the owner's turn end.
+    /// </summary>
+    /// <remarks>
+    /// ANY card. This is NOT <see cref="OneTwoPunch" />, which is the game's separate
+    /// `OneTwoPunchPower` and refuses anything that is not an Attack. The emulator used to
+    /// stack OneTwoPunch for the Duplicator, so a Duplicator spent on a Skill or a Power
+    /// did nothing here and doubled it in the game -- see E490.
+    /// </remarks>
+    Duplication,
+
+    /// <summary>
+    /// `GigantificationPower` (the Gigantification POTION, 1): the next powered ATTACK card
+    /// deals TRIPLE damage.
+    /// </summary>
+    /// <remarks>
+    /// `ModifyDamageMultiplicative` returns 3, not +2 -- a multiplier, so it lands after
+    /// every additive contribution. The game latches the first attack COMMAND it sees in
+    /// `BeforeAttack` and triples only that card, which is what stops a multi-hit attack
+    /// from being tripled once per hit.
+    /// </remarks>
+    Gigantification,
+
+    /// <summary>
+    /// `RadiancePower` (the Radiant Tincture POTION, 3): +1 energy for each of the owner's
+    /// next N turns, paid in `AfterEnergyReset` and decremented there.
+    /// </summary>
+    /// <remarks>
+    /// AFTER the reset, so it adds to the fresh bar rather than raising the maximum -- a
+    /// relic that changes max energy and this power are not the same quantity.
+    /// </remarks>
+    Radiance,
+
+    /// <summary>
+    /// `RegenPower` (the Regen POTION, 5): heals N at the end of the owner's side turn and
+    /// then decrements, so a 5 pays 5+4+3+2+1 and stops.
+    /// </summary>
+    Regen,
 }
 
 public record struct BuffState(BuffId Id, int Magnitude);
