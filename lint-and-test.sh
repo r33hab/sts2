@@ -59,8 +59,10 @@ fi
 # The powers ledger: every claim the emulator makes about a power's behaviour, checked
 # against the digest of the source it was read from. Fails when a power has changed.
 "$UV" run python scripts/audit_powers.py
-"$UV" run python scripts/train.py --check --run-env
-"$UV" run python scripts/evaluate.py --episodes 2 --run-env --policy first-valid --max-episode-steps 20
+
+# `rl/`, not `scripts/`: origin moved the agent-facing scripts into their own directory.
+"$UV" run python rl/train.py --check --run-env
+"$UV" run python rl/evaluate.py --episodes 2 --run-env --policy first-valid --max-episode-steps 20
 
 # Test the emulator
 "$DOTNET" test src/Sts2Emulator.Tests/Sts2Emulator.Tests.csproj --nologo

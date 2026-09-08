@@ -18,8 +18,8 @@ that a design document cannot answer:
               under that; a design holding a handle per tree node does not. Worth
               measuring rather than assuming.
 
-    uv run python scripts/mcts_probe.py
-    uv run python scripts/mcts_probe.py --sims 200 --section search
+    uv run python rl/mcts_probe.py
+    uv run python rl/mcts_probe.py --sims 200 --section search
 """
 
 from __future__ import annotations
