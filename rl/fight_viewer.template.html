@@ -1,0 +1,563 @@
+<title>Combat Trace Stepper</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=Spectral:ital,wght@0,500;0,600;1,400&display=swap">
+<style>
+  :root {
+    --ground: #eef0f3;
+    --panel: #f8f9fb;
+    --sunken: #e3e6ec;
+    --line: #cfd4de;
+    --line-soft: #dfe3ea;
+    --ink: #1b1f28;
+    --ink-mid: #4c5464;
+    --ink-dim: #767f91;
+    --blood: #b03a3a;
+    --model: #2f7d92;
+    --model-soft: #d3e3e8;
+    --death: #7d2438;
+    --live: #4a7c59;
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
+    --sans: "IBM Plex Sans", system-ui, sans-serif;
+    --serif: Spectral, Georgia, serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #16181f;
+      --panel: #1d2029;
+      --sunken: #12141a;
+      --line: #333846;
+      --line-soft: #272b36;
+      --ink: #e6e9ef;
+      --ink-mid: #a4acbc;
+      --ink-dim: #737b8b;
+      --blood: #d96b6b;
+      --model: #5fb3c9;
+      --model-soft: #16323a;
+      --death: #d4607a;
+      --live: #6faa80;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #16181f;
+    --panel: #1d2029;
+    --sunken: #12141a;
+    --line: #333846;
+    --line-soft: #272b36;
+    --ink: #e6e9ef;
+    --ink-mid: #a4acbc;
+    --ink-dim: #737b8b;
+    --blood: #d96b6b;
+    --model: #5fb3c9;
+    --model-soft: #16323a;
+    --death: #d4607a;
+    --live: #6faa80;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font-family: var(--sans); font-size: 14px; line-height: 1.5;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 22px 20px 48px; }
+  [hidden] { display: none !important; }
+
+  header.masthead {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 18px;
+    padding-bottom: 14px; margin-bottom: 18px; border-bottom: 2px solid var(--ink);
+  }
+  h1 {
+    font-family: var(--serif); font-weight: 600; font-size: 27px;
+    margin: 0; letter-spacing: -.01em; text-wrap: balance;
+  }
+  h1 em { font-style: italic; color: var(--blood); }
+  .meta { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-left: auto; }
+  .meta span { font-family: var(--mono); font-size: 11.5px; color: var(--ink-mid); }
+  .meta b { color: var(--ink); font-weight: 500; }
+  .lede { max-width: 66ch; color: var(--ink-mid); margin: 0 0 18px; }
+  .lede b { color: var(--ink); font-weight: 500; }
+
+  button.link {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+    background: none; border: 0; border-bottom: 1px solid var(--line);
+    color: var(--ink-mid); cursor: pointer; padding: 2px 0;
+  }
+  button.link:hover { color: var(--ink); border-color: var(--ink); }
+
+  /* ---------- index ---------- */
+  .sorts { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; margin-bottom: 10px; }
+  .sorts .cap { font-family: var(--mono); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-dim); margin-right: 4px; }
+  .sortbtn {
+    font-family: var(--mono); font-size: 11px; padding: 2px 9px; cursor: pointer;
+    background: none; border: 1px solid var(--line); color: var(--ink-mid);
+  }
+  .sortbtn[aria-pressed="true"] { background: var(--ink); color: var(--ground); border-color: var(--ink); }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(288px, 1fr)); gap: 12px; }
+  .fightcard {
+    display: flex; flex-direction: column; gap: 8px; text-align: left;
+    padding: 12px 13px; background: var(--panel);
+    border: 1px solid var(--line-soft); border-left: 3px solid var(--live);
+    font: inherit; color: inherit; cursor: pointer;
+  }
+  .fightcard.died { border-left-color: var(--death); }
+  .fightcard:hover { border-color: var(--ink-dim); }
+  .fc-top { display: flex; align-items: baseline; gap: 8px; }
+  .fc-name { font-family: var(--serif); font-size: 16px; font-weight: 600; }
+  .fc-seed { font-family: var(--mono); font-size: 10.5px; color: var(--ink-dim); margin-left: auto; }
+  .fc-out { font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; }
+  .fc-out.won { color: var(--live); }
+  .fc-out.died { color: var(--death); }
+  .spark { display: block; width: 100%; height: 42px; }
+  .fc-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .stat .k { font-family: var(--mono); font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-dim); display: block; }
+  .stat .v { font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .stat .v.err { color: var(--blood); }
+  .stat .v.sm { font-size: 11.5px; color: var(--ink-mid); }
+  .fc-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .chip {
+    font-family: var(--mono); font-size: 10px; padding: 0 6px;
+    border: 1px solid var(--line); color: var(--ink-mid);
+  }
+  .chip.relic { border-color: var(--blood); color: var(--blood); }
+
+  /* ---------- detail ---------- */
+  .crumb { display: flex; align-items: baseline; gap: 14px; margin-bottom: 14px; }
+  .outcome {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22px;
+    padding: 10px 14px; margin-bottom: 18px;
+    background: var(--panel); border: 1px solid var(--line-soft); border-left: 3px solid var(--blood);
+  }
+  .verdict { font-family: var(--mono); font-size: 12px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; }
+  .verdict.won { color: var(--live); }
+  .verdict.died { color: var(--death); }
+  .outcome .note { color: var(--ink-mid); font-size: 12.5px; }
+
+  .cols { display: grid; grid-template-columns: 232px minmax(0, 1fr); gap: 20px; align-items: start; }
+  @media (max-width: 860px) { .cols { grid-template-columns: 1fr; } }
+  @media (min-width: 861px) {
+    .rail { position: sticky; top: 14px; }
+    .steps { max-height: 68vh; }
+  }
+  .rail h2, .panel h2 {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+    letter-spacing: .13em; text-transform: uppercase; color: var(--ink-dim); margin: 0 0 8px;
+  }
+  .steps { display: flex; flex-direction: column; gap: 1px; max-height: 340px; overflow-y: auto; }
+  .steprow {
+    display: grid; grid-template-columns: 26px 1fr 40px; align-items: center; gap: 8px;
+    padding: 5px 7px; border: 0; background: none; color: var(--ink-mid);
+    font: inherit; text-align: left; cursor: pointer; border-left: 2px solid transparent;
+  }
+  .steprow:hover { background: var(--panel); }
+  .steprow[aria-current="true"] { background: var(--panel); border-left-color: var(--blood); color: var(--ink); }
+  .steprow .n { font-family: var(--mono); font-size: 11px; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+  .steprow .act { font-family: var(--serif); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .steprow .act.turn { font-family: var(--mono); font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-dim); }
+  .steprow .hp { font-family: var(--mono); font-size: 11px; text-align: right; font-variant-numeric: tabular-nums; }
+  .keys { margin-top: 10px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-dim); }
+  kbd { font-family: var(--mono); font-size: 10px; padding: 0 4px; border: 1px solid var(--line); background: var(--panel); }
+
+  .panel { background: var(--panel); border: 1px solid var(--line-soft); padding: 14px 16px; margin-bottom: 14px; }
+  .board { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; }
+  @media (max-width: 700px) { .board { grid-template-columns: 1fr; } }
+  .statline { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+  .big { font-family: var(--mono); font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .of { font-family: var(--mono); font-size: 12px; color: var(--ink-dim); }
+  .bar { height: 7px; background: var(--sunken); overflow: hidden; display: flex; }
+  .bar i { display: block; height: 100%; }
+  .bar .fill { background: var(--blood); }
+  .bar .blk { background: var(--model); }
+  .side { display: flex; gap: 14px; margin-top: 8px; font-family: var(--mono); font-size: 11.5px; color: var(--ink-mid); }
+  .side b { color: var(--ink); font-weight: 500; }
+  .enemy { padding: 7px 0; border-top: 1px solid var(--line-soft); }
+  .enemy:first-of-type { border-top: 0; }
+  .enemy .top { display: flex; align-items: baseline; gap: 8px; }
+  .enemy .nm { font-family: var(--serif); font-size: 14px; }
+  .enemy .slot { font-family: var(--mono); font-size: 10px; color: var(--ink-dim); }
+  .enemy .num { margin-left: auto; font-family: var(--mono); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .enemy .intent { font-family: var(--mono); font-size: 11px; color: var(--blood); }
+  .buffs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+  .buff { font-family: var(--mono); font-size: 10.5px; padding: 0 5px; background: var(--sunken); color: var(--ink-mid); }
+  .empty { font-family: var(--mono); font-size: 11px; color: var(--ink-dim); }
+
+  .piles { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
+  .pile h3 {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 600; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-dim); margin: 0 0 5px;
+    display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap;
+  }
+  .pile h3 .ct { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .pile ol, .pile ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 1px; }
+  .card { font-family: var(--serif); font-size: 13px; display: flex; gap: 6px; align-items: baseline; }
+  .card .ix { font-family: var(--mono); font-size: 10px; color: var(--ink-dim); min-width: 12px; }
+  .card.up::after { content: "+"; color: var(--blood); font-family: var(--mono); }
+  .withheld { font-family: var(--mono); font-size: 10px; color: var(--ink-dim); }
+
+  .modelpanel { border-left: 3px solid var(--model); }
+  .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; }
+  @media (max-width: 700px) { .split { grid-template-columns: 1fr; } }
+  .rows { display: flex; flex-direction: column; gap: 3px; }
+  .row { display: grid; grid-template-columns: 26px minmax(84px, 150px) 1fr 46px; gap: 8px; align-items: center; }
+  .row .lbl { font-family: var(--serif); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .lbl.dim { color: var(--ink-dim); text-decoration: line-through; }
+  .row .ix { font-family: var(--mono); font-size: 10.5px; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+  .track { height: 9px; background: var(--sunken); }
+  .track i { display: block; height: 100%; background: var(--model); }
+  .row.picked .track i { background: var(--blood); }
+  .row.picked .lbl { font-weight: 600; }
+  .row .val { font-family: var(--mono); font-size: 11px; color: var(--ink-mid); text-align: right; font-variant-numeric: tabular-nums; }
+  .pdfrow { display: grid; grid-template-columns: 58px 1fr 44px; gap: 8px; align-items: center; }
+  .pdfrow .k { font-family: var(--mono); font-size: 11px; color: var(--ink-mid); text-align: right; font-variant-numeric: tabular-nums; }
+  .pdfrow.dead .k { color: var(--death); font-weight: 600; }
+  .pdfrow.dead .track i { background: var(--death); }
+  .pdfrow.actual .k { color: var(--ink); font-weight: 600; }
+  .pdfrow.actual .track { outline: 1px solid var(--ink); outline-offset: 1px; }
+  .pdfrow .val { font-family: var(--mono); font-size: 11px; color: var(--ink-mid); text-align: right; font-variant-numeric: tabular-nums; }
+  .legend { font-family: var(--mono); font-size: 10.5px; color: var(--ink-dim); margin-top: 8px; }
+  .selbanner {
+    font-family: var(--mono); font-size: 11px; padding: 5px 9px; margin-bottom: 10px;
+    background: var(--model-soft); color: var(--ink); border-left: 2px solid var(--model);
+  }
+  footer { margin-top: 22px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-dim); line-height: 1.7; max-width: 92ch; }
+  :focus-visible { outline: 2px solid var(--model); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <!-- ============ index ============ -->
+  <section id="indexview">
+    <header class="masthead">
+      <h1>Combat traces &mdash; <em>Act 1</em></h1>
+      <div class="meta" id="imeta"></div>
+    </header>
+    <p class="lede" id="ilede"></p>
+    <div class="sorts" id="sorts">
+      <span class="cap">order by</span>
+      <button class="sortbtn" type="button" data-sort="error" aria-pressed="true">prediction error</button>
+      <button class="sortbtn" type="button" data-sort="hp">HP lost</button>
+      <button class="sortbtn" type="button" data-sort="encounter">encounter</button>
+      <button class="sortbtn" type="button" data-sort="length">length</button>
+      <button class="sortbtn" type="button" data-sort="player">player</button>
+    </div>
+    <div class="grid" id="grid"></div>
+    <footer id="ifoot"></footer>
+  </section>
+
+  <!-- ============ detail ============ -->
+  <section id="detailview" hidden>
+    <div class="crumb">
+      <button class="link" type="button" id="back">&larr; all fights</button>
+      <span class="withheld" id="pos"></span>
+    </div>
+    <header class="masthead">
+      <h1>Combat trace &mdash; <em id="enc"></em></h1>
+      <div class="meta" id="dmeta"></div>
+    </header>
+    <div class="outcome">
+      <span class="verdict" id="verdict"></span>
+      <span class="note" id="outnote"></span>
+      <div class="fc-chips" id="relics"></div>
+    </div>
+    <div class="cols">
+      <div class="rail">
+        <h2>Positions</h2>
+        <div class="steps" id="steps"></div>
+        <div class="keys"><kbd>&larr;</kbd> <kbd>&rarr;</kbd> step &nbsp; <kbd>Esc</kbd> back</div>
+      </div>
+      <div>
+        <div class="panel">
+          <h2>Board</h2>
+          <div id="selbanner"></div>
+          <div class="board">
+            <div>
+              <div class="statline"><span class="big" id="php"></span><span class="of" id="pmax"></span></div>
+              <div class="bar" id="phpbar"></div>
+              <div class="side" id="pside"></div>
+              <div class="buffs" id="pbuffs"></div>
+            </div>
+            <div id="enemies"></div>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Piles</h2>
+          <div class="piles" id="piles"></div>
+        </div>
+        <div class="panel modelpanel">
+          <h2>Search &amp; prediction</h2>
+          <div class="split">
+            <div>
+              <h2>Visit share</h2>
+              <div class="rows" id="actions"></div>
+              <div class="legend" id="actlegend"></div>
+            </div>
+            <div>
+              <h2>Predicted end HP</h2>
+              <div class="rows" id="pdf"></div>
+              <div class="legend" id="pdflegend"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <footer id="dfoot"></footer>
+  </section>
+</div>
+
+<script id="fight-data" type="application/json">"__FIGHT_DATA__"</script>
+<script>
+  const DATA = JSON.parse(document.getElementById("fight-data").textContent);
+  const M = DATA.meta;
+  const FIGHTS = DATA.fights;
+  const $ = (id) => document.getElementById(id);
+  const pct = (x) => (100 * x).toFixed(1) + "%";
+  const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+  /* ---------------- index ---------------- */
+  const PLAYER_NAMES = { rollout: "tempo rollout", net: "value head" };
+  const playerOf = (f) => PLAYER_NAMES[f.player] || f.player || "search";
+  const PLAYER = PLAYER_NAMES[M.player] || (M.player === "both" ? "both" : M.player) || "search";
+  $("imeta").innerHTML = [
+    ["fights", FIGHTS.length], ["played by", PLAYER],
+    ["sims/move", M.sims], ["c", M.c], ["ascension", "A" + M.ascension],
+  ].map(([k, v]) => `<span>${k} <b>${v}</b></span>`).join("");
+
+  const died = FIGHTS.filter((f) => !f.won).length;
+  const errs = FIGHTS.map((f) => f.error_first).filter((e) => e != null);
+  $("ilede").innerHTML =
+    `${FIGHTS.length} Act 1 fights played by the determinized search, ` +
+    `<b>${FIGHTS.length - died} survived</b> and <b>${died} died</b>. ` +
+    (errs.length
+      ? `Ordered by how far the value head's opening prediction landed from the real ` +
+        `outcome &mdash; mean <b>${(errs.reduce((a, b) => a + b, 0) / errs.length).toFixed(1)} HP</b>, ` +
+        `worst <b>${Math.max(...errs).toFixed(1)} HP</b>. The badly-called fights are the ones ` +
+        `worth opening: a fight the model got right shows nothing.`
+      : `No checkpoint was loaded, so there are no predictions to compare.`);
+
+  /* HP trajectory sparkline: area fill, a faint baseline at the starting HP, and an
+     emphasised endpoint coloured by outcome. Drawn to the fight's own max HP so two
+     cards are comparable. */
+  function spark(f) {
+    const t = f.hp_track, n = t.length;
+    if (n < 2) return "";
+    const W = 260, H = 42, pad = 3;
+    const x = (i) => pad + i * (W - 2 * pad) / (n - 1);
+    const y = (hp) => pad + (1 - hp / f.max_hp) * (H - 2 * pad);
+    const pts = t.map((hp, i) => `${x(i).toFixed(1)},${y(hp).toFixed(1)}`).join(" ");
+    const area = `${pad},${H - pad} ${pts} ${(W - pad).toFixed(1)},${H - pad}`;
+    const stroke = f.won ? "var(--live)" : "var(--death)";
+    return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+      <line x1="${pad}" y1="${y(t[0]).toFixed(1)}" x2="${W - pad}" y2="${y(t[0]).toFixed(1)}"
+            stroke="var(--line)" stroke-width="1" stroke-dasharray="2 3" fill="none"/>
+      <polygon points="${area}" fill="${stroke}" fill-opacity=".13"/>
+      <polyline points="${pts}" fill="none" stroke="${stroke}" stroke-width="1.6"/>
+      <circle cx="${x(n - 1).toFixed(1)}" cy="${y(t[n - 1]).toFixed(1)}" r="2.6" fill="${stroke}"/>
+    </svg>`;
+  }
+
+  function card(f) {
+    const lost = f.hp_track[0] - f.end_hp;
+    const pred = f.predicted_first;
+    return `<button class="fightcard${f.won ? "" : " died"}" type="button" data-id="${f.id}">
+      <div class="fc-top">
+        <span class="fc-name">${esc(f.encounter)}</span>
+        <span class="fc-seed">seed ${f.seed}${f.player ? " &middot; " + playerOf(f) : ""}</span>
+      </div>
+      <span class="fc-out ${f.won ? "won" : "died"}">${f.won ? "survived &middot; " + f.end_hp + " HP" : "died"}</span>
+      ${spark(f)}
+      <div class="fc-stats">
+        <span class="stat"><span class="k">HP lost</span><span class="v">${lost}</span></span>
+        <span class="stat"><span class="k">predicted</span><span class="v sm">${pred == null ? "&mdash;" : pred.toFixed(1)}</span></span>
+        <span class="stat"><span class="k">off by</span><span class="v err">${f.error_first == null ? "&mdash;" : f.error_first.toFixed(1)}</span></span>
+      </div>
+      <div class="fc-chips">
+        <span class="chip">${f.deck.length} cards</span>
+        <span class="chip">${f.steps.length} positions</span>
+        ${f.p_death_first != null ? `<span class="chip">P(death) ${f.p_death_first.toFixed(2)}</span>` : ""}
+        ${f.relics.slice(0, 2).map((r) => `<span class="chip relic">${esc(r)}</span>`).join("")}
+        ${f.relics.length > 2 ? `<span class="chip relic">+${f.relics.length - 2}</span>` : ""}
+      </div>
+    </button>`;
+  }
+
+  const SORTS = {
+    error: (a, b) => (b.error_first || 0) - (a.error_first || 0),
+    hp: (a, b) => (b.hp_track[0] - b.end_hp) - (a.hp_track[0] - a.end_hp),
+    encounter: (a, b) => a.encounter.localeCompare(b.encounter) || a.seed - b.seed
+      || String(a.player).localeCompare(String(b.player)),
+    player: (a, b) => String(a.player).localeCompare(String(b.player))
+      || a.encounter.localeCompare(b.encounter) || a.seed - b.seed,
+    length: (a, b) => b.steps.length - a.steps.length,
+  };
+
+  function renderIndex(key) {
+    [...$("sorts").querySelectorAll(".sortbtn")].forEach((b) =>
+      b.setAttribute("aria-pressed", b.dataset.sort === key ? "true" : "false"));
+    $("grid").innerHTML = [...FIGHTS].sort(SORTS[key]).map(card).join("");
+    [...$("grid").children].forEach((el) =>
+      el.addEventListener("click", () => openFight(Number(el.dataset.id))));
+  }
+  $("sorts").addEventListener("click", (e) => {
+    const b = e.target.closest(".sortbtn");
+    if (b) renderIndex(b.dataset.sort);
+  });
+
+  const HELD_OUT = (M.seed_base ?? 0) >= 400;
+  $("ifoot").innerHTML =
+    `Every fight is a starter Ironclad deck plus 2&ndash;8 random pool cards and 0&ndash;5 random ` +
+    `relics on top of Burning Blood, all drawn from the fight's own seed &mdash; so a seed names ` +
+    `one fight completely and any of these can be replayed on its own.<br>` +
+    (HELD_OUT
+      ? `Seeds ${M.seed_base}+ are <b>held out</b>: the network trained on seeds 0&ndash;399 of ` +
+        `these encounters, so the predictions here are on decks it has never been fitted to.`
+      : `<b>These seeds are inside the training range</b> (0&ndash;399), so the predictions are ` +
+        `in-sample and the errors read better than they should.`);
+
+  /* ---------------- detail ---------------- */
+  let F = null, current = 0;
+
+  function cardList(cards, ordered) {
+    if (!cards.length) return `<div class="empty">empty</div>`;
+    const tag = ordered ? "ol" : "ul";
+    return `<${tag}>` + cards.map((c, i) =>
+      `<li class="card${c.upgraded ? " up" : ""}">` +
+      (ordered ? `<span class="ix">${i}</span>` : "") +
+      `<span>${esc(c.name)}</span></li>`).join("") + `</${tag}>`;
+  }
+
+  function openFight(id) {
+    F = FIGHTS.find((f) => f.id === id);
+    $("indexview").hidden = true;
+    $("detailview").hidden = false;
+    window.scrollTo(0, 0);
+
+    $("enc").textContent = F.encounter;
+    $("pos").textContent = `fight ${FIGHTS.indexOf(F) + 1} of ${FIGHTS.length}`;
+    $("dmeta").innerHTML = [
+      ["seed", F.seed], ["played by", playerOf(F)], ["sims/move", M.sims], ["c", M.c],
+      ["deck", F.deck.length + " cards"], ["relics", F.relics.length],
+    ].map(([k, v]) => `<span>${k} <b>${v}</b></span>`).join("");
+    $("verdict").textContent = F.won ? "Survived" : "Died";
+    $("verdict").className = "verdict " + (F.won ? "won" : "died");
+    $("outnote").innerHTML = (F.won
+      ? `ended at ${F.end_hp} of ${F.max_hp} HP after ${F.steps.length} positions`
+      : `killed after ${F.steps.length} positions`) +
+      (F.predicted_first != null
+        ? ` &mdash; the value head opened predicting <b>${F.predicted_first.toFixed(1)} HP</b>`
+        : "");
+    $("relics").innerHTML = F.relics.map((r) => `<span class="chip relic">${esc(r)}</span>`).join("");
+
+    const rail = $("steps");
+    rail.innerHTML = F.steps.map((s, i) => {
+      const isEnd = s.chosen_label === "end turn";
+      return `<button class="steprow" type="button" data-i="${i}">` +
+        `<span class="n">${i}</span>` +
+        `<span class="act${isEnd ? " turn" : ""}">${isEnd ? "&mdash; end turn &mdash;" : esc(s.chosen_label)}</span>` +
+        `<span class="hp">${s.hp}</span></button>`;
+    }).join("");
+    [...rail.children].forEach((el) =>
+      el.addEventListener("click", () => show(Number(el.dataset.i))));
+
+    $("dfoot").innerHTML =
+      `Read from the emulator, not from the tokens &mdash; this is the fight as it happened. ` +
+      `Two things the network does <em>not</em> get: the draw pile's true order (shown sorted ` +
+      `here, reshuffled per determinization inside the search) and the enemies' names (the ` +
+      `observation carries HP, block, intent and buffs, never which creature).<br>` +
+      `Visit shares come from ${M.sims} determinizations per move at c=${M.c}; the prediction ` +
+      `is the value head's categorical over end-of-fight HP, with death as its own class.`;
+
+    show(0);
+  }
+
+  function show(i) {
+    current = Math.max(0, Math.min(F.steps.length - 1, i));
+    const s = F.steps[current];
+    const rail = $("steps");
+    [...rail.children].forEach((el, k) =>
+      el.setAttribute("aria-current", k === current ? "true" : "false"));
+    rail.children[current].scrollIntoView({ block: "nearest" });
+
+    $("php").textContent = s.hp;
+    $("pmax").textContent = "/ " + s.max_hp + " HP";
+    const hpw = 100 * s.hp / s.max_hp;
+    const blkw = Math.min(100 - hpw, 100 * s.block / s.max_hp);
+    $("phpbar").innerHTML =
+      `<i class="fill" style="width:${hpw}%"></i><i class="blk" style="width:${blkw}%"></i>`;
+    $("pside").innerHTML =
+      `<span>block <b>${s.block}</b></span><span>energy <b>${s.energy}/${s.max_energy}</b></span>`;
+    $("pbuffs").innerHTML = s.buffs.length
+      ? s.buffs.map((b) => `<span class="buff">${esc(b.name)} ${b.amount}</span>`).join("")
+      : `<span class="empty">no buffs or debuffs</span>`;
+
+    $("selbanner").innerHTML = s.selection
+      ? `<div class="selbanner">Card-selection screen open (kind ${s.selection.kind}, ` +
+        `${s.selection.count} candidates). Actions index the candidates, not the hand.</div>`
+      : "";
+
+    $("enemies").innerHTML = s.enemies.map((e) => {
+      const w = 100 * e.hp / Math.max(1, e.max_hp);
+      return `<div class="enemy"><div class="top">` +
+        `<span class="nm">${esc(e.name || "enemy")}</span>` +
+        `<span class="slot">slot ${e.slot}</span>` +
+        `<span class="num">${e.hp}/${e.max_hp}${e.block ? " +" + e.block + " blk" : ""}</span>` +
+        `</div><div class="bar"><i class="fill" style="width:${w}%"></i></div>` +
+        `<div class="intent">${esc(e.intent)}${e.intent_amount ? " " + e.intent_amount : ""}</div>` +
+        (e.buffs.length
+          ? `<div class="buffs">${e.buffs.map((b) => `<span class="buff">${esc(b.name)} ${b.amount}</span>`).join("")}</div>`
+          : "") + `</div>`;
+    }).join("") || `<div class="empty">no living enemies</div>`;
+
+    $("piles").innerHTML = [
+      ["hand", s.piles.hand, true, "action order"],
+      ["draw", s.piles.draw, false, "sorted &mdash; true order withheld"],
+      ["discard", s.piles.discard, false, ""],
+      ["exhaust", s.piles.exhaust, false, ""],
+    ].map(([name, cards, ordered, note]) =>
+      `<div class="pile"><h3>${name} <span class="ct">${cards.length}</span>` +
+      (note ? ` <span class="withheld">${note}</span>` : "") +
+      `</h3>${cardList(cards, ordered)}</div>`).join("");
+
+    const acts = s.actions.filter((a) => a.legal || a.visits > 0);
+    $("actions").innerHTML = acts.map((a) =>
+      `<div class="row${a.index === s.chosen ? " picked" : ""}">` +
+      `<span class="ix">${a.index}</span>` +
+      `<span class="lbl${a.legal ? "" : " dim"}">${esc(a.label)}</span>` +
+      `<span class="track"><i style="width:${pct(a.share)}"></i></span>` +
+      `<span class="val">${a.visits}</span></div>`).join("");
+    $("actlegend").innerHTML =
+      `played <b>${esc(s.chosen_label)}</b> (action ${s.chosen}) &mdash; most visits of ` +
+      `${acts.filter((a) => a.legal).length} legal, scored by the ${playerOf(F)}`;
+
+    if (!s.pdf) {
+      $("pdf").innerHTML = `<div class="empty">no checkpoint &mdash; train first</div>`;
+      $("pdflegend").textContent = "";
+      return;
+    }
+    const w = M.bucket_width, top = Math.max(...s.pdf);
+    $("pdf").innerHTML = s.pdf.map((p, k) => {
+      if (p < 0.004 && k !== F.actual_bucket) return "";
+      const label = k === 0 ? "dead" : `${(k - 1) * w + 1}–${Math.min(k * w, F.max_hp)}`;
+      const cls = ["pdfrow", k === 0 ? "dead" : "", k === F.actual_bucket ? "actual" : ""].join(" ");
+      return `<div class="${cls}"><span class="k">${label}</span>` +
+        `<span class="track"><i style="width:${pct(p / top)}"></i></span>` +
+        `<span class="val">${p.toFixed(3)}</span></div>`;
+    }).join("");
+    $("pdflegend").innerHTML =
+      `E[end HP] <b>${s.pdf_expected.toFixed(1)}</b> &nbsp;&middot;&nbsp; outlined row is where ` +
+      `this fight actually ended (${F.won ? F.end_hp + " HP" : "death"})`;
+  }
+
+  function toIndex() {
+    $("detailview").hidden = true;
+    $("indexview").hidden = false;
+    window.scrollTo(0, 0);
+  }
+  $("back").addEventListener("click", toIndex);
+
+  addEventListener("keydown", (e) => {
+    if ($("detailview").hidden) return;
+    if (e.key === "Escape") { e.preventDefault(); toIndex(); return; }
+    const go = { ArrowRight: current + 1, ArrowLeft: current - 1, Home: 0, End: F.steps.length - 1 }[e.key];
+    if (go !== undefined) { e.preventDefault(); show(go); }
+  });
+
+  renderIndex("error");
+</script>

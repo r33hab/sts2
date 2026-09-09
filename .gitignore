@@ -19,3 +19,6 @@ traces/full-run/*.json
 !traces/full-run/FULLRUN_INSTANT_5.json
 !traces/full-run/FULLRUN_INSTANT_9.json
 !traces/full-run/FULLRUN_INSTANT_10.json
+
+# Self-play datasets and model checkpoints: regenerate with rl/train_combat.py.
+rl/data/

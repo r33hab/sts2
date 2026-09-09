@@ -43,7 +43,9 @@ exposed it and how to reproduce it.
 - `rl`: everything that faces a learning agent rather than the emulator — the `MaskablePPO`
   trainer, the scripted-policy evaluator, and the two probes (`agent_probe.py`,
   `mcts_probe.py`) that measure the observation, the action encoding and the search path.
-  See [docs/agent-interface.md](docs/agent-interface.md).
+  [rl/ARCHITECTURE.md](rl/ARCHITECTURE.md) is the design the agent is being built toward,
+  [rl/FINDINGS.md](rl/FINDINGS.md) what has been built and measured so far, and
+  [docs/agent-interface.md](docs/agent-interface.md) what the emulator owes it.
 
 ## Architecture
 
