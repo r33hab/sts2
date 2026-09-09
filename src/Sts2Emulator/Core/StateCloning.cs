@@ -455,4 +455,44 @@ public static class StateCloning
             LastResolvedRoomType = state.LastResolvedRoomType,
         };
     }
+
+    /// <summary>
+    /// Shuffle the draw pile into an order the agent has not been shown.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The other half of a combat determinization. <see cref="Clone(CombatState, int?)" />
+    /// reseeds every stream, which changes every roll STILL TO COME, but the draw order is
+    /// not a future roll -- it was materialised by a shuffle that already happened, and a
+    /// reseed cannot undo it. Without this, a search that forks the position reads the true
+    /// order off its own copy and plays each fight with foresight.
+    /// </para>
+    /// <para>
+    /// Only the UNKNOWN region moves. <see cref="CombatState.KnownTopCount" /> and
+    /// <see cref="CombatState.KnownBottomCount" /> exist for exactly this -- cards the
+    /// player has been shown, in order, at each end of the pile -- so the shuffle runs
+    /// over the middle and leaves both ends where they are. Shuffling through them
+    /// resamples information the agent legitimately holds, which is not a determinization
+    /// but a corruption: the engine goes on believing the top N are the cards it put
+    /// there, and acts on cards that are no longer where it left them.
+    /// </para>
+    /// <para>
+    /// Deliberately not folded into <see cref="Clone(CombatState, int?)" />: a plain clone
+    /// is a faithful copy and the differential tests depend on that, seed or no seed.
+    /// </para>
+    /// </remarks>
+    public static void ReshuffleUnknownDrawOrder(this CombatState combat, Random rng)
+    {
+        int start = combat.KnownTopCount;
+        int end = combat.DrawPile.Count - combat.KnownBottomCount;
+        // Fisher-Yates over [start, end), the region nothing has been shown.
+        for (int i = end - 1; i > start; i--)
+        {
+            int j = start + rng.Next(i - start + 1);
+            (combat.DrawPile[i], combat.DrawPile[j]) = (
+                combat.DrawPile[j],
+                combat.DrawPile[i]
+            );
+        }
+    }
 }

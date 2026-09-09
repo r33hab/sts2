@@ -37,7 +37,13 @@ public static class NativeExports
 
     // v17: observation carries an open card selection (kind, count, candidates).
     // v23: the selection block's own offsets are exported, so a reader can decode it.
-    public const int NATIVE_API_VERSION = 27;
+    // v28: Sts2_Clone forks a combat, determinizing it when asked. Combat had no clone at
+    //      all, so a combat search had to restart and replay to reach a node -- and could
+    //      only determinize at the root, which is foresight.
+    // v29: Sts2_GetRelics reads the relic list back. Sts2_ResetArena could always PASS
+    //      relics in, and the combat observation still does not carry them, so a combat
+    //      with relics was conditioned on state nothing could read.
+    public const int NATIVE_API_VERSION = 29;
     private static ReadOnlySpan<int> StarterDeckIds =>
         [472, 472, 472, 472, 472, 131, 131, 131, 131, 30, 10001];
 
@@ -46,6 +52,32 @@ public static class NativeExports
         public readonly int Seed;
         public readonly CombatState State = new();
         public CountingRandom Rng { get; private set; }
+
+        /// <summary>
+        /// A fork of <paramref name="source" />, for tree search.
+        /// </summary>
+        /// <remarks>
+        /// With a <paramref name="resampleSeed" /> this is a DETERMINIZATION and needs both
+        /// halves: <c>Clone</c> reseeds every stream so the rolls still to come differ, and
+        /// <c>ReshuffleUnknownDrawOrder</c> re-orders the draw pile, which a reseed cannot
+        /// reach because that order was already materialised. Doing only the first leaves a
+        /// search that reads its own draw order and plays with foresight.
+        ///
+        /// Without one it is a faithful copy, which for a search is an oracle. It exists
+        /// because a test wanting "the same fight twice" is a real need, and because the
+        /// difference between the two is the thing worth asserting on.
+        /// </remarks>
+        public NativeCombat(NativeCombat source, int? resampleSeed)
+        {
+            Seed = source.Seed;
+            State = source.State.Clone(resampleSeed);
+            Rng = source.Rng.Reseeded(resampleSeed)!;
+            LastPlayerWon = source.LastPlayerWon;
+            if (resampleSeed is not null)
+            {
+                State.ReshuffleUnknownDrawOrder(State.ShuffleRng ?? Rng);
+            }
+        }
         public bool LastPlayerWon { get; set; }
 
         public NativeCombat(int seed)
@@ -347,6 +379,39 @@ public static class NativeExports
             if (_pool[i] is null)
             {
                 _pool[i] = combat;
+                return i;
+            }
+        }
+        return -1; // pool exhausted
+    }
+
+    /// <summary>
+    /// Fork a combat. Pass <paramref name="resampleHidden" /> non-zero to determinize the
+    /// copy from <paramref name="resampleSeed" />: every stream reseeded and the draw pile
+    /// reshuffled. A clone taken without it is a faithful copy, which for a tree search is
+    /// an oracle. See docs/agent-interface.md.
+    /// </summary>
+    /// <returns>The new handle, or -1 if the source is unknown or the pool is full.</returns>
+    [UnmanagedCallersOnly(EntryPoint = "Sts2_Clone")]
+    public static unsafe int Sts2_Clone(
+        int handle,
+        int resampleHidden,
+        int resampleSeed,
+        int* obsBuf
+    )
+    {
+        if (handle < 0 || handle >= _pool.Length || _pool[handle] is not { } source)
+        {
+            return -1;
+        }
+
+        var copy = new NativeCombat(source, resampleHidden != 0 ? resampleSeed : null);
+        for (int i = 0; i < _pool.Length; i++)
+        {
+            if (_pool[i] is null)
+            {
+                _pool[i] = copy;
+                WriteObs(copy.State, obsBuf);
                 return i;
             }
         }
@@ -758,6 +823,36 @@ public static class NativeExports
         }
 
         return enemies.Count;
+    }
+
+    /// <summary>
+    /// The player's relics as (DefId, Counter) pairs, in the order the run holds them.
+    /// </summary>
+    /// <remarks>
+    /// The combat observation carries no relics at all -- the RUN observation does, relic
+    /// by relic, but a combat entered through <c>Sts2_ResetArena</c> can hold any set and
+    /// nothing published it. A value function conditioned on relics it cannot see is
+    /// fitting noise, so this is the other half of being able to pass them in.
+    ///
+    /// The Counter travels too, because it is live state rather than decoration: how many
+    /// times a relic has fired is what decides whether it fires again.
+    /// </remarks>
+    /// <returns>
+    /// The true relic count, which may exceed <paramref name="maxRelics" /> -- only the
+    /// first that many are written, so a caller can size and retry.
+    /// </returns>
+    [UnmanagedCallersOnly(EntryPoint = "Sts2_GetRelics")]
+    public static unsafe int Sts2_GetRelics(int handle, int* buf, int maxRelics)
+    {
+        var relics = _pool[handle]!.State.Relics;
+        int written = Math.Min(relics.Count, maxRelics);
+        for (int i = 0; i < written; i++)
+        {
+            buf[i * 2] = relics[i].DefId;
+            buf[i * 2 + 1] = relics[i].Counter;
+        }
+
+        return relics.Count;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "Sts2_GetPile")]

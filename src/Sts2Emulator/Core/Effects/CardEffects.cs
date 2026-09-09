@@ -856,7 +856,13 @@ public static class CardEffects
                     var top = state.DrawPile[0];
                     state.RemoveFromDrawPileAt(0);
                     var topDef = GeneratedData.Cards.Get(top.DefId);
-                    PlayNestedCard(topDef, top.Upgraded, state, rng);
+                    // `top` must travel with the def. Omitted, `card` defaults to
+                    // `default(CardInstance)` -- DefId 0 -- and any nested effect that
+                    // touches its own instance files that zero into a pile, where it sits
+                    // harmlessly until something reads every card's NAME (Melancholy's
+                    // death hook, Kingly's draw hook) and `Cards.Get(0)` aborts the
+                    // process. The other two PlayNestedCard call sites already pass it.
+                    PlayNestedCard(topDef, top.Upgraded, state, rng, top);
                     ExhaustCard(state, top, rng: rng);
                 }
                 break;

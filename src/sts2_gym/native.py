@@ -12,7 +12,7 @@ _LIB_NAMES = {
     "darwin": "Sts2Emulator.dylib",
 }
 _ALLOW_STALE_ENV = "STS2_ALLOW_STALE_NATIVE"
-_REQUIRED_NATIVE_API_VERSION = 27
+_REQUIRED_NATIVE_API_VERSION = 29
 _REQUIRED_RUN_NATIVE_API_VERSION = 19
 
 
@@ -195,6 +195,21 @@ _lib.Sts2_ObsOrbSlotSize.argtypes = []
 
 _lib.Sts2_Create.restype = ctypes.c_int
 _lib.Sts2_Create.argtypes = [ctypes.c_int]
+
+_lib.Sts2_GetRelics.restype = ctypes.c_int
+_lib.Sts2_GetRelics.argtypes = [
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.c_int,
+]
+
+_lib.Sts2_Clone.restype = ctypes.c_int
+_lib.Sts2_Clone.argtypes = [
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+]
 
 _lib.Sts2_Reset.restype = None
 _lib.Sts2_Reset.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_int)]
@@ -579,6 +594,32 @@ def create(seed: int) -> int:
     return _lib.Sts2_Create(seed)
 
 
+def clone(
+    handle: int,
+    resample_hidden: bool,
+    resample_seed: int,
+    obs_buf: ctypes.Array,
+) -> int:
+    """Fork a combat into a new handle.
+
+    With resample_hidden the copy is DETERMINIZED off resample_seed: every stream is
+    reseeded, so the rolls still to come differ, and the draw pile is reshuffled, which
+    a reseed alone cannot reach because that order was already materialised. Without it
+    the copy is faithful, which for a tree search is an oracle -- see
+    docs/agent-interface.md.
+
+    Raises:
+        RuntimeError: If the source handle is unknown or the handle pool is full.
+
+    """
+    handle_out = int(
+        _lib.Sts2_Clone(handle, 1 if resample_hidden else 0, resample_seed, obs_buf),
+    )
+    if handle_out < 0:
+        raise RuntimeError("Sts2_Clone failed: unknown handle or the pool is full.")
+    return handle_out
+
+
 def reset(handle: int, obs_buf: ctypes.Array) -> None:
     _lib.Sts2_Reset(handle, obs_buf)
 
@@ -899,6 +940,21 @@ def get_enemies(handle: int) -> list[tuple[int, int, int]]:
             return [
                 (buf[i * 3], buf[i * 3 + 1], buf[i * 3 + 2]) for i in range(count)
             ]
+        capacity = count
+
+
+def get_relics(handle: int) -> list[tuple[int, int]]:
+    """The player's relics as (def id, counter) pairs, in the order the run holds them.
+
+    The combat observation carries no relic block, so this is the only way to see what a
+    combat started through ``reset_arena`` is actually holding.
+    """
+    capacity = 32
+    while True:
+        buf = (ctypes.c_int * (capacity * 2))()
+        count = _lib.Sts2_GetRelics(handle, buf, capacity)
+        if count <= capacity:
+            return [(buf[i * 2], buf[i * 2 + 1]) for i in range(count)]
         capacity = count
 
 
