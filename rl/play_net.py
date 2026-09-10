@@ -55,7 +55,9 @@ from combat_mcts import (
     Combat,
     resolve_encounter,
     best_action,
-    run_search,
+    drive,
+    drive_batched,
+    run_search_gen,
     sample_extra_cards,
     sample_relics,
 )
@@ -122,35 +124,42 @@ class PolicyPrior:
         self.device = torch.device("cpu")
         self.calls = 0
 
-    def __call__(self, world: Combat) -> dict[int, float]:
-        self.calls += 1
-        legal = world.legal()
-        tokens = encode(world.handle, world.obs, world.encounter_id)
+    def batch(self, worlds: list[Combat]) -> list[dict[int, float]]:
+        """Priors for many positions from ONE forward. This is where batching pays:
+        at 1 torch thread a forward is 1.2 ms alone and 0.38 ms per state at 32."""
+        self.calls += len(worlds)
+        legals = [w.legal() for w in worlds]
+        tokens = [encode(w.handle, w.obs, w.encounter_id) for w in worlds]
         with torch.no_grad():
-            _, logits = self.model(**collate([tokens], self.device))
-        row = logits[0]
-        scores = torch.full((len(legal),), float("-inf"))
-        for i, a in enumerate(legal):
-            if a < row.shape[0]:
-                scores[i] = row[a]
-        if not torch.isfinite(scores).any():
-            return {a: 1.0 / len(legal) for a in legal}
-        probs = torch.softmax(scores, dim=0).tolist()
-        return dict(zip(legal, probs))
+            _, logits = self.model(**collate(tokens, self.device))
+        out = []
+        for row, legal in zip(logits, legals):
+            scores = torch.full((len(legal),), float("-inf"))
+            for i, a in enumerate(legal):
+                if a < row.shape[0]:
+                    scores[i] = row[a]
+            if not torch.isfinite(scores).any():
+                out.append({a: 1.0 / len(legal) for a in legal})
+                continue
+            out.append(dict(zip(legal, torch.softmax(scores, dim=0).tolist())))
+        return out
+
+    def __call__(self, world: Combat) -> dict[int, float]:
+        return self.batch([world])[0]
 
 
 def policy_checkpoint() -> Path:
     return POLICY_CHECKPOINT if POLICY_CHECKPOINT.exists() else CHECKPOINT
 
 
-def play(
+def play_gen(
     seed: int,
     encounter_id: int,
     args: argparse.Namespace,
     mode: str,
     evaluator: NetEvaluator | None,
-    prior: PolicyPrior | None = None,
-) -> tuple[int, bool]:
+):
+    """One fight as a generator: yields prior requests, returns (end HP, won)."""
     extra_low, extra_high = (int(x) for x in args.extra_cards.split(","))
     relic_low, relic_high = (int(x) for x in args.relics.split(","))
     extra = sample_extra_cards(seed, extra_low, extra_high, "Ironclad")
@@ -169,7 +178,7 @@ def play(
                 combat.step(int(rng.choice(legal)))
                 continue
 
-            root = run_search(
+            root = yield from run_search_gen(
                 combat,
                 legal,
                 args.sims,
@@ -178,7 +187,7 @@ def play(
                 move,
                 evaluator if mode == "net" else None,
                 greedy_rollout=(mode != "uniform"),
-                prior_fn=prior if mode == "puct" else None,
+                use_prior=(mode == "puct"),
                 c_puct=args.c_puct,
             )
             action = best_action(root, legal, rng)
@@ -186,6 +195,29 @@ def play(
         return (combat.hp() if combat.won() else 0), bool(combat.won())
     finally:
         combat.close()
+
+
+def play(
+    seed: int,
+    encounter_id: int,
+    args: argparse.Namespace,
+    mode: str,
+    evaluator: NetEvaluator | None,
+    prior: PolicyPrior | None = None,
+) -> tuple[int, bool]:
+    return drive(play_gen(seed, encounter_id, args, mode, evaluator), prior)
+
+
+def play_many(jobs, args, mode, evaluator, prior, batch_fights: int) -> list[tuple[int, bool]]:
+    """Every job, `batch_fights` fights interleaved at a time so prior calls batch."""
+    if mode != "puct" or prior is None:
+        return [play(seed, enc, args, mode, evaluator, prior) for seed, enc in jobs]
+    out: list[tuple[int, bool]] = []
+    for start in range(0, len(jobs), batch_fights):
+        chunk = jobs[start : start + batch_fights]
+        gens = [play_gen(seed, enc, args, mode, evaluator) for seed, enc in chunk]
+        out.extend(drive_batched(gens, prior.batch))
+    return out
 
 
 def main() -> None:
@@ -205,6 +237,12 @@ def main() -> None:
     parser.add_argument("--encounter", default="")
     parser.add_argument("--modes", default="random,uniform,rollout,net")
     parser.add_argument("--c-puct", type=float, default=0.2)
+    parser.add_argument(
+        "--batch-fights",
+        type=int,
+        default=32,
+        help="fights interleaved per batched prior call in puct mode (1 = unbatched)",
+    )
     args = parser.parse_args()
 
     if args.encounter:
@@ -227,7 +265,7 @@ def main() -> None:
     results: dict[str, np.ndarray] = {}
     for mode in modes:
         start = time.perf_counter()
-        hps = np.array([play(seed, enc, args, mode, evaluator, prior)[0] for seed, enc in jobs])
+        hps = np.array([hp for hp, _ in play_many(jobs, args, mode, evaluator, prior, args.batch_fights)])
         elapsed = time.perf_counter() - start
         results[mode] = hps
         alive = hps[hps > 0]

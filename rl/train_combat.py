@@ -81,8 +81,14 @@ def generate(args: argparse.Namespace) -> None:
         relic_low=relic_low,
         relic_high=relic_high,
         character=args.character,
+        prior_checkpoint=str(POLICY_CHECKPOINT) if args.prior else "",
+        c_puct=args.c_puct,
+        root_noise=args.root_noise,
+        batch_fights=args.batch_fights,
     )
     workers = args.workers or default_workers()
+    if args.prior and not POLICY_CHECKPOINT.exists():
+        raise SystemExit(f"--prior needs {POLICY_CHECKPOINT}; train first")
 
     def progress(done: int, total: int, elapsed: float) -> None:
         if sys.stderr.isatty():
@@ -494,6 +500,14 @@ def main() -> None:
     parser.add_argument("--train", action="store_true")
     parser.add_argument("--fights", type=int, default=24, help="fights per encounter")
     parser.add_argument("--sims", type=int, default=40)
+    parser.add_argument(
+        "--prior",
+        action="store_true",
+        help="generate with the policy head as a PUCT prior (iteration 2 of the loop)",
+    )
+    parser.add_argument("--c-puct", type=float, default=0.2)
+    parser.add_argument("--root-noise", type=float, default=0.25)
+    parser.add_argument("--batch-fights", type=int, default=16)
     parser.add_argument(
         "--c",
         type=float,

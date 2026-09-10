@@ -558,9 +558,45 @@ prior's value was being thrown away at the last step. P(death) 5 -> 3 deaths is 
 This is the first time a LEARNED component has beaten the rollout searcher at anything --
 the value head, after two datasets and a retargeting, only ever tied it.
 
-Cost, unbatched: ~25 prior calls per move at 60 sims, ~7 ms each including the end-turn
-probe in `encode`, about 4x the rollout searcher's wall time. Batching is now the binding
-constraint on using this for generation.
+### Batching the prior calls: 1.6x, and then the floor is `encode`
+
+The search is now a generator. `simulate_gen` and `run_search_gen` YIELD the determinized
+world whenever a node needs its prior and take the answer back through `send`; `simulate`
+and `run_search` are the same code driven synchronously, so nothing that called them
+changed. `drive_batched` interleaves many fights in one process and answers each round of
+outstanding requests with one forward. A fight consumes only its own RNG in its own
+order, so it is the same fight interleaved or alone -- 7 of 8 test fights ended
+identically and the eighth differed by 1 HP, which is a padded batch's floating point
+flipping a near-tie.
+
+Where a prior call's time went, profiled, and what batching did to it:
+
+| | 20 threads | 1 thread (a pool worker) |
+| --- | ---: | ---: |
+| forward, one state | 1.37 ms | 1.22 ms |
+| forward, per state at batch 32 | 0.14 ms | 0.38 ms |
+| `encode` (tokenize + end-turn probe) | 0.55 ms | 0.55 ms |
+| prior call, unbatched | ~2.4 ms | ~1.8 ms |
+| prior call, batched | ~0.7 ms | ~0.9 ms |
+
+| PUCT at 60 sims, 64 held-out fights | s/fight | mean HP | P(death) |
+| --- | ---: | ---: | ---: |
+| unbatched | 2.02 | 47.6 | 0.047 |
+| **32 fights interleaved** | **1.28** | 47.7 | 0.047 |
+| tempo rollout, no prior, for scale | 0.65-0.86 | 45.6 | 0.078 |
+
+1.6x on the whole searcher, which is all there was to get: the prior was ~half the wall
+time and batching removed ~60% of that. What remains of the prior is `encode`, and most
+of `encode` is `end_turn_outlook` -- five forks and five end-turns per position, for four
+channels the same-data ablation showed the network does not use. Dropping them from the
+observation (retrain with `--ablate-endturn`, skip the probe at inference) is the next
+factor of ~2 on the prior, and it costs nothing that was ever measured to matter.
+
+Self-play generation runs the same way: `train_combat.py --generate --prior` gives every
+worker its own `PolicyPrior` pinned to one torch thread, interleaving `--batch-fights`
+fights, with Dirichlet root noise on. 32 fights at 60 sims on 8 workers: 12 s including
+process start-up. A full 6400-fight set at 300 sims is on the order of an hour on 24
+workers -- the second turn of the loop is affordable.
 
 ### The policy head learns, but its target is thin
 
@@ -579,6 +615,8 @@ It does **not** regularise the value head: 1.798 with `--policy-weight 1` agains
 | label generation, 24 workers | 28.6 fights/s (331s → 34s, 9.7x) |
 | net inference, unbatched | 845 us CPU / 1004 us GPU |
 | net inference, batch 128 | 20.7 us CPU / 7.5 us GPU per state |
+| PUCT prior call, unbatched / batched at 32 | 1.8 ms / 0.9 ms (1 thread) |
+| PUCT searcher at 60 sims, batched | 1.28 s/fight, against 0.65-0.86 for the rollout |
 
 A single unbatched forward costs more than the ~750us rollout it replaces, so a net leaf
 evaluator is only ever a speed win batched — which needs a worker interleaving several
@@ -649,8 +687,11 @@ consumer reads is not visible to that consumer's average.
 
 - **Retune the rollout weights, and fix `W_END_TURN` while doing it.** With the honest
   probe in place the weights can be swept against something that measures waste.
-- **Batched inference**, now a blocker rather than a nicety: the PUCT searcher is 18x slower
-  unbatched, and generation with it is the next iteration.
+- **Drop the end-turn probe from the observation.** It is most of what a prior call costs
+  after batching and the ablation showed the network ignores it. Retrain with
+  `--ablate-endturn`, skip the probe at inference.
+- **Iteration 2.** `train_combat.py --generate --prior --sims 300`, retrain, and test
+  whether the loop improves on itself -- the first time that test means anything.
 - **Policy target from the UCT phase only.** Pairing and concentration compete for the
   same visits; splitting them would end the trade-off.
 - **Isolate `best_action`.** Argmax-mean-value and common random numbers landed together, so

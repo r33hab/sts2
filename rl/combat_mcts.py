@@ -58,6 +58,7 @@ from functools import cache
 from pathlib import Path
 
 import numpy as np
+from typing import Generator
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
@@ -479,7 +480,7 @@ def rollout(
     return terminal_value(sim), steps
 
 
-def simulate(
+def simulate_gen(
     position: Combat,
     root: Node,
     resample_seed: int,
@@ -490,15 +491,10 @@ def simulate(
     greedy_rollout: bool = True,
     returns: list[float] | None = None,
     force_root_action: int | None = None,
-    prior_fn: Callable[[Combat], dict[int, float]] | None = None,
+    use_prior: bool = False,
     c_puct: float = 0.2,
-) -> int:
-    """One determinization: fork, descend, expand, roll out, back up.
-
-    `prior_fn` turns the descent into PUCT: it maps a position to a probability per
-    legal action, and selection follows `puct_action` instead of expanding every untried
-    move first and then running UCT. The prior is asked for once per node, the first time
-    a move is chosen from it, on the determinized world at that node.
+) -> Generator[Combat, dict[int, float], int]:
+    """One determinization: fork, descend, expand, roll out, back up. As a GENERATOR.
 
     Returns the native steps it cost, so throughput can be reported honestly -- a
     simulation is a whole playout, not a step.
@@ -508,6 +504,13 @@ def simulate(
     `terminal_value` uses -- an HP fraction in [0, 1] with death at 0 -- or `c` stops
     meaning what it was tuned to mean. A leaf that is genuinely TERMINAL is scored by
     `terminal_value` either way: the outcome is known there, and no estimate beats it.
+
+    With `use_prior` the descent is PUCT, and whenever a node needs its prior the
+    generator YIELDS the determinized world at that node and expects the prior back
+    through `send`. That is what lets one process interleave many fights and answer a
+    whole round of requests with one batched forward (`drive_batched`), which is the only
+    way a network at the search's nodes is not slower than no network at all. `simulate`
+    is the same thing driven synchronously.
     """
     world = position.fork(resample_seed)
     steps = 0
@@ -545,11 +548,11 @@ def simulate(
                 path.append(node)
                 continue
             first = False
-            if prior_fn is not None:
+            if use_prior:
                 if not node.untried and not node.children:
                     break
                 if node.prior is None:
-                    node.prior = prior_fn(world)
+                    node.prior = yield world
                 action = puct_action(node, c_puct)
                 if action in node.untried:
                     node.untried.remove(action)
@@ -608,7 +611,75 @@ def simulate(
         world.close()
 
 
-def run_search(
+def drive(gen: Generator, prior_fn: Callable[[Combat], dict[int, float]] | None):
+    """Run a search generator to completion, answering its prior requests one at a time."""
+    try:
+        request = next(gen)
+        while True:
+            if prior_fn is None:
+                raise RuntimeError("the search asked for a prior and none was given")
+            request = gen.send(prior_fn(request))
+    except StopIteration as done:
+        return done.value
+
+
+def drive_batched(gens: list[Generator], batch_fn: Callable[[list[Combat]], list[dict[int, float]]]) -> list:
+    """Run many search generators together, batching their prior requests.
+
+    Each generator is advanced until it either finishes or yields a world it wants a prior
+    for. Every outstanding request is then answered with ONE call to `batch_fn`, and the
+    answers are sent back. A fight's own randomness is untouched by the interleaving --
+    each generator consumes only its own RNG, in its own order -- so a fight played here is
+    the same fight as when driven alone, up to the floating-point of a batched forward.
+
+    Returns each generator's return value, in order.
+    """
+    results: dict[int, object] = {}
+    waiting: dict[int, Combat] = {}
+    for i, gen in enumerate(gens):
+        try:
+            waiting[i] = next(gen)
+        except StopIteration as done:
+            results[i] = done.value
+    while waiting:
+        order = list(waiting)
+        answers = batch_fn([waiting[i] for i in order])
+        for i, answer in zip(order, answers):
+            try:
+                waiting[i] = gens[i].send(answer)
+            except StopIteration as done:
+                results[i] = done.value
+                del waiting[i]
+    return [results[i] for i in range(len(gens))]
+
+
+def simulate(
+    position: Combat,
+    root: Node,
+    resample_seed: int,
+    rng: np.random.Generator,
+    c: float,
+    evaluate: Callable[[Combat], float] | None = None,
+    *,
+    greedy_rollout: bool = True,
+    returns: list[float] | None = None,
+    force_root_action: int | None = None,
+    prior_fn: Callable[[Combat], dict[int, float]] | None = None,
+    c_puct: float = 0.2,
+) -> int:
+    """`simulate_gen`, driven synchronously. See there."""
+    return drive(
+        simulate_gen(
+            position, root, resample_seed, rng, c, evaluate,
+            greedy_rollout=greedy_rollout, returns=returns,
+            force_root_action=force_root_action,
+            use_prior=prior_fn is not None, c_puct=c_puct,
+        ),
+        prior_fn,
+    )
+
+
+def run_search_gen(
     position: Combat,
     legal: list[int],
     sims: int,
@@ -621,16 +692,11 @@ def run_search(
     returns: list[float] | None = None,
     crn: bool = True,
     crn_fraction: float = 0.2,
-    prior_fn: Callable[[Combat], dict[int, float]] | None = None,
+    use_prior: bool = False,
     c_puct: float = 0.2,
     root_noise: float = 0.0,
-) -> Node:
-    """Build one search tree over `legal`, and return its root.
-
-    With `prior_fn` the descent is PUCT (see `simulate`). `root_noise` is AlphaZero's
-    Dirichlet mix at the root, epsilon in [0, 1], for self-play only: it keeps the
-    search from visiting nothing but what the prior already likes, which is what makes
-    the visit distribution a teacher for the prior rather than an echo of it.
+) -> Generator[Combat, dict[int, float], Node]:
+    """Build one search tree over `legal`, and return its root. As a generator.
 
     With `crn`, the first `crn_fraction` of simulations round-robin the root action and
     share determinization seeds, so every action is scored against an identical set of
@@ -642,10 +708,16 @@ def run_search(
     information fell to a third (0.320 -> 0.105 nats at 40 sims) and 7x more simulations
     did not bring it back. At 0.2, 300 sims give 0.444 -- and 12 paired samples per action,
     which is where most of the variance reduction was anyway.
+
+    With `use_prior` the descent is PUCT (see `simulate_gen`), and prior requests are
+    yielded. `root_noise` is AlphaZero's Dirichlet mix at the root, epsilon in [0, 1], for
+    self-play only: it keeps the search from visiting nothing but what the prior already
+    likes, which is what makes the visit distribution a teacher for the prior rather than
+    an echo of it.
     """
     root = Node(legal)
-    if prior_fn is not None:
-        root.prior = prior_fn(position)
+    if use_prior:
+        root.prior = yield position
         if root_noise > 0 and len(legal) > 1:
             # alpha ~ 10 / n_moves is AlphaZero's scaling (0.3 for chess, 0.03 for Go).
             noise = rng.dirichlet([10.0 / len(legal)] * len(legal))
@@ -666,7 +738,7 @@ def run_search(
         else:
             forced = None
             seed = move * sims + k
-        simulate(
+        yield from simulate_gen(
             position,
             root,
             seed,
@@ -676,10 +748,39 @@ def run_search(
             greedy_rollout=greedy_rollout,
             returns=returns,
             force_root_action=forced,
-            prior_fn=prior_fn,
+            use_prior=use_prior,
             c_puct=c_puct,
         )
     return root
+
+
+def run_search(
+    position: Combat,
+    legal: list[int],
+    sims: int,
+    rng: np.random.Generator,
+    c: float,
+    move: int,
+    evaluate: Callable[[Combat], float] | None = None,
+    *,
+    greedy_rollout: bool = True,
+    returns: list[float] | None = None,
+    crn: bool = True,
+    crn_fraction: float = 0.2,
+    prior_fn: Callable[[Combat], dict[int, float]] | None = None,
+    c_puct: float = 0.2,
+    root_noise: float = 0.0,
+) -> Node:
+    """`run_search_gen`, driven synchronously with `prior_fn`. See there."""
+    return drive(
+        run_search_gen(
+            position, legal, sims, rng, c, move, evaluate,
+            greedy_rollout=greedy_rollout, returns=returns,
+            crn=crn, crn_fraction=crn_fraction,
+            use_prior=prior_fn is not None, c_puct=c_puct, root_noise=root_noise,
+        ),
+        prior_fn,
+    )
 
 
 def best_action(root: Node, legal: list[int], rng: np.random.Generator) -> int:

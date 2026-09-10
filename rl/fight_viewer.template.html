@@ -489,7 +489,8 @@
 
     $("selbanner").innerHTML = s.selection
       ? `<div class="selbanner">Card-selection screen open (kind ${s.selection.kind}, ` +
-        `${s.selection.count} candidates). Actions index the candidates, not the hand.</div>`
+        `${s.selection.count} candidates: ${(s.selection.candidates || []).join(", ")}). ` +
+        `Actions index the candidates, not the hand.</div>`
       : "";
 
     $("enemies").innerHTML = s.enemies.map((e) => {

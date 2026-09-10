@@ -49,15 +49,18 @@ from combat_mcts import (
 from combat_net import CombatNet, collate
 from play_net import NetEvaluator, PolicyPrior, policy_checkpoint
 from combat_tokens import (
+    CARD_SLOT,
     ENEMY_OFFSET,
     ENEMY_SLOT,
     MAX_ACTIONS,
     MAX_ENEMIES,
     MAX_ENEMY_BUFFS,
     MAX_PLAYER_BUFFS,
+    MAX_SELECTION_CANDIDATES,
     PLAYER_BUFF_OFFSET,
     SELECTION_COUNT_OFFSET,
     SELECTION_KIND_OFFSET,
+    SELECTION_OFFSET,
     VOCAB,
     bucket_centres,
     encode,
@@ -144,6 +147,19 @@ def read_position(combat: Combat) -> dict:
         selection = {
             "kind": int(obs[SELECTION_KIND_OFFSET]),
             "count": int(obs[SELECTION_COUNT_OFFSET]),
+            # The candidates by name, from the same slots the tokenizer reads. The
+            # observation carries at most MAX_SELECTION_CANDIDATES of them; a screen that
+            # offers more (a full-pile Gambling Chip) has real actions past that with no
+            # identity behind them, and the label says so rather than inventing one.
+            "candidates": [
+                names.card_name(
+                    obs[SELECTION_OFFSET + i * CARD_SLOT],
+                    bool(obs[SELECTION_OFFSET + i * CARD_SLOT + 1]),
+                )
+                if i < MAX_SELECTION_CANDIDATES
+                else f"candidate {i} (not in observation)"
+                for i in range(int(obs[SELECTION_COUNT_OFFSET]))
+            ],
         }
 
     return {
@@ -173,8 +189,7 @@ def read_position(combat: Combat) -> dict:
 def action_labels(position: dict) -> list[str]:
     """What each action index does, by the same rule the action block encodes."""
     if position["selection"]:
-        count = position["selection"]["count"]
-        return [f"candidate {i}" for i in range(count)] + ["decline"]
+        return list(position["selection"]["candidates"]) + ["decline"]
     return [card["name"] for card in position["piles"]["hand"]] + ["end turn"]
 
 

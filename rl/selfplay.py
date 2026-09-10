@@ -36,7 +36,15 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from combat_mcts import Combat, best_action, run_search, sample_extra_cards, sample_relics
+from combat_mcts import (
+    Combat,
+    best_action,
+    drive,
+    drive_batched,
+    run_search_gen,
+    sample_extra_cards,
+    sample_relics,
+)
 from combat_tokens import MAX_ACTIONS, Tokens, encode
 
 STEP_CAP = 300
@@ -56,9 +64,17 @@ class GenConfig:
     relic_low: int
     relic_high: int
     character: str
+    # Iteration 2: the policy head as a PUCT prior during generation. Empty means the
+    # rollout searcher, as before. `root_noise` is AlphaZero's Dirichlet mix so the
+    # visit distribution teaches the prior instead of echoing it. `batch_fights` is how
+    # many fights a worker interleaves so its prior calls arrive as one forward.
+    prior_checkpoint: str = ""
+    c_puct: float = 0.2
+    root_noise: float = 0.25
+    batch_fights: int = 16
 
 
-def play_and_record(
+def play_and_record_gen(
     seed: int,
     encounter_id: int,
     ascension: int,
@@ -67,8 +83,12 @@ def play_and_record(
     rng: np.random.Generator,
     extra_cards: list[int],
     relics: list[int],
-) -> tuple[list[Tokens], list[np.ndarray], list[np.ndarray], list[np.ndarray], int, int]:
-    """Play one fight under search.
+    *,
+    use_prior: bool = False,
+    c_puct: float = 0.2,
+    root_noise: float = 0.0,
+):
+    """Play one fight under search, as a generator that yields prior requests.
 
     Returns every position, the search's visit counts at each, the legality mask at each,
     and the HP the fight ended at.
@@ -97,7 +117,10 @@ def play_and_record(
             # next -- unlike the fight's final HP, which all ~13 positions in a fight
             # share. Kept raw so the bucket scheme stays a training-time decision.
             returns: list[float] = []
-            root = run_search(position, legal, sims, rng, c, move, returns=returns)
+            root = yield from run_search_gen(
+                position, legal, sims, rng, c, move, returns=returns,
+                use_prior=use_prior, c_puct=c_puct, root_noise=root_noise,
+            )
 
             visits = np.zeros(MAX_ACTIONS, dtype=np.int32)
             for action_index, child in root.children.items():
@@ -120,6 +143,35 @@ def play_and_record(
         return states, visit_rows, legal_rows, return_rows, end_hp, position.max_hp()
     finally:
         position.close()
+
+
+def play_and_record(
+    seed: int,
+    encounter_id: int,
+    ascension: int,
+    sims: int,
+    c: float,
+    rng: np.random.Generator,
+    extra_cards: list[int],
+    relics: list[int],
+) -> tuple[list[Tokens], list[np.ndarray], list[np.ndarray], list[np.ndarray], int, int]:
+    """`play_and_record_gen` with the rollout searcher, driven synchronously."""
+    return drive(
+        play_and_record_gen(seed, encounter_id, ascension, sims, c, rng, extra_cards, relics),
+        None,
+    )
+
+
+def load_prior(checkpoint: str):
+    """The policy head as a prior, for THIS worker. Torch is imported here and nowhere
+    else in this file, and pinned to one thread: 24 workers each spinning 20 threads
+    would oversubscribe the machine several times over."""
+    import torch
+
+    torch.set_num_threads(1)
+    from play_net import PolicyPrior
+
+    return PolicyPrior(Path(checkpoint))
 
 
 def jobs_for(encounters: list[int], fights: int) -> list[tuple[int, int, int]]:
@@ -154,13 +206,41 @@ def run_jobs(payload: tuple[list[tuple[int, int, int]], GenConfig]) -> dict:
     returns_all: list[np.ndarray] = []
     max_hp = 0
 
-    for fight_id, encounter, index in jobs:
+    def fight_inputs(fight_id: int, encounter: int, index: int):
         seed = cfg.seed_base + index
         extra = sample_extra_cards(seed, cfg.extra_low, cfg.extra_high, cfg.character)
         relics = sample_relics(seed, cfg.relic_low, cfg.relic_high, cfg.character)
         # Per fight, from (encounter, seed): order-independent, so the pool can hand
         # jobs out however it likes.
         rng = np.random.default_rng([encounter, seed])
+        return seed, extra, relics, rng
+
+    # With a prior, `batch_fights` fights run interleaved so every round of prior
+    # requests is one forward; without one, each fight runs to completion on its own.
+    played: list[tuple[tuple[int, int, int], list[int], list[int], tuple]] = []
+    if cfg.prior_checkpoint:
+        prior = load_prior(cfg.prior_checkpoint)
+        for start in range(0, len(jobs), cfg.batch_fights):
+            chunk = jobs[start : start + cfg.batch_fights]
+            gens, meta = [], []
+            for job in chunk:
+                seed, extra, relics, rng = fight_inputs(*job)
+                gens.append(play_and_record_gen(
+                    seed, job[1], cfg.ascension, cfg.sims, cfg.c, rng, extra, relics,
+                    use_prior=True, c_puct=cfg.c_puct, root_noise=cfg.root_noise,
+                ))
+                meta.append((job, extra, relics))
+            for (job, extra, relics), result in zip(meta, drive_batched(gens, prior.batch)):
+                played.append((job, extra, relics, result))
+    else:
+        for job in jobs:
+            seed, extra, relics, rng = fight_inputs(*job)
+            result = play_and_record(
+                seed, job[1], cfg.ascension, cfg.sims, cfg.c, rng, extra, relics,
+            )
+            played.append((job, extra, relics, result))
+
+    for (fight_id, encounter, index), extra, relics, result in played:
         (
             states,
             visit_rows,
@@ -168,16 +248,7 @@ def run_jobs(payload: tuple[list[tuple[int, int, int]], GenConfig]) -> dict:
             return_rows,
             end_hp,
             fight_max_hp,
-        ) = play_and_record(
-            seed,
-            encounter,
-            cfg.ascension,
-            cfg.sims,
-            cfg.c,
-            rng,
-            extra,
-            relics,
-        )
+        ) = result
         max_hp = max(max_hp, fight_max_hp)
         visits_all.extend(visit_rows)
         legal_all.extend(legal_rows)
