@@ -12,6 +12,7 @@ Three players over the same fights, so the comparison is paired:
     uniform   MCTS, leaves scored by a UNIFORM random playout
     rollout   MCTS, leaves scored by a tempo-weighted playout (the default policy)
     net       MCTS, leaves scored by the trained value head
+    puct      as rollout, but the descent is PUCT with the policy head as its prior
 
 Two things make this a real test rather than a formality:
 
@@ -60,7 +61,7 @@ from combat_mcts import (
 )
 from combat_net import CombatNet, collate
 from combat_tokens import VOCAB, bucket_centres, encode
-from train_combat import CHECKPOINT
+from train_combat import CHECKPOINT, POLICY_CHECKPOINT
 
 STEP_CAP = 300
 
@@ -99,12 +100,56 @@ class NetEvaluator:
         return expected / max(1, world.max_hp())
 
 
+class PolicyPrior:
+    """The policy head as a PUCT prior: a probability per legal action.
+
+    Loads the POLICY-best checkpoint, not the value-best one -- the heads peak at
+    different epochs. Softmax over the legal actions only; the head already puts -inf on
+    every slot that is not an action token, and the legality mask is applied again here.
+    """
+
+    def __init__(self, checkpoint: Path):
+        blob = torch.load(checkpoint, weights_only=True)
+        self.model = CombatNet(
+            VOCAB,
+            blob["n_buckets"],
+            d_model=blob.get("d_model", 128),
+            layers=blob.get("layers", 4),
+            heads=blob.get("heads", 4),
+        )
+        self.model.load_state_dict(blob["model"])
+        self.model.eval()
+        self.device = torch.device("cpu")
+        self.calls = 0
+
+    def __call__(self, world: Combat) -> dict[int, float]:
+        self.calls += 1
+        legal = world.legal()
+        tokens = encode(world.handle, world.obs, world.encounter_id)
+        with torch.no_grad():
+            _, logits = self.model(**collate([tokens], self.device))
+        row = logits[0]
+        scores = torch.full((len(legal),), float("-inf"))
+        for i, a in enumerate(legal):
+            if a < row.shape[0]:
+                scores[i] = row[a]
+        if not torch.isfinite(scores).any():
+            return {a: 1.0 / len(legal) for a in legal}
+        probs = torch.softmax(scores, dim=0).tolist()
+        return dict(zip(legal, probs))
+
+
+def policy_checkpoint() -> Path:
+    return POLICY_CHECKPOINT if POLICY_CHECKPOINT.exists() else CHECKPOINT
+
+
 def play(
     seed: int,
     encounter_id: int,
     args: argparse.Namespace,
     mode: str,
     evaluator: NetEvaluator | None,
+    prior: PolicyPrior | None = None,
 ) -> tuple[int, bool]:
     extra_low, extra_high = (int(x) for x in args.extra_cards.split(","))
     relic_low, relic_high = (int(x) for x in args.relics.split(","))
@@ -133,6 +178,8 @@ def play(
                 move,
                 evaluator if mode == "net" else None,
                 greedy_rollout=(mode != "uniform"),
+                prior_fn=prior if mode == "puct" else None,
+                c_puct=args.c_puct,
             )
             action = best_action(root, legal, rng)
             combat.step(action)
@@ -157,6 +204,7 @@ def main() -> None:
     parser.add_argument("--relics", default="0,5")
     parser.add_argument("--encounter", default="")
     parser.add_argument("--modes", default="random,uniform,rollout,net")
+    parser.add_argument("--c-puct", type=float, default=0.2)
     args = parser.parse_args()
 
     if args.encounter:
@@ -170,6 +218,7 @@ def main() -> None:
     evaluator = NetEvaluator(CHECKPOINT) if "net" in modes else None
     if "net" in modes and not CHECKPOINT.exists():
         raise SystemExit(f"no checkpoint at {CHECKPOINT}")
+    prior = PolicyPrior(policy_checkpoint()) if "puct" in modes else None
 
     print(f"{args.fights} fights, seeds {args.seed_base}-{args.seed_base + args.fights - 1}")
     print(f"{len(set(encounters))} encounters, {args.sims} sims/move, c={args.c}")
@@ -178,7 +227,7 @@ def main() -> None:
     results: dict[str, np.ndarray] = {}
     for mode in modes:
         start = time.perf_counter()
-        hps = np.array([play(seed, enc, args, mode, evaluator)[0] for seed, enc in jobs])
+        hps = np.array([play(seed, enc, args, mode, evaluator, prior)[0] for seed, enc in jobs])
         elapsed = time.perf_counter() - start
         results[mode] = hps
         alive = hps[hps > 0]
@@ -190,7 +239,7 @@ def main() -> None:
             f"{elapsed / len(jobs):>8.2f}",
         )
 
-    for base, other in (("uniform", "rollout"), ("rollout", "net")):
+    for base, other in (("uniform", "rollout"), ("rollout", "net"), ("rollout", "puct")):
         if base not in results or other not in results:
             continue
         a, b = results[base], results[other]
@@ -208,6 +257,8 @@ def main() -> None:
             print("  within 2 SE: this run does not separate them.")
     if evaluator is not None:
         print(f"\n{evaluator.calls:,} network evaluations")
+    if prior is not None:
+        print(f"{prior.calls:,} prior evaluations")
 
 
 if __name__ == "__main__":

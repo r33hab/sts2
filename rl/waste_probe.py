@@ -45,6 +45,18 @@ from sts2_gym import names, native  # noqa: E402
 STEP_CAP = 300
 MAX_HAND = native.OBS_MAX_HAND
 
+_prior = None
+
+
+def prior_fn():
+    """One PolicyPrior per worker process, built on first use."""
+    global _prior
+    if _prior is None:
+        from play_net import PolicyPrior, policy_checkpoint  # torch: only in puct mode
+
+        _prior = PolicyPrior(policy_checkpoint())
+    return _prior
+
 
 def hand_cards(obs) -> list[tuple[int, int, bool]]:
     """(slot, def id, upgraded) for every card in hand."""
@@ -66,7 +78,7 @@ def cost_of(cid: int, upgraded: bool, infos) -> int | None:
 
 
 def play(job) -> dict:
-    seed, enc, sims, mode, crn, select, c = job
+    seed, enc, sims, mode, crn, select, c, c_puct = job
     infos = names.cards()
     types = _card_types()
     extra = sample_extra_cards(seed, 2, 8, "Ironclad")
@@ -106,7 +118,8 @@ def play(job) -> dict:
 
             root = run_search(
                 combat, legal, sims, rng, c, move, None,
-                greedy_rollout=(mode == "tempo"), crn=bool(crn),
+                greedy_rollout=(mode != "uniform"), crn=bool(crn),
+                prior_fn=prior_fn() if mode == "puct" else None, c_puct=c_puct,
             )
             if select == "value":
                 action = best_action(root, legal, rng)
@@ -162,7 +175,8 @@ def main() -> None:
     ap.add_argument("--sims", default="60,300,1500")
     ap.add_argument("--fights", type=int, default=64)
     ap.add_argument("--seed-base", type=int, default=400)
-    ap.add_argument("--mode", default="uniform", choices=["uniform", "tempo"])
+    ap.add_argument("--mode", default="uniform", choices=["uniform", "tempo", "puct"])
+    ap.add_argument("--c-puct", type=float, default=0.2)
     ap.add_argument("--crn", type=int, default=0)
     ap.add_argument("--select", default="visits", choices=["visits", "value"])
     ap.add_argument("--c", type=float, default=0.1)
@@ -174,7 +188,7 @@ def main() -> None:
     print(f"{'sims':>6} {'meanHP':>7} {'P(death)':>8} {'turns':>6} {'loose':>7} {'skill>atk':>10} {'idle':>7} {'s/fight':>8}")
     for sims in (int(s) for s in args.sims.split(",")):
         jobs = [
-            (args.seed_base + i, pool_enc[i % len(pool_enc)], sims, args.mode, args.crn, args.select, args.c)
+            (args.seed_base + i, pool_enc[i % len(pool_enc)], sims, args.mode, args.crn, args.select, args.c, args.c_puct)
             for i in range(args.fights)
         ]
         t0 = time.perf_counter()

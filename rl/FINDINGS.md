@@ -21,12 +21,16 @@ Ranked by what they actually bought:
 | common random numbers at the root | **4.6x variance reduction** in the comparison | paired measurement, 1500 rollouts |
 | compositional card embeddings | −0.073 nats | 3 seeds/arm, 3.8 SE |
 | trained value head at the search leaf | +0.5 HP, +0.0 once retargeted | 64 held-out fights |
+| policy head as a PUCT prior | **+2.0 HP** (paired SE 0.9); target as sharp at 60 sims as UCT at 300; real waste halved | 64 fights paired; 591 positions; 192 fights |
+| per-head checkpoints | policy 1.0325 -> 1.0066, agreement 62 -> 65% | same run |
 | policy head as a value-head regulariser | +0.006 nats (nothing) | `--policy-weight 0` A/B |
 | intent type, creature id, secondary intent | nothing | 3 seeds/arm |
 | an explicit "am I fully blocking" probe | nothing | same-data ablation, 3 seeds/arm |
 
 **Everything that worked was about the SEARCH or its TARGET. Nothing that worked was about
-the observation.** Four separate attempts to tell the network more about the position — the
+the observation.** And the first learned component to beat the rollout searcher was the
+POLICY head, used as a search prior -- not the value head, which was the whole original
+plan. Four separate attempts to tell the network more about the position — the
 intent kind, the creature, the turn after next, and a lookahead that literally ends the turn
 and reports the damage — moved no metric at all, and the last was tested by a clean
 same-data ablation whose loss curves matched to four decimal places, epoch by epoch. What
@@ -486,6 +490,78 @@ but its bias -- rollouts play worse than the search -- is the same, and bias was
 larger term. Consistent with the earlier finding: the value head is limited by the target's
 location, not its variance.
 
+### Per-head checkpoints
+
+One line each. The value head is saved at its best epoch (2) and the policy head at its
+own (16), instead of both at the value head's. Same training run, same seed:
+
+| | selected on value loss | selected per head |
+| --- | ---: | ---: |
+| policy val NLL at the saved checkpoint | 1.0325 | **1.0066** |
+| top-1 agrees with the search | 62.0% | **65.1%** |
+
+`combat_net.pt` is the value-best, `combat_policy.pt` the policy-best; the PUCT prior
+loads the second.
+
+### The policy head as a PUCT prior: sharper, not righter, and one trap
+
+The AlphaZero mechanism, closed for the first time: `run_search(prior_fn=...)` turns the
+descent into PUCT -- `Q + c * P * sqrt(N) / (1 + n)` over every action a node knows, the
+prior asked for once per node on its determinized world, an untried move scored at its
+parent's mean (first-play urgency, since Q = 0 on a [0, 1] scale is "certain death").
+
+**What the prior does to the target** (`target_info.py --puct`, 591 positions, same
+positions for every row):
+
+| sims | crn | prior | window | agrees w/ 1500-sim ref |
+| ---: | ---: | :--: | ---: | ---: |
+| 60 | 0.6 | -- | 0.106 | 54.7% |
+| 300 | 0.2 | -- | 0.450 | 61.8% |
+| **60** | 0.2 | **yes** | **0.452** | 53.8% |
+| 300 | 0.2 | yes | 0.472 | 61.6% |
+
+A 60-sim search with the prior produces a target exactly as SHARP as a 300-sim search
+without it -- a 5x budget equivalence on concentration. It is not RIGHTER: agreement with
+the reference is unchanged at both budgets. The search concentrates where the prior
+points, and the values underneath come from the same rollouts. That is the echo risk with
+any prior, and it is why self-play generation should run with `root_noise` on.
+
+**The trap: `best_action` was choosing by mean value.** That rule was the fix for CRN's
+tied visit counts, and under a prior it fails badly. PUCT leaves a low-prior child at 2-3
+visits while the favourite gets 40; a 3-visit mean is a noisy outlier that never regresses,
+and argmax-mean picks it. On 192 fights at 60 sims, same prior, same `c_puct`:
+
+| move chosen by | mean HP | P(death) | skill over attack | idle attack |
+| --- | ---: | ---: | ---: | ---: |
+| mean value | 46.9 | 0.031 | 13.4% | **10.2%** |
+| visits | **47.3** | **0.026** | **6.3%** | **2.4%** |
+| no prior, tempo rollout | 47.2 | 0.036 | 11.8% | 2.2% |
+
+The search was ending its turn with an affordable Strike in hand one time in ten. Raising
+`c_puct` made it WORSE, monotonically (0.05 -> 7.5%, 0.2 -> 10.2%, 0.5 -> 12.0%, 1.0 ->
+14.0%): more exploration leaves more children at a handful of visits, which is more noisy
+means for argmax to pick from. It was selection, not exploration. By visits -- AlphaZero's rule, which here is not a convention but a
+requirement -- the regression is gone and the real-waste rate is half the no-prior
+searcher's. `best_action` now selects by visits whenever the root has a prior, and by mean
+otherwise; visits do not tie under a prior, so the CRN problem does not apply.
+
+**Play, paired, 64 held-out fights at 60 sims**, after the selection fix:
+
+| player | mean HP | P(death) |
+| --- | ---: | ---: |
+| tempo rollout | 45.6 | 0.078 |
+| **+ policy prior (PUCT)** | **47.6** | 0.047 |
+
+puct - rollout = **+2.0 HP**, paired SE 0.9, better on 37.5% of fights and worse on
+20.3%. Before the selection fix the same comparison was +0.6 (SE 0.8), so most of the
+prior's value was being thrown away at the last step. P(death) 5 -> 3 deaths is nothing.
+This is the first time a LEARNED component has beaten the rollout searcher at anything --
+the value head, after two datasets and a retargeting, only ever tied it.
+
+Cost, unbatched: ~25 prior calls per move at 60 sims, ~7 ms each including the end-turn
+probe in `encode`, about 4x the rollout searcher's wall time. Batching is now the binding
+constraint on using this for generation.
+
 ### The policy head learns, but its target is thin
 
 Floor H(target) 0.891 (a perfect policy), ceiling CE(uniform, target) 1.208 (knowing
@@ -556,6 +632,13 @@ document came off it. It moved the wrong way on the same run where both honest m
 improved, and nobody read a residual case until the end. Reading the cases took thirty
 seconds and reclassified half of them.
 
+**Choosing the move by mean value under a prior.** The rule that fixed CRN's tied visits
+broke the moment visits stopped tying. Every child's mean is a sample mean, and PUCT is
+DESIGNED to leave some children with three samples; comparing those means to a forty-sample
+mean and taking the max is selecting for noise. AlphaZero picks by visits for this reason,
+and I had a documented reason for doing otherwise that stopped applying without announcing
+itself.
+
 **Trusting visit counts after making them uniform.** Common random numbers sweep the root
 round-robin, which is exactly the thing `argmax visits` reads. The first version therefore
 chose by expansion order and picked a Defend over a Bash worth three times more, while every
@@ -566,8 +649,8 @@ consumer reads is not visible to that consumer's average.
 
 - **Retune the rollout weights, and fix `W_END_TURN` while doing it.** With the honest
   probe in place the weights can be swept against something that measures waste.
-- **Per-head checkpoints.** The value head peaks at epoch 2 and the policy head is still
-  improving at 16; selecting on value loss throws away the policy head's last 0.026 nats.
+- **Batched inference**, now a blocker rather than a nicety: the PUCT searcher is 18x slower
+  unbatched, and generation with it is the next iteration.
 - **Policy target from the UCT phase only.** Pairing and concentration compete for the
   same visits; splitting them would end the trade-off.
 - **Isolate `best_action`.** Argmax-mean-value and common random numbers landed together, so

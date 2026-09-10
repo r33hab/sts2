@@ -311,19 +311,53 @@ class Combat:
 
 
 class Node:
-    __slots__ = ("children", "untried", "value", "visits")
+    __slots__ = ("children", "prior", "untried", "value", "visits")
 
     def __init__(self, legal: list[int]):
         self.children: dict[int, Node] = {}
         self.untried = list(legal)
         self.visits = 0
         self.value = 0.0
+        # Filled lazily by `simulate` the first time a prior is needed here, so a leaf
+        # that is never selected from never pays for a network call.
+        self.prior: dict[int, float] | None = None
 
 
 def uct(parent: Node, child: Node, c: float) -> float:
     return child.value / child.visits + c * math.sqrt(
         math.log(parent.visits) / child.visits,
     )
+
+
+def puct_action(node: Node, c_puct: float) -> int:
+    """AlphaZero's selection rule: Q(a) + c * P(a) * sqrt(N) / (1 + n(a)).
+
+    Over EVERY action the node knows, tried or not, so the prior decides which untried
+    move is expanded first instead of a coin flip. An untried action is scored at the
+    parent's own mean value -- the "first play urgency" that keeps a [0, 1] scale from
+    treating every unvisited move as certain death, which Q = 0 would.
+
+    The prior was computed on ONE determinization of this node, and a later one can have
+    a different hand, so the node's own action set is what is iterated and the prior is
+    looked up; a move the prior never saw gets zero exploration bonus, not skipped. The
+    first version iterated the prior's keys and returned -1 when the two sets were
+    disjoint, which the engine took as an action index.
+
+    sqrt(N + 1) rather than sqrt(N): at a fresh node N is 0 and every score would tie.
+    """
+    prior = node.prior or {}
+    parent_mean = node.value / node.visits if node.visits else 0.5
+    explore = c_puct * math.sqrt(node.visits + 1)
+    best, best_score = -1, -math.inf
+    for action, child in node.children.items():
+        score = child.value / child.visits + explore * prior.get(action, 0.0) / (1 + child.visits)
+        if score > best_score:
+            best, best_score = action, score
+    for action in node.untried:
+        score = parent_mean + explore * prior.get(action, 0.0)
+        if score > best_score:
+            best, best_score = action, score
+    return best
 
 
 def terminal_value(sim: Combat) -> float:
@@ -456,8 +490,15 @@ def simulate(
     greedy_rollout: bool = True,
     returns: list[float] | None = None,
     force_root_action: int | None = None,
+    prior_fn: Callable[[Combat], dict[int, float]] | None = None,
+    c_puct: float = 0.2,
 ) -> int:
     """One determinization: fork, descend, expand, roll out, back up.
+
+    `prior_fn` turns the descent into PUCT: it maps a position to a probability per
+    legal action, and selection follows `puct_action` instead of expanding every untried
+    move first and then running UCT. The prior is asked for once per node, the first time
+    a move is chosen from it, on the determinized world at that node.
 
     Returns the native steps it cost, so throughput can be reported honestly -- a
     simulation is a whole playout, not a step.
@@ -504,6 +545,25 @@ def simulate(
                 path.append(node)
                 continue
             first = False
+            if prior_fn is not None:
+                if not node.untried and not node.children:
+                    break
+                if node.prior is None:
+                    node.prior = prior_fn(world)
+                action = puct_action(node, c_puct)
+                if action in node.untried:
+                    node.untried.remove(action)
+                    world.step(action)
+                    steps += 1
+                    child = Node([] if world.done else world.legal())
+                    node.children[action] = child
+                    path.append(child)
+                    break
+                world.step(action)
+                steps += 1
+                node = node.children[action]
+                path.append(node)
+                continue
             if node.untried:
                 action = int(rng.choice(node.untried))
                 node.untried.remove(action)
@@ -561,8 +621,16 @@ def run_search(
     returns: list[float] | None = None,
     crn: bool = True,
     crn_fraction: float = 0.2,
+    prior_fn: Callable[[Combat], dict[int, float]] | None = None,
+    c_puct: float = 0.2,
+    root_noise: float = 0.0,
 ) -> Node:
     """Build one search tree over `legal`, and return its root.
+
+    With `prior_fn` the descent is PUCT (see `simulate`). `root_noise` is AlphaZero's
+    Dirichlet mix at the root, epsilon in [0, 1], for self-play only: it keeps the
+    search from visiting nothing but what the prior already likes, which is what makes
+    the visit distribution a teacher for the prior rather than an echo of it.
 
     With `crn`, the first `crn_fraction` of simulations round-robin the root action and
     share determinization seeds, so every action is scored against an identical set of
@@ -576,6 +644,15 @@ def run_search(
     which is where most of the variance reduction was anyway.
     """
     root = Node(legal)
+    if prior_fn is not None:
+        root.prior = prior_fn(position)
+        if root_noise > 0 and len(legal) > 1:
+            # alpha ~ 10 / n_moves is AlphaZero's scaling (0.3 for chess, 0.03 for Go).
+            noise = rng.dirichlet([10.0 / len(legal)] * len(legal))
+            root.prior = {
+                a: (1 - root_noise) * root.prior.get(a, 0.0) + root_noise * float(n)
+                for a, n in zip(legal, noise)
+            }
     # Two phases. The first round-robins the root with SHARED determinizations, so every
     # action gets a paired estimate; the second lets UCT allocate the rest, which is what
     # keeps the visit distribution meaningful -- pure round-robin makes visits exactly
@@ -599,20 +676,33 @@ def run_search(
             greedy_rollout=greedy_rollout,
             returns=returns,
             force_root_action=forced,
+            prior_fn=prior_fn,
+            c_puct=c_puct,
         )
     return root
 
 
 def best_action(root: Node, legal: list[int], rng: np.random.Generator) -> int:
-    """The action to actually play: highest MEAN VALUE, not most visits.
+    """The action to actually play.
 
-    Under paired round-robin the visit counts are equal by construction, so `argmax
-    visits` degenerates into "whichever child was created first" -- which once picked a
-    Defend over a Bash whose mean value was three times higher. Visits remain the policy
-    target; the move is chosen on the estimate.
+    Without a prior: highest MEAN VALUE. Under paired round-robin the visit counts are
+    equal by construction, so `argmax visits` degenerated into "whichever child was
+    created first" -- which once picked a Defend over a Bash worth three times more.
+
+    With a prior: most VISITS, mean as the tiebreak -- AlphaZero's rule, and here it is
+    not optional. PUCT leaves a low-prior child at 2-3 visits while the favourite gets 40,
+    and a 3-visit mean is a noisy outlier that never regresses; argmax-mean picked those
+    and the search ended its turn with an affordable Strike in hand 10.2% of the time
+    against 2.4% by visits, on the same fights with the same prior (`waste_probe.py`).
+    Visits do not tie under a prior, so the round-robin problem does not apply.
     """
     if not root.children:
         return int(rng.choice(legal))
+    if root.prior is not None:
+        return max(
+            root.children,
+            key=lambda a: (root.children[a].visits, root.children[a].value / max(1, root.children[a].visits)),
+        )
     return max(
         root.children,
         key=lambda a: root.children[a].value / max(1, root.children[a].visits),

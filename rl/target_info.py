@@ -40,9 +40,25 @@ from combat_mcts import (  # noqa: E402
 
 STEP_CAP = 300
 
-# (sims, crn_fraction). crn_fraction 0 means no pairing at all.
-CONFIGS = [(40, 0.0), (40, 0.6), (60, 0.6), (300, 0.6), (300, 0.2), (1500, 0.2)]
-REFERENCE = (1500, 0.2)
+# (sims, crn_fraction, puct). crn_fraction 0 means no pairing at all.
+CONFIGS = [
+    (40, 0.0, False), (40, 0.6, False), (60, 0.6, False),
+    (300, 0.6, False), (300, 0.2, False), (1500, 0.2, False),
+]
+PUCT_CONFIGS = [(60, 0.2, True), (300, 0.2, True)]
+REFERENCE = (1500, 0.2, False)
+
+_prior = None
+
+
+def prior_fn():
+    """One PolicyPrior per worker process, built on first use."""
+    global _prior
+    if _prior is None:
+        from play_net import PolicyPrior, policy_checkpoint  # torch: only when asked
+
+        _prior = PolicyPrior(policy_checkpoint())
+    return _prior
 
 
 def entropy(counts: np.ndarray) -> float:
@@ -52,7 +68,7 @@ def entropy(counts: np.ndarray) -> float:
 
 
 def play(job) -> list[dict]:
-    seed, enc, c = job
+    seed, enc, c, configs, c_puct = job
     extra = sample_extra_cards(seed, 2, 8, "Ironclad")
     relics = sample_relics(seed, 0, 5, "Ironclad")
     rng = np.random.default_rng([enc, seed])
@@ -67,19 +83,20 @@ def play(job) -> list[dict]:
                 break
             if len(legal) >= 2:
                 row = {"n_legal": len(legal)}
-                for sims, frac in CONFIGS:
+                for sims, frac, puct in configs:
                     # Fresh generator per (position, config), so a config's result does
                     # not depend on which configs ran before it.
-                    r = np.random.default_rng([enc, seed, move, sims, int(frac * 100)])
+                    r = np.random.default_rng([enc, seed, move, sims, int(frac * 100), int(puct)])
                     root = run_search(
                         combat, legal, sims, r, c, move, None,
                         crn=frac > 0, crn_fraction=frac,
+                        prior_fn=prior_fn() if puct else None, c_puct=c_puct,
                     )
                     visits = np.array(
                         [root.children[a].visits if a in root.children else 0 for a in legal],
                         dtype=np.float64,
                     )
-                    row[(sims, frac)] = (entropy(visits), best_action(root, legal, r))
+                    row[(sims, frac, puct)] = (entropy(visits), best_action(root, legal, r))
                 rows.append(row)
             # Advance the fight with the default searcher, as label generation would.
             root = run_search(combat, legal, 60, rng, c, move, None)
@@ -95,10 +112,18 @@ def main() -> None:
     ap.add_argument("--seed-base", type=int, default=400)
     ap.add_argument("--c", type=float, default=0.1)
     ap.add_argument("--workers", type=int, default=14)
+    ap.add_argument("--puct", action="store_true", help="add PUCT configs (loads torch)")
+    ap.add_argument("--c-puct", type=float, default=0.2)
     args = ap.parse_args()
+    configs = CONFIGS + (PUCT_CONFIGS if args.puct else [])
 
     pool = list(OVERGROWTH_WEAK) + list(OVERGROWTH_NORMAL)
-    jobs = [(args.seed_base + i, pool[i % len(pool)], args.c) for i in range(args.fights)]
+    # c_puct rides on the job: a module global set in the parent never reaches a spawned
+    # worker, which re-imports this file and would see the default.
+    jobs = [
+        (args.seed_base + i, pool[i % len(pool)], args.c, configs, args.c_puct)
+        for i in range(args.fights)
+    ]
     t0 = time.perf_counter()
     with ProcessPoolExecutor(max_workers=args.workers) as ex:
         rows = [r for chunk in ex.map(play, jobs) for r in chunk]
@@ -109,12 +134,12 @@ def main() -> None:
     ref_best = np.array([r[REFERENCE][1] for r in rows])
     print(f"\nceiling log(n_legal): mean {ceiling.mean():.3f} nats "
           f"(mean n_legal {np.mean([r['n_legal'] for r in rows]):.1f})\n")
-    print(f"{'sims':>5} {'crn':>4} {'floor H':>8} {'window':>7} {'of max':>7} {'agree w/ ref':>13}")
-    for cfg in CONFIGS:
+    print(f"{'sims':>5} {'crn':>4} {'puct':>5} {'floor H':>8} {'window':>7} {'of max':>7} {'agree w/ ref':>13}")
+    for cfg in configs:
         floor = np.array([r[cfg][0] for r in rows])
         window = ceiling - floor
         agree = np.mean([r[cfg][1] == b for r, b in zip(rows, ref_best)])
-        print(f"{cfg[0]:>5} {cfg[1]:>4.1f} {floor.mean():>8.3f} {window.mean():>7.3f} "
+        print(f"{cfg[0]:>5} {cfg[1]:>4.1f} {('yes' if cfg[2] else '-'):>5} {floor.mean():>8.3f} {window.mean():>7.3f} "
               f"{window.mean() / ceiling.mean():>7.1%} {agree:>13.1%}")
 
 

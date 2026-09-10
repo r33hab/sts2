@@ -58,6 +58,10 @@ from sts2_gym.env import ENCOUNTER_NAMES
 
 DATASET = Path(__file__).resolve().parent / "data" / "combat_act1.npz"
 CHECKPOINT = Path(__file__).resolve().parent / "data" / "combat_net.pt"
+# The two heads stop learning at different epochs -- the value head overfits by
+# epoch 2 while the policy head is still descending at 16 -- so each gets its own
+# best checkpoint. Selecting both on the value loss cost the policy head 0.026 nats.
+POLICY_CHECKPOINT = Path(__file__).resolve().parent / "data" / "combat_policy.pt"
 STEP_CAP = 300
 
 
@@ -343,7 +347,25 @@ def train(args: argparse.Namespace) -> None:
 
     print(f"padded set {tuple(padded['types'].shape)} on {device}")
 
+    def save(path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            {
+                "model": model.state_dict(),
+                "n_buckets": n_buckets,
+                "width": width,
+                "max_hp": max_hp,
+                # The shape too, or nothing can rebuild this without being told the
+                # flags it was trained with.
+                "d_model": args.d_model,
+                "layers": args.layers,
+                "heads": args.heads,
+            },
+            path,
+        )
+
     best = float("inf")
+    best_policy = float("inf")
     for epoch in range(1, args.epochs + 1):
         shuffled = train_idx[rng.permutation(len(train_idx))]
         tr, tr_pol = run_epoch(shuffled, True)
@@ -352,47 +374,45 @@ def train(args: argparse.Namespace) -> None:
         flag = ""
         if va < best:
             best = va
-            CHECKPOINT.parent.mkdir(parents=True, exist_ok=True)
-            torch.save(
-                {
-                    "model": model.state_dict(),
-                    "n_buckets": n_buckets,
-                    "width": width,
-                    "max_hp": max_hp,
-                    # The shape too, or nothing can rebuild this without being told the
-                    # flags it was trained with.
-                    "d_model": args.d_model,
-                    "layers": args.layers,
-                    "heads": args.heads,
-                },
-                CHECKPOINT,
-            )
-            flag = "  *"
+            save(CHECKPOINT)
+            flag += " *"
+        if va_pol < best_policy:
+            best_policy = va_pol
+            save(POLICY_CHECKPOINT)
+            flag += " +"
         print(
             f"  epoch {epoch:3d}  value {tr:.4f}/{va:.4f}  "
-            f"policy {tr_pol:.4f}/{va_pol:.4f}{flag}  (train/val)",
+            f"policy {tr_pol:.4f}/{va_pol:.4f}{flag:<3}  (train/val)",
         )
 
-    # Calibration on the held-out split, from the best checkpoint.
+    def over_val(fn) -> None:
+        with torch.no_grad():
+            for start in range(0, len(val_idx), args.batch):
+                chunk = torch.from_numpy(val_idx[start : start + args.batch]).to(device)
+                batch = {k: v[chunk] for k, v in padded.items()}
+                fn(chunk, *model(**batch))
+
+    # Policy agreement from the policy-best checkpoint, calibration from the value-best:
+    # each head is judged at the epoch it was saved.
+    model.load_state_dict(torch.load(POLICY_CHECKPOINT, weights_only=True)["model"])
+    model.eval()
+    agree: list[np.ndarray] = []
+    counted: list[np.ndarray] = []
+
+    def collect_agreement(chunk, value_logits, policy_logits) -> None:
+        masked = policy_logits.masked_fill(legal_t[chunk] == 0, float("-inf"))
+        top = masked.argmax(dim=1)
+        most_visited = (visit_t[chunk] * legal_t[chunk]).argmax(dim=1)
+        agree.append(((top == most_visited).float() * has_policy[chunk]).cpu().numpy())
+        counted.append(has_policy[chunk].cpu().numpy())
+
+    over_val(collect_agreement)
+
     model.load_state_dict(torch.load(CHECKPOINT, weights_only=True)["model"])
     model.eval()
     centres = bucket_centres(n_buckets, width)
     chunks = []
-    agree: list[np.ndarray] = []
-    counted: list[np.ndarray] = []
-    with torch.no_grad():
-        for start in range(0, len(val_idx), args.batch):
-            chunk = torch.from_numpy(val_idx[start : start + args.batch]).to(device)
-            batch = {k: v[chunk] for k, v in padded.items()}
-            value_logits, policy_logits = model(**batch)
-            chunks.append(torch.softmax(value_logits, dim=-1).cpu().numpy())
-            masked = policy_logits.masked_fill(legal_t[chunk] == 0, float("-inf"))
-            top = masked.argmax(dim=1)
-            most_visited = (visit_t[chunk] * legal_t[chunk]).argmax(dim=1)
-            agree.append(
-                ((top == most_visited).float() * has_policy[chunk]).cpu().numpy(),
-            )
-            counted.append(has_policy[chunk].cpu().numpy())
+    over_val(lambda chunk, v, p: chunks.append(torch.softmax(v, dim=-1).cpu().numpy()))
     probs = np.concatenate(chunks)
 
     # The policy term's own floor and ceiling, because its raw loss is unreadable without
@@ -464,7 +484,8 @@ def train(args: argparse.Namespace) -> None:
         centres,
         width,
     )
-    print(f"\nbest val loss {best:.4f}   checkpoint {CHECKPOINT}")
+    print(f"\nbest val value {best:.4f}   checkpoint {CHECKPOINT}")
+    print(f"best val policy {best_policy:.4f}   checkpoint {POLICY_CHECKPOINT}")
 
 
 def main() -> None:

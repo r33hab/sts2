@@ -47,7 +47,7 @@ from combat_mcts import (
     sample_relics,
 )
 from combat_net import CombatNet, collate
-from play_net import NetEvaluator
+from play_net import NetEvaluator, PolicyPrior, policy_checkpoint
 from combat_tokens import (
     ENEMY_OFFSET,
     ENEMY_SLOT,
@@ -186,6 +186,7 @@ def play_one(
     centres: np.ndarray | None,
     blob: dict,
     evaluator: NetEvaluator | None = None,
+    prior: PolicyPrior | None = None,
 ) -> dict:
     """One fight, position by position, with the search and the prediction at each."""
     extra_low, extra_high = (int(x) for x in args.extra_cards.split(","))
@@ -220,6 +221,8 @@ def play_one(
                 args.c,
                 move,
                 evaluator,
+                prior_fn=prior,
+                c_puct=args.c_puct,
             )
             visits = {a: node.visits for a, node in root.children.items()}
             total = sum(visits.values()) or 1
@@ -291,16 +294,17 @@ def main() -> None:
     parser.add_argument("--count", type=int, default=12)
     parser.add_argument(
         "--player",
-        choices=("rollout", "net", "both"),
+        choices=("rollout", "net", "puct", "both"),
         default="rollout",
         help=(
             "who picks the moves. 'rollout' scores leaves by playing the fight out with "
-            "the tempo-weighted policy -- the strongest player measured. 'net' scores "
-            "them with the value head, which ties the rollout at 60+ sims and is much "
-            "worse below that (see FINDINGS.md). The prediction panel is the network "
-            "either way."
+            "the tempo-weighted policy. 'net' scores them with the value head, which "
+            "ties the rollout at 60+ sims and is much worse below that (see "
+            "FINDINGS.md). 'puct' is the rollout searcher with the policy head as a PUCT "
+            "prior over the descent. The prediction panel is the network either way."
         ),
     )
+    parser.add_argument("--c-puct", type=float, default=0.2)
     parser.add_argument(
         "--seed-base",
         type=int,
@@ -330,6 +334,7 @@ def main() -> None:
     centres = bucket_centres(blob["n_buckets"], blob["width"]) if model else None
     players = ("rollout", "net") if args.player == "both" else (args.player,)
     evaluator = NetEvaluator(CHECKPOINT) if "net" in players and model else None
+    prior = PolicyPrior(policy_checkpoint()) if "puct" in players and model else None
 
     fights = []
     for player in players:
@@ -343,6 +348,7 @@ def main() -> None:
                 centres,
                 blob,
                 evaluator if player == "net" else None,
+                prior if player == "puct" else None,
             )
             fight["id"] = len(fights)
             fight["player"] = player
