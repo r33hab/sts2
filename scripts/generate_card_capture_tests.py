@@ -21,10 +21,27 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO / "src"))
+
+# The live-power tables and the enemy and orb lookups are shared with the live-snapshot
+# converter, so they live beside it and are imported here rather than kept twice.
+from sts2_gym.live import ConversionError  # noqa: E402 -- after the path insert above
+from sts2_gym.live.ids import (  # noqa: E402
+    ORB_STORED_VALUE,
+    ORB_TYPES,
+    enemy_def_id,
+)
+from sts2_gym.live.powers import (  # noqa: E402
+    BUFF_ALIASES,
+    DISPLAY_AMOUNT_BUFFS,
+    PRESENCE_ONLY_BUFFS,
+)
+
 FIXTURES = REPO / "tests" / "fixtures" / "cards"
 OUT = REPO / "src" / "Sts2Emulator.Tests" / "Cards" / "CardCaptures.g.cs"
 ID_MAP = REPO / "data" / "id_map.json"
@@ -60,85 +77,11 @@ def card_ids() -> dict[str, int]:
     return {normalize(name): id_ for name, id_ in cards.items()}
 
 
-def enemy_ids() -> dict[str, int]:
-    enemies = json.loads(ID_MAP.read_text(encoding="utf-8"))["enemies"]
-    return {normalize(name): id_ for name, id_ in enemies.items()}
-
-
-def enemy_def_id(entity_id: str, enemies: dict[str, int]) -> int:
-    """``CORPSE_SLUG_1`` -> the emulator's def id for CorpseSlug.
-
-    Substituting a stand-in enemy would be quietly wrong: def id selects the enemy's
-    own hooks, so a capture rebuilt against the wrong monster can pass while the
-    emulator models the real one incorrectly.
-
-    Raises:
-        UnsupportedCaptureError: if the enemy is absent from ``data/id_map.json``.
-
-    """
-    base = re.sub(r"_\d+$", "", entity_id)
-    key = normalize(base)
-    if key not in enemies:
-        raise UnsupportedCaptureError(f"enemy {entity_id!r} is not in data/id_map.json")
-    return enemies[key]
-
-
 def buff_ids() -> set[str]:
     """Read the BuffId enum's member names from the enum itself, so they cannot drift."""
     source = BUFF_STATE.read_text(encoding="utf-8")
     body = source.split("public enum BuffId", 1)[1].split("}", 1)[0]
     return set(re.findall(r"^\s*(\w+),", body, re.MULTILINE))
-
-
-# Powers whose reported amount is a `DisplayAmount` override rather than `Amount`, so the
-# number in the capture is not the number the name suggests.
-#
-# `OutbreakPower.DisplayAmount => timesPoisoned` -- the mod reports the progress towards
-# the next burst, which is 0 the moment the card is played, while the power's own Amount is
-# the 11 damage it will deal. The emulator keeps those two apart as `Outbreak` and
-# `OutbreakCounter`, and it is the COUNTER the capture is looking at.
-DISPLAY_AMOUNT_BUFFS = {
-    "OUTBREAK_POWER": "OutbreakCounter",
-    # `MonologuePower.DisplayAmount => StrengthApplied` -- the game shows the Strength the
-    # power has handed out so far, not the per-card amount the power actually holds.
-    "MONOLOGUE_POWER": "MonologueApplied",
-}
-
-# Powers whose displayed number is DERIVED rather than stored, so no BuffId holds it and
-# the amount cannot be compared -- only the power's presence. `OrbitPower.DisplayAmount` is
-# `4 - energySpent % 4`, the energy left until the next payout, where the emulator keeps the
-# energy spent (CombatState.OrbitEnergySpent) and the power's own amount is what it grants.
-#
-# Asserting presence and not the number is a real weakening, so it is spelled out here and
-# each entry needs a hand-written test to cover the number instead.
-PRESENCE_ONLY_BUFFS = {
-    "ORBIT_POWER": "Orbit",
-    # `AutomationPower.DisplayAmount => cardsLeft`, counting DOWN from 10 to the next
-    # payout, where the power's own amount is the ENERGY it grants. The emulator keeps the
-    # energy on `BuffId.AutomationPower` and counts UP in
-    # `CombatState.DrawnCardsSinceAutomationProc`, so the displayed number is the
-    # complement of a field that is not a buff at all.
-    "AUTOMATION_POWER": "AutomationPower",
-    # `PanachePower.DisplayAmount => CardsLeft`, down from 5, where the amount is the
-    # DAMAGE. Same shape: `CombatState.CardsPlayedSincePanacheProc` counts up.
-    "PANACHE_POWER": "PanachePower",
-}
-
-# The Defect's orbs. `ModelId.Entry` is the slugified class name, so DarkOrb reads
-# DARK_ORB.
-ORB_TYPES = {
-    "LIGHTNING_ORB": "Lightning",
-    "FROST_ORB": "Frost",
-    "DARK_ORB": "Dark",
-    "PLASMA_ORB": "Plasma",
-    "GLASS_ORB": "Glass",
-}
-
-# The two orbs that carry a number of their OWN. Everything else about an orb is a pure
-# function of its type and the player's Focus, which the emulator computes rather than
-# stores -- so those orbs' reported passive_val and evoke_val have no field to compare
-# against, and only the type and the position are checked for them.
-ORB_STORED_VALUE = {"DARK_ORB": "evoke_val", "GLASS_ORB": "passive_val"}
 
 
 def orb_literal(orb: dict[str, Any]) -> str:
@@ -151,52 +94,6 @@ def orb_literal(orb: dict[str, Any]) -> str:
     value = int(orb.get(field) or 0)
     arg = "EvokeValue" if field == "evoke_val" else "PassiveValue"
     return f"new OrbState(OrbType.{kind}, {arg}: {value})"
-
-
-# Powers the emulator names the other way round. Only reorderings and rewordings of the
-# same concept belong here -- a live power with no emulator equivalent must still refuse,
-# because that is how a missing power gets noticed at all.
-BUFF_ALIASES = {
-    "ENERGY_NEXT_TURN_POWER": "NextTurnEnergy",
-    # One power in the game, two buffs here: `CrimsonMantlePower.Amount` is the block it
-    # grants at the start of the turn and its `SelfDamage` var is the HP it costs, and the
-    # emulator keeps those as separate numbers because a BuffState is an id and ONE value.
-    # The mod reports the power's Amount, which is the block half.
-    "CRIMSON_MANTLE_POWER": "CrimsonMantleBlock",
-    # `AccuracyPower.ModifyDamageAdditive` adds its amount to any POWERED attack from a
-    # card tagged `CardTag.Shiv`. The emulator names the buff after what it does rather
-    # than after the card that grants it, because Accuracy is not the only source.
-    "ACCURACY_POWER": "ShivDamage",
-    "DRAW_CARDS_NEXT_TURN_POWER": "NextTurnDraw",
-    # Every `: TemporaryStrengthPower` subclass. They add nothing but a sign, and the
-    # emulator models them all as the base power -- thirteen classes in the game and one
-    # BuffId here, so the mapping has to be spelled out rather than derived from the name.
-    "ENFEEBLING_TOUCH_POWER": "TemporaryStrength",
-    "CRUSH_UNDER_POWER": "TemporaryStrength",
-    "DYING_STAR_POWER": "TemporaryStrength",
-    "MANGLE_POWER": "TemporaryStrength",
-    "SETUP_STRIKE_POWER": "TemporaryStrength",
-    "COORDINATE_POWER": "TemporaryStrength",
-    "DARK_SHACKLES_POWER": "TemporaryStrength",
-    "FEEDING_FRENZY_POWER": "TemporaryStrength",
-    "PIERCING_WAIL_POWER": "TemporaryStrength",
-    "MONARCHS_GAZE_STRENGTH_DOWN_POWER": "TemporaryStrength",
-    "FLEX_POTION_POWER": "TemporaryStrength",
-    "SHACKLING_POTION_POWER": "TemporaryStrength",
-    "REPTILE_TRINKET_POWER": "TemporaryStrength",
-    # The same shape one stat over: `: TemporaryFocusPower` and `: TemporaryDexterityPower`
-    # subclasses, which the emulator models as their base power too.
-    "FOCUSED_STRIKE_POWER": "TemporaryFocus",
-    "HOTFIX_POWER": "TemporaryFocus",
-    "SYNCHRONIZE_POWER": "TemporaryFocus",
-    "SPEED_POTION_POWER": "TemporaryDexterity",
-    # `SelfFormingClayPower` grants its amount as block after the next block clear, which is
-    # what the emulator's `BlockNextTurn` already is -- the relic applies 3 to both. One
-    # concept, two names, so it belongs here rather than in the unmapped report.
-    "SELF_FORMING_CLAY_POWER": "BlockNextTurn",
-    "HELICAL_DART_POWER": "TemporaryDexterity",
-    "ANTICIPATE_POWER": "TemporaryDexterity",
-}
 
 
 def buff_constant(live_id: str, buffs: set[str]) -> str:
@@ -425,7 +322,6 @@ def render_test(
     fixture: dict[str, Any],
     constants: dict[str, str],
     ids: dict[str, int],
-    enemies: dict[str, int],
     buffs: set[str],
 ) -> str:
     check_supported(fixture)
@@ -475,7 +371,7 @@ def render_test(
     )
 
     for enemy in before["enemies"]:
-        def_id = enemy_def_id(str(enemy["entity_id"]), enemies)
+        def_id = enemy_def_id(str(enemy["entity_id"]))
         args = [f"defId: {def_id}", f"hp: {enemy['hp']}", f"maxHp: {enemy['max_hp']}"]
         if enemy.get("block"):
             args.append(f"block: {enemy['block']}")
@@ -727,18 +623,19 @@ def main() -> None:
         )
         return
 
-    constants, ids, enemies, buffs = (
+    constants, ids, buffs = (
         card_constants(),
         card_ids(),
-        enemy_ids(),
         buff_ids(),
     )
     tests, skipped = [], []
     for path in fixtures:
         fixture = json.loads(path.read_text(encoding="utf-8"))
         try:
-            tests.append(render_test(fixture, constants, ids, enemies, buffs))
-        except UnsupportedCaptureError as exc:
+            tests.append(render_test(fixture, constants, ids, buffs))
+        # An enemy missing from the id map surfaces from the shared lookup as a
+        # ConversionError; it is the same refusal.
+        except (UnsupportedCaptureError, ConversionError) as exc:
             skipped.append(f"{path.name}: {exc}")
 
     names = [

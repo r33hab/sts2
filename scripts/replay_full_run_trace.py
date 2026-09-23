@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import functools
 import json
 import re
 import sys
@@ -17,7 +16,6 @@ if TYPE_CHECKING:
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import compare_traces
-from buff_map import BUFF_ID_TO_LIVE, canonical_power
 
 from sts2_gym import Sts2RunEnv, native
 from sts2_gym.commands import (
@@ -27,6 +25,8 @@ from sts2_gym.commands import (
     translate_command,
     valid_actions,
 )
+from sts2_gym.live.ids import card_slug_to_id, potion_name_by_id, relic_slug_to_id
+from sts2_gym.live.powers import BUFF_ID_TO_LIVE, canonical_power
 from sts2_gym.run_env import (
     NODE_BOSS,
     NODE_ELITE,
@@ -190,24 +190,6 @@ def apply_debug_buff(env: Any, payload: dict[str, Any]) -> tuple[Any, dict[str, 
     return env.debug_upgrade_deck()
 
 
-@functools.cache
-def potion_name_by_id() -> dict[str, str]:
-    """The emulator's numeric potion ids, in the game's own entry vocabulary.
-
-    The live payload names potions (`BLESSING_OF_THE_FORGE`) and the emulator numbers them,
-    exactly as it does for cards -- so a comparison that does not translate reports every
-    potion as a divergence and drowns the real ones.
-    """
-    text = (
-        Path(__file__).resolve().parents[1]
-        / "src/Sts2Emulator/Generated/Potions.g.cs"
-    ).read_text(encoding="utf-8")
-    return {
-        m.group(1): re.sub(r"(?<!^)(?=[A-Z])", "_", m.group(2)).upper()
-        for m in re.finditer(r'new PotionDef\(Id: (\d+), Name: "([A-Za-z0-9]+)"', text)
-    }
-
-
 def normalise_for_compare(field: str, value: Any) -> Any:
     """Reduce a field to what both sides can actually express.
 
@@ -229,9 +211,11 @@ def normalise_for_compare(field: str, value: Any) -> Any:
     if field == "player.potions":
         names = potion_name_by_id()
         return sorted(
-            names.get(str(item.get("id")), str(item.get("id")))
-            if isinstance(item, dict)
-            else names.get(str(item), str(item))
+            (
+                names.get(str(item.get("id")), str(item.get("id")))
+                if isinstance(item, dict)
+                else names.get(str(item), str(item))
+            )
             for item in value or []
         )
     if field == "player.status":
@@ -239,9 +223,11 @@ def normalise_for_compare(field: str, value: Any) -> Any:
         # sides use -- the game reports thirteen different temporary-strength powers where
         # the emulator models one.
         return sorted(
-            (canonical_power(str(item.get("id"))), item.get("amount"))
-            if isinstance(item, dict)
-            else (canonical_power(str(item)), None)
+            (
+                (canonical_power(str(item.get("id"))), item.get("amount"))
+                if isinstance(item, dict)
+                else (canonical_power(str(item)), None)
+            )
             for item in value or []
         )
     if field in {"player.deck", "player.relics"}:
@@ -349,44 +335,6 @@ def first_divergences(
                     f"reference={ref_value!r} emulator={emu_value!r}"
                 )
     return [first[field] for field in fields if field in first]
-
-
-@functools.cache
-def card_slug_to_id() -> dict[str, int]:
-    """The game's card entry ids mapped to ours, so hands can be compared."""
-    text = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "Sts2Emulator"
-        / "Generated"
-        / "Cards.g.cs"
-    ).read_text()
-    return {
-        match.group(2): int(match.group(1))
-        for match in re.finditer(
-            r'Id: (\d+), Name: "[^"]*", Entry: "([A-Z0-9_]*)"',
-            text,
-        )
-    }
-
-
-@functools.cache
-def relic_slug_to_id() -> dict[str, int]:
-    """Map the game's relic entry ids to ours, so relics can be compared."""
-    text = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "Sts2Emulator"
-        / "Generated"
-        / "Relics.g.cs"
-    ).read_text()
-    return {
-        match.group(2): int(match.group(1))
-        for match in re.finditer(
-            r'Id: (\d+), Name: "[^"]*", Entry: "([A-Z0-9_]*)"',
-            text,
-        )
-    }
 
 
 def compare_boundary_snapshots(
