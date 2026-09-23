@@ -17,16 +17,49 @@ public static class PotionEffects
     /// <summary>`PowderedDemise`'s `DynamicVar("Demise", 9)`.</summary>
     private const int PowderedDemiseAmount = 9;
 
+    /// <summary>
+    /// Whether using this potion needs a chosen enemy -- the same question
+    /// `CombatEngine.ValidActions`/`CanPlayFromHand` ask of a card's `CardTarget`. Only
+    /// `AnyEnemy` performs target selection (`CardTarget`'s own remark); `AllEnemies`,
+    /// `RandomEnemy` and the player-facing targets never do.
+    /// </summary>
+    public static bool NeedsEnemyTarget(int potionId) =>
+        GeneratedData.Potions.Get(potionId).TargetType == CardTarget.AnyEnemy;
+
     public static void Apply(int potionId, CombatState state, Random? rng = null)
     {
         // Populated incrementally as potions are reverse-engineered from sts2.dll.
         switch (potionId)
         {
-            case 5: // Block Potion: gain 12 unpowered Block.
-                CardEffects.GainBlock(state, 12, rng);
+            case 3: // Beetle Juice: BeetleJuice.cs -- RepeatVar(4) Shrink to the aimed-at
+                // enemy (BuffId.Shrink already covers both "30% less damage dealt" and
+                // "ticks down as a duration debuff"; TargetType.AnyEnemy).
+                if (CardEffects.TargetedEnemyFor(state) is { } shrunk)
+                {
+                    BuffSystem.Apply(shrunk.Buffs, BuffId.Shrink, 4);
+                }
+
                 break;
-            case 9: // Clarity: draw an extra card at the start of each of the next 3 turns.
+            case 5: // Block Potion: BlockPotion.cs -- BlockVar(12m, Unpowered).
+                // Was CardEffects.GainBlock (POWERED, so Dexterity/Frail applied) --
+                // GainUnpoweredBlock is the one that matches the decompiled ValueProp.
+                CardEffects.GainUnpoweredBlock(state, 12, rng);
+                break;
+            case 6: // Blood Potion: BloodPotion.cs -- heal HealPercent (20) percent of
+                // target's max HP. `(decimal)MaxHp * 20m / 100m`, truncated the way the
+                // game's own DynamicVar math lands on a final (int) cast.
+                CardEffects.HealPlayer(state, (int)(state.PlayerMaxHp * 20m / 100m));
+                break;
+            case 9: // Clarity: Clarity.cs -- CardsVar(1) drawn immediately, THEN
+                // PowerVar<ClarityPower>(3) applied. The immediate draw was missing: the
+                // power alone only pays out on each of the NEXT three turns.
+                CardEffects.DrawCards(state, 1, rng!);
                 BuffSystem.Apply(state.PlayerBuffs, BuffId.Clarity, ClarityTurns);
+                break;
+            case 14: // Dexterity Potion: DexterityPotion.cs -- PowerVar<DexterityPower>(2).
+                // No Ruined-Helmet-style doubling chokepoint exists for Dexterity (only
+                // Strength has one, via RelicEffects.GainPlayerStrength).
+                BuffSystem.Apply(state.PlayerBuffs, BuffId.Dexterity, 2);
                 break;
             case 17: // Duplicator: play the next card an extra time.
                 // `DuplicationPower`, NOT `OneTwoPunchPower`. Both add a play and both
@@ -35,6 +68,60 @@ public static class PotionEffects
                 // OneTwoPunch, so a Duplicator spent on a Skill or a Power did nothing at
                 // all here and doubled it in the game -- see E490.
                 BuffSystem.Apply(state.PlayerBuffs, BuffId.Duplication, 1);
+                break;
+            case 18: // Energy Potion: EnergyPotion.cs -- EnergyVar(2).
+                CardEffects.GainEnergy(state, 2);
+                break;
+            case 21: // Explosive Ampoule: ExplosiveAmpoule.cs -- DamageVar(10m, Unpowered)
+                // to every hittable enemy.
+                CardEffects.DealUnpoweredDamageToAll(state, 10);
+                break;
+            case 22: // Fairy in a Bottle: FairyInABottle.cs -- Usage.Automatic, and its
+                // OnUse is reached only through AfterPreventingDeath, never through a
+                // manual "use potion" action. `CombatEngine.PlayerIsDead` already models
+                // the death-save (heal Max(MaxHp * 0.3, 1)) directly; nothing belongs here.
+                break;
+            case 23: // Fire Potion: FirePotion.cs -- DamageVar(20m, Unpowered) to the
+                // aimed-at enemy.
+                if (CardEffects.TargetedEnemyFor(state) is { } burned)
+                {
+                    CardEffects.DealUnpoweredDamageToEnemy(state, burned, 20);
+                }
+
+                break;
+            case 24: // Flex Potion: FlexPotion.cs -- PowerVar<StrengthPower>(5) via
+                // FlexPotionPower, a TemporaryStrengthPower: Strength now, paired with
+                // TemporaryStrength so CombatEngine's end-of-player-turn unwind (the same
+                // one Shackling Potion's enemy side relies on) takes it back. Goes through
+                // the Ruined Helmet chokepoint like every other grant of player Strength.
+                RelicEffects.GainPlayerStrength(state, 5);
+                BuffSystem.Apply(state.PlayerBuffs, BuffId.TemporaryStrength, 5);
+                break;
+            case 25: // Focus Potion: FocusPotion.cs -- PowerVar<FocusPower>(2), always on
+                // the owner regardless of the (unused) target parameter.
+                BuffSystem.Apply(state.PlayerBuffs, BuffId.Focus, 2);
+                break;
+            case 26: // Fortifier: Fortifier.cs -- gain block equal to CURRENT block, again
+                // (`target.Block * 2` overall), Unpowered.
+                CardEffects.GainUnpoweredBlock(state, state.PlayerBlock, rng);
+                break;
+            case 27: // Foul Potion: FoulPotion.cs -- DamageVar(12m, Unpowered) to
+                // `CombatState.Creatures.Where(!IsPet)`, which is allies-plus-enemies: the
+                // player (an ally, not a pet) takes it too. TargetType.AllEnemies only
+                // governs the out-of-combat/VFX framing; the code hits everyone.
+                CardEffects.DealDamageToPlayer(state, 12);
+                CardEffects.DealUnpoweredDamageToAll(state, 12);
+                break;
+            case 28: // Fruit Juice: FruitJuice.cs -- MaxHpVar(5).
+                CardEffects.GainMaxHp(state, 5);
+                break;
+            case 29: // Fysh Oil: FyshOil.cs -- PowerVar<StrengthPower>(1) then
+                // PowerVar<DexterityPower>(1).
+                RelicEffects.GainPlayerStrength(state, 1);
+                BuffSystem.Apply(state.PlayerBuffs, BuffId.Dexterity, 1);
+                break;
+            case 31: // Ghost in a Jar: GhostInAJar.cs -- PowerVar<IntangiblePower>(1).
+                BuffSystem.Apply(state.PlayerBuffs, BuffId.Intangible, 1);
                 break;
             case 32: // Gigantification: the next attack card deals TRIPLE damage.
                 BuffSystem.Apply(state.PlayerBuffs, BuffId.Gigantification, 1);
