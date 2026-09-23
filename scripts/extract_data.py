@@ -698,6 +698,20 @@ def potion_rarity(text: str) -> str:
     return match.group(1) if match else "None"
 
 
+def potion_target_type(text: str) -> str:
+    """Return the potion's in-combat TargetType.
+
+    Every potion but one declares `TargetType TargetType => TargetType.X;` -- a single
+    literal. FoulPotion is the one exception: a block-bodied getter that returns
+    `TargetedNoCreature` outside combat and `AllEnemies` in it, in that order, because the
+    non-combat branch is an early return. Combat effects are this extractor's whole
+    concern, so the LAST `TargetType.X` literal in the property is the one that matters --
+    which is also just "the only one" for every other potion.
+    """
+    matches = re.findall(r"TargetType\.(\w+)", text)
+    return matches[-1] if matches else "Self"
+
+
 def extract_potions() -> str:
     entries: list[str] = []
 
@@ -726,7 +740,8 @@ def extract_potions() -> str:
             # in the wrong bucket. A hand-written table used to supply this and defaulted
             # anything it did not know to Common.
             f'        new PotionDef(Id: {stable_id("potions", name)}, Name: "{name}", '
-            f"Rarity: PotionRarity.{potion_rarity(text)}),",
+            f"Rarity: PotionRarity.{potion_rarity(text)}, "
+            f"TargetType: CardTarget.{potion_target_type(text)}),",
         )
 
     if not entries:
