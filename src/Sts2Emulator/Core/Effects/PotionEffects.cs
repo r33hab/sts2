@@ -31,6 +31,56 @@ public static class PotionEffects
         // Populated incrementally as potions are reverse-engineered from sts2.dll.
         switch (potionId)
         {
+            case 1: // Ashwater: Ashwater.cs -- `CardSelectorPrefs(prompt, 0, 999999999)`:
+                // exhaust ANY NUMBER of hand cards, chosen, zero a legal answer. The same
+                // "min zero, no upper bound" shape Gambler's Brew/Gambling Chip use, minus
+                // the draw those close with -- so it rides ExhaustFromHandRepeated
+                // (Purity's kind) rather than DiscardAnyThenDraw.
+                CardEffects.OpenCardSelection(
+                    state,
+                    CardSelectionKind.ExhaustFromHandRepeated,
+                    state.Hand.Count,
+                    sourceCardDefId: 0,
+                    autoPick: 0,
+                    amount: state.Hand.Count,
+                    skippable: true
+                );
+                break;
+            case 2: // Attack Potion: AttackPotion.cs -- 3 distinct Attacks from the
+                // owner's OWN class pool (`Owner.Character.CardPool`, which -- like
+                // InfernalBladePool's own remark -- this emulator takes to be Ironclad's),
+                // offered on a skippable Discovery-style screen; the pick is free this
+                // turn (`SetToFreeThisTurn`).
+                {
+                    var pool = CardEffects.InfernalBladePool();
+                    if (pool.Count > 0)
+                    {
+                        var stream = state.CardGenerationRng ?? rng!;
+                        for (int i = pool.Count - 1; i > 0; i--)
+                        {
+                            int j = stream.Next(i + 1);
+                            (pool[i], pool[j]) = (pool[j], pool[i]);
+                        }
+
+                        var options = pool.Take(3).ToList();
+                        var candidates = new List<int>();
+                        for (int i = 0; i < options.Count; i++)
+                        {
+                            candidates.Add(i);
+                        }
+
+                        state.PendingSelection = new PendingCardSelection
+                        {
+                            Kind = CardSelectionKind.GeneratedCardToHand,
+                            Candidates = candidates,
+                            GeneratedCandidates = options,
+                            SourceCardDefId = 0,
+                            Skippable = true,
+                        };
+                    }
+                }
+
+                break;
             case 3: // Beetle Juice: BeetleJuice.cs -- RepeatVar(4) Shrink to the aimed-at
                 // enemy (BuffId.Shrink already covers both "30% less damage dealt" and
                 // "ticks down as a duration debuff"; TargetType.AnyEnemy).
@@ -73,6 +123,32 @@ public static class PotionEffects
                 CardEffects.DrawCards(state, 1, rng!);
                 BuffSystem.Apply(state.PlayerBuffs, BuffId.Clarity, ClarityTurns);
                 break;
+            case 10: // Colorless Potion: ColorlessPotion.cs -- 3 distinct Colorless cards
+                // on a skippable Discovery-style screen, free this turn. Unlike Cosmic
+                // Concoction (id 11), the potion OFFERS a pick rather than adding all
+                // three outright, and the pick is not upgraded.
+                {
+                    var options = CardEffects.DistinctColorlessForCombat(state, 3, rng!);
+                    if (options.Count > 0)
+                    {
+                        var candidates = new List<int>();
+                        for (int i = 0; i < options.Count; i++)
+                        {
+                            candidates.Add(i);
+                        }
+
+                        state.PendingSelection = new PendingCardSelection
+                        {
+                            Kind = CardSelectionKind.GeneratedCardToHand,
+                            Candidates = candidates,
+                            GeneratedCandidates = options,
+                            SourceCardDefId = 0,
+                            Skippable = true,
+                        };
+                    }
+                }
+
+                break;
             case 11: // Cosmic Concoction: CosmicConcoction.cs -- CardsVar(3) distinct
                 // Colorless cards, each UPGRADED, added straight to hand -- no choice and
                 // not free (unlike Colorless Potion's id 10, which offers a pick).
@@ -81,6 +157,10 @@ public static class PotionEffects
             case 12: // Cunning Potion: CunningPotion.cs -- CardsVar(3) Shivs
                 // (`Shiv.CreateInHand`), each then upgraded.
                 CardEffects.AddGeneratedCardsToHand(state, SI.Shiv, 3, upgraded: true);
+                break;
+            case 13: // Cure All: CureAll.cs -- EnergyVar(1) THEN CardsVar(2) drawn.
+                CardEffects.GainEnergy(state, 1);
+                CardEffects.DrawCards(state, 2, rng!);
                 break;
             case 14: // Dexterity Potion: DexterityPotion.cs -- PowerVar<DexterityPower>(2).
                 // No Ruined-Helmet-style doubling chokepoint exists for Dexterity (only
@@ -92,6 +172,18 @@ public static class PotionEffects
                 // The same top-of-draw-pile auto-play loop MayhemPower uses, for a fixed
                 // count instead of a buff-driven one.
                 CombatEngine.AutoPlayFromDrawPileTop(state, 3, rng!);
+                break;
+            case 16: // Droplet of Precognition: DropletOfPrecognition.cs -- one card,
+                // CHOSEN from the whole draw pile, goes to hand
+                // (`CardSelectCmd.FromCombatPile(Draw, CardSelectorPrefs(prompt, 1))`,
+                // Secret Technique's shape (DrawPileToHand), not skippable, single pick).
+                CardEffects.OpenCardSelection(
+                    state,
+                    CardSelectionKind.DrawPileToHand,
+                    state.DrawPile.Count,
+                    sourceCardDefId: 0,
+                    autoPick: 0
+                );
                 break;
             case 17: // Duplicator: play the next card an extra time.
                 // `DuplicationPower`, NOT `OneTwoPunchPower`. Both add a play and both
@@ -176,6 +268,14 @@ public static class PotionEffects
                 // PowerVar<DexterityPower>(1).
                 RelicEffects.GainPlayerStrength(state, 1);
                 BuffSystem.Apply(state.PlayerBuffs, BuffId.Dexterity, 1);
+                break;
+            case 30: // Gambler's Brew: GamblersBrew.cs -- `CardSelectCmd.FromHandForDiscard`
+                // with `CardSelectorPrefs(prompt, 0, 999999999)` THEN
+                // `CardCmd.DiscardAndDraw(list, list.Count)` -- discard any number chosen,
+                // then draw that many. Exactly Gambling Chip's screen
+                // (CardSelectionKind.DiscardAnyThenDraw), which already exists for the
+                // relic and is reused rather than re-derived.
+                CombatEngine.OpenGamblingChipScreenForCombatStart(state);
                 break;
             case 31: // Ghost in a Jar: GhostInAJar.cs -- PowerVar<IntangiblePower>(1).
                 BuffSystem.Apply(state.PlayerBuffs, BuffId.Intangible, 1);

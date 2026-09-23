@@ -150,6 +150,23 @@ public class PotionEffectTests
         Assert.Equal(3, BuffSystem.Get(state.PlayerBuffs, BuffId.Clarity));
     }
 
+    // ── 13: Cure All ────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void CureAll_GainsOneEnergyAndDrawsTwoCards()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Energy = 1;
+        state.Hand = [];
+        state.DrawPile = TestDeck.Pile(IC.StrikeIronclad, IC.StrikeIronclad, IC.DefendIronclad);
+
+        PotionEffects.Apply(13, state, new Random(0));
+
+        Assert.Equal(2, state.Energy);
+        Assert.Equal(2, state.Hand.Count);
+        Assert.Single(state.DrawPile);
+    }
+
     // ── 14: Dexterity Potion ────────────────────────────────────────────────────────
 
     [Fact]
@@ -553,5 +570,267 @@ public class PotionEffectTests
 
         Assert.Empty(state.Orbs);
         Assert.Equal(0, state.OrbCapacity);
+    }
+
+    // ── 1: Ashwater ─────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Ashwater_OpensASkippableRepeatedExhaustScreen()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = TestDeck.Pile(IC.StrikeIronclad, IC.StrikeIronclad, IC.DefendIronclad);
+
+        PotionEffects.Apply(1, state);
+
+        var selection = state.PendingSelection;
+        Assert.NotNull(selection);
+        Assert.Equal(CardSelectionKind.ExhaustFromHandRepeated, selection!.Kind);
+        Assert.True(selection.Skippable);
+        Assert.Equal(3, selection.Candidates.Count);
+    }
+
+    [Fact]
+    public void Ashwater_ExhaustsChosenCardsRepeatedlyUntilHandIsEmpty()
+    {
+        // Ashwater.cs: `CardSelectorPrefs(prompt, 0, 999999999)` -- any number, chosen one
+        // at a time, same shape as Gambling Chip's screen but for Exhaust and with no
+        // draw afterwards.
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = TestDeck.Pile(IC.StrikeIronclad, IC.StrikeIronclad, IC.DefendIronclad);
+        var rng = new Random(0);
+
+        PotionEffects.Apply(1, state, rng);
+        CombatEngine.Step(state, 0, rng); // exhaust hand[0].
+        CombatEngine.Step(state, 0, rng); // exhaust the new hand[0].
+        CombatEngine.Step(state, 0, rng); // exhaust the last card.
+
+        Assert.Empty(state.Hand);
+        Assert.Equal(3, state.ExhaustPile.Count);
+        Assert.Null(state.PendingSelection);
+    }
+
+    [Fact]
+    public void Ashwater_CanBeDeclinedWithoutExhaustingAnything()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = TestDeck.Pile(IC.StrikeIronclad);
+        var rng = new Random(0);
+
+        PotionEffects.Apply(1, state, rng);
+        int skipAction = state.PendingSelection!.Candidates.Count;
+        CombatEngine.Step(state, skipAction, rng);
+
+        Assert.Single(state.Hand);
+        Assert.Empty(state.ExhaustPile);
+        Assert.Null(state.PendingSelection);
+    }
+
+    [Fact]
+    public void Ashwater_DoesNothingWithAnEmptyHand()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [];
+
+        PotionEffects.Apply(1, state);
+
+        Assert.Null(state.PendingSelection);
+    }
+
+    // ── 2: Attack Potion ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void AttackPotion_OffersThreeDistinctIroncladAttacks()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [];
+
+        PotionEffects.Apply(2, state, new Random(0));
+
+        var selection = state.PendingSelection;
+        Assert.NotNull(selection);
+        Assert.Equal(CardSelectionKind.GeneratedCardToHand, selection!.Kind);
+        Assert.True(selection.Skippable);
+        Assert.Equal(3, selection.GeneratedCandidates.Distinct().Count());
+        Assert.All(
+            selection.GeneratedCandidates,
+            id => Assert.Equal(CardType.Attack, GeneratedData.Cards.Get(id).Type)
+        );
+        Assert.All(
+            selection.GeneratedCandidates,
+            id => Assert.True(GeneratedData.CardPools.Ironclad.IndexOf(id) >= 0)
+        );
+    }
+
+    [Fact]
+    public void AttackPotion_ChosenCardJoinsHandFreeThisTurnAndUnupgraded()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [];
+        var rng = new Random(0);
+
+        PotionEffects.Apply(2, state, rng);
+        int picked = state.PendingSelection!.GeneratedCandidates[0];
+        CombatEngine.Step(state, 0, rng); // choose the first offered card.
+
+        Assert.Single(state.Hand);
+        Assert.Equal(picked, state.Hand[0].DefId);
+        Assert.True(state.Hand[0].FreeThisTurn);
+        Assert.False(state.Hand[0].Upgraded);
+        Assert.Null(state.PendingSelection);
+    }
+
+    [Fact]
+    public void AttackPotion_CanBeDeclinedWithoutAddingACard()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [];
+        var rng = new Random(0);
+
+        PotionEffects.Apply(2, state, rng);
+        int skip = state.PendingSelection!.Candidates.Count;
+        CombatEngine.Step(state, skip, rng);
+
+        Assert.Empty(state.Hand);
+        Assert.Null(state.PendingSelection);
+    }
+
+    // ── 10: Colorless Potion ────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ColorlessPotion_OffersThreeDistinctColorlessCards()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [];
+
+        PotionEffects.Apply(10, state, new Random(0));
+
+        var selection = state.PendingSelection;
+        Assert.NotNull(selection);
+        Assert.Equal(CardSelectionKind.GeneratedCardToHand, selection!.Kind);
+        Assert.True(selection.Skippable);
+        Assert.Equal(3, selection.GeneratedCandidates.Distinct().Count());
+        Assert.All(
+            selection.GeneratedCandidates,
+            id => Assert.True(GeneratedData.CardPools.Colorless.IndexOf(id) >= 0)
+        );
+    }
+
+    [Fact]
+    public void ColorlessPotion_ChosenCardJoinsHandFreeThisTurnAndUnupgraded()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [];
+        var rng = new Random(0);
+
+        PotionEffects.Apply(10, state, rng);
+        int picked = state.PendingSelection!.GeneratedCandidates[1];
+        CombatEngine.Step(state, 1, rng); // choose the SECOND offered card.
+
+        Assert.Single(state.Hand);
+        Assert.Equal(picked, state.Hand[0].DefId);
+        Assert.True(state.Hand[0].FreeThisTurn);
+        Assert.False(state.Hand[0].Upgraded);
+    }
+
+    // ── 16: Droplet of Precognition ─────────────────────────────────────────────────
+
+    [Fact]
+    public void DropletOfPrecognition_OffersEveryCardInTheDrawPile()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [];
+        state.DrawPile = TestDeck.Pile(IC.StrikeIronclad, IC.DefendIronclad, IC.Bash);
+
+        PotionEffects.Apply(16, state);
+
+        var selection = state.PendingSelection;
+        Assert.NotNull(selection);
+        Assert.Equal(CardSelectionKind.DrawPileToHand, selection!.Kind);
+        Assert.False(selection.Skippable);
+        Assert.Equal(3, selection.Candidates.Count);
+    }
+
+    [Fact]
+    public void DropletOfPrecognition_ChosenCardMovesFromAnywhereInTheDrawPileToHand()
+    {
+        // Not just the top: `CardSelectCmd.FromCombatPile` offers the WHOLE draw pile.
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [];
+        state.DrawPile = TestDeck.Pile(IC.StrikeIronclad, IC.DefendIronclad, IC.Bash);
+        var rng = new Random(0);
+
+        PotionEffects.Apply(16, state);
+        CombatEngine.Step(state, 1, rng); // pick draw-pile index 1: DefendIronclad.
+
+        Assert.Single(state.Hand);
+        Assert.Equal(IC.DefendIronclad, state.Hand[0].DefId);
+        Assert.Equal(2, state.DrawPile.Count);
+        Assert.DoesNotContain(state.DrawPile, c => c.DefId == IC.DefendIronclad);
+        Assert.Null(state.PendingSelection);
+    }
+
+    [Fact]
+    public void DropletOfPrecognition_DoesNothingWithAnEmptyDrawPile()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.DrawPile = [];
+
+        PotionEffects.Apply(16, state);
+
+        Assert.Null(state.PendingSelection);
+    }
+
+    // ── 30: Gambler's Brew ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public void GamblersBrew_OpensADiscardAnyThenDrawScreen()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = TestDeck.Pile(IC.StrikeIronclad, IC.DefendIronclad);
+
+        PotionEffects.Apply(30, state);
+
+        var selection = state.PendingSelection;
+        Assert.NotNull(selection);
+        Assert.Equal(CardSelectionKind.DiscardAnyThenDraw, selection!.Kind);
+        Assert.True(selection.Skippable);
+        Assert.Equal(2, selection.Candidates.Count);
+    }
+
+    [Fact]
+    public void GamblersBrew_DiscardingThenDecliningDrawsThatManyCardsBack()
+    {
+        // GamblersBrew.cs: `CardSelectCmd.FromHandForDiscard` (any number, min zero) THEN
+        // `CardCmd.DiscardAndDraw(list, list.Count)` -- exactly Gambling Chip's own
+        // screen, reused rather than reimplemented.
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = TestDeck.Pile(IC.StrikeIronclad, IC.DefendIronclad);
+        state.DrawPile = TestDeck.Pile(IC.Bash, IC.Bash, IC.Bash);
+        state.DiscardPile = [];
+        var rng = new Random(0);
+
+        PotionEffects.Apply(30, state);
+        CombatEngine.Step(state, 0, rng); // discard the Strike (hand index 0).
+        int skip = state.PendingSelection!.Candidates.Count;
+        CombatEngine.Step(state, skip, rng); // decline further discards; draws 1 back.
+
+        Assert.Equal(2, state.Hand.Count);
+        Assert.DoesNotContain(state.Hand, c => c.DefId == IC.StrikeIronclad);
+        Assert.Contains(state.Hand, c => c.DefId == IC.DefendIronclad);
+        Assert.Contains(state.Hand, c => c.DefId == IC.Bash);
+        Assert.Single(state.DiscardPile);
+        Assert.Equal(IC.StrikeIronclad, state.DiscardPile[0].DefId);
+        Assert.Null(state.PendingSelection);
+    }
+
+    [Fact]
+    public void GamblersBrew_DoesNothingWithAnEmptyHand()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [];
+
+        PotionEffects.Apply(30, state);
+
+        Assert.Null(state.PendingSelection);
     }
 }
