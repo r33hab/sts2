@@ -2498,7 +2498,11 @@ public static class CardEffects
         }
     }
 
-    private static void ProcureRandomPotion(CombatState state, Random rng)
+    /// <summary>Fills the first empty potion slot, if any, with a uniformly random potion
+    /// id. Also Entropic Brew's loop over every empty slot: the game's own
+    /// `PotionFactory.CreateRandomPotionInCombat` rolls rarity-weighted odds this does not
+    /// model, so both callers get the same approximation rather than two different ones.</summary>
+    internal static void ProcureRandomPotion(CombatState state, Random rng)
     {
         for (int i = 0; i < state.MaxPotionSlots; i++)
         {
@@ -2894,7 +2898,9 @@ public static class CardEffects
     /// `CombatGenerationPool` is `FilterForCombat`; `OpenColorlessOffer` used the RAW pool
     /// and so could offer cards the game excludes from combat generation.
     /// </remarks>
-    private static List<int> DistinctColorlessForCombat(CombatState state, int count, Random rng)
+    /// <summary>Also Colorless Potion's pool-of-3 choice: the potion offers it rather than
+    /// adding it outright, unlike <see cref="AddColorlessCardsToHand"/>'s callers.</summary>
+    internal static List<int> DistinctColorlessForCombat(CombatState state, int count, Random rng)
     {
         var pool = CombatGenerationPool(GeneratedData.CardPools.Colorless);
         if (pool.Count == 0 || count <= 0)
@@ -3886,7 +3892,10 @@ public static class CardEffects
     /// falls back to <paramref name="autoPick" /> — the behaviour every one of these
     /// choices had before selection existed.
     /// </summary>
-    private static void OpenCardSelection(
+    /// <summary>Also the entry point potions with a hand- or draw-pile-wide choice use
+    /// (Ashwater, Droplet of Precognition): they are not cards and answer the same
+    /// selection screens, so they share the opener rather than re-deriving it.</summary>
+    internal static void OpenCardSelection(
         CombatState state,
         CardSelectionKind kind,
         int candidateCount,
@@ -8698,7 +8707,8 @@ public static class CardEffects
         }
     }
 
-    private static void UpgradeAllCardsInHand(CombatState state)
+    /// <summary>Also Blessing of the Forge's whole effect.</summary>
+    internal static void UpgradeAllCardsInHand(CombatState state)
     {
         for (int i = 0; i < state.Hand.Count; i++)
         {
@@ -9514,8 +9524,10 @@ public static class CardEffects
         return filtered;
     }
 
-    /// <summary>The Ironclad Attacks a combat generator may roll.</summary>
-    private static List<int> InfernalBladePool() =>
+    /// <summary>The Ironclad Attacks a combat generator may roll. Also Attack Potion's pool:
+    /// `Owner.Character.CardPool` is Ironclad's own, the same assumption
+    /// <see cref="IroncladGenerationPool"/> already makes.</summary>
+    internal static List<int> InfernalBladePool() =>
         CombatGenerationPool(GeneratedData.CardPools.Ironclad, CardType.Attack);
 
     /// <summary>Every Ironclad card a combat generator may roll.</summary>
@@ -10217,7 +10229,11 @@ public static class CardEffects
         int cardId,
         int count,
         Enchantment enchantment = Enchantment.None,
-        int enchantAmount = 0
+        int enchantAmount = 0,
+        // Cunning Potion's Shivs, upgraded by `CardCmd.Upgrade` right after `CreateInHand`.
+        // Shiv's printed cost is already 0, so FreeThisTurn stays on for every caller: it
+        // changes nothing for Cunning Potion and is what InfiniteBlades already relied on.
+        bool upgraded = false
     )
     {
         for (int i = 0; i < count && state.Hand.Count < MaxCardsInHand; i++)
@@ -10225,7 +10241,7 @@ public static class CardEffects
             state.Hand.Add(
                 new CardInstance(
                     cardId,
-                    false,
+                    upgraded,
                     FreeThisTurn: true,
                     Enchantment: enchantment,
                     EnchantAmount: enchantAmount

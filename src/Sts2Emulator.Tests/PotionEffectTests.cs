@@ -350,4 +350,208 @@ public class PotionEffectTests
 
         Assert.Equal(1, BuffSystem.Get(state.PlayerBuffs, BuffId.Intangible));
     }
+
+    // ── 4: Blessing of the Forge ────────────────────────────────────────────────────
+
+    [Fact]
+    public void BlessingOfTheForge_UpgradesEveryUpgradableCardInHand_ButNotACurse()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand =
+        [
+            new CardInstance(IC.StrikeIronclad, false),
+            new CardInstance(IC.DefendIronclad, false),
+            new CardInstance(IC.AscendersBane, false), // a curse: CardType.Curse, never upgradable.
+        ];
+
+        PotionEffects.Apply(4, state);
+
+        Assert.True(state.Hand[0].Upgraded);
+        Assert.True(state.Hand[1].Upgraded);
+        Assert.False(state.Hand[2].Upgraded);
+    }
+
+    // ── 7: Bone Brew ────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void BoneBrew_SummonsOstyAtFifteenHp()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+
+        PotionEffects.Apply(7, state);
+
+        Assert.Equal(15, state.OstyHp);
+        Assert.Equal(15, state.OstyMaxHp);
+    }
+
+    [Fact]
+    public void BoneBrew_GrowsAnExistingOsty()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.OstyHp = 5;
+        state.OstyMaxHp = 10;
+
+        PotionEffects.Apply(7, state);
+
+        Assert.Equal(20, state.OstyHp); // 5 + 15.
+        Assert.Equal(25, state.OstyMaxHp); // 10 + 15.
+    }
+
+    // ── 8: Bottled Potential ────────────────────────────────────────────────────────
+
+    [Fact]
+    public void BottledPotential_ReshufflesHandAndDrawsFive()
+    {
+        // BottledPotential.cs: hand -> draw pile, `CardPileCmd.Shuffle` (discard-plus-
+        // draw-pile StableShuffle), then draw 5. Six cards total go in; five come back to
+        // hand and one is left in the draw pile, whichever card the shuffle happened to
+        // leave there.
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = TestDeck.Pile(IC.StrikeIronclad, IC.StrikeIronclad, IC.StrikeIronclad);
+        state.DrawPile = TestDeck.Pile(IC.DefendIronclad, IC.DefendIronclad);
+        state.DiscardPile = TestDeck.Pile(IC.Bash);
+
+        PotionEffects.Apply(8, state, new Random(0));
+
+        Assert.Equal(5, state.Hand.Count);
+        Assert.Single(state.DrawPile);
+        Assert.Empty(state.DiscardPile);
+    }
+
+    // ── 11: Cosmic Concoction ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void CosmicConcoction_AddsThreeDistinctUpgradedColorlessCards()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [];
+
+        PotionEffects.Apply(11, state, new Random(0));
+
+        Assert.Equal(3, state.Hand.Count);
+        Assert.All(state.Hand, card => Assert.True(card.Upgraded));
+        Assert.All(
+            state.Hand,
+            card => Assert.True(GeneratedData.CardPools.Colorless.IndexOf(card.DefId) >= 0)
+        );
+        Assert.Equal(3, state.Hand.Select(c => c.DefId).Distinct().Count());
+    }
+
+    // ── 12: Cunning Potion ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public void CunningPotion_AddsThreeUpgradedShivs()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [];
+
+        PotionEffects.Apply(12, state);
+
+        Assert.Equal(3, state.Hand.Count);
+        Assert.All(state.Hand, card => Assert.Equal(SI.Shiv, card.DefId));
+        Assert.All(state.Hand, card => Assert.True(card.Upgraded));
+    }
+
+    // ── 15: Distilled Chaos ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public void DistilledChaos_AutoPlaysTopThreeCardsOfTheDrawPile()
+    {
+        // DistilledChaos.cs: RepeatVar(3) `AutoPlayFromDrawPile(Top, forceExhaust: false)`.
+        // Three unupgraded Strikes (6 damage each, StrikeIronclad's BaseDamage) at zero
+        // Strength deal 18 total.
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [];
+        state.DrawPile = TestDeck.Pile(
+            IC.StrikeIronclad,
+            IC.StrikeIronclad,
+            IC.StrikeIronclad
+        );
+        state.Enemies = [Enemy(hp: 100)];
+
+        PotionEffects.Apply(15, state, new Random(0));
+
+        Assert.Empty(state.DrawPile);
+        Assert.Equal(82, state.Enemies[0].Hp); // 100 - 3*6.
+    }
+
+    [Fact]
+    public void DistilledChaos_StopsEarlyWhenTheDrawPileRunsOut()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [];
+        state.DrawPile = TestDeck.Pile(IC.StrikeIronclad);
+        state.Enemies = [Enemy(hp: 100)];
+
+        PotionEffects.Apply(15, state, new Random(0));
+
+        Assert.Empty(state.DrawPile);
+        Assert.Equal(94, state.Enemies[0].Hp); // Only one Strike was there to play.
+    }
+
+    // ── 19: Entropic Brew ───────────────────────────────────────────────────────────
+
+    [Fact]
+    public void EntropicBrew_FillsEveryEmptyPotionSlotUpToMaxPotionSlots()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.MaxPotionSlots = 3;
+        state.PotionSlots = new int[6];
+
+        PotionEffects.Apply(19, state, new Random(0));
+
+        for (int i = 0; i < 3; i++)
+        {
+            Assert.InRange(state.PotionSlots[i], 1, 63);
+        }
+
+        Assert.Equal(0, state.PotionSlots[3]);
+        Assert.Equal(0, state.PotionSlots[4]);
+        Assert.Equal(0, state.PotionSlots[5]);
+    }
+
+    [Fact]
+    public void EntropicBrew_LeavesAlreadyFilledSlotsAlone()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.MaxPotionSlots = 3;
+        state.PotionSlots = new int[6];
+        state.PotionSlots[1] = 5; // Block Potion, already there.
+
+        PotionEffects.Apply(19, state, new Random(0));
+
+        Assert.Equal(5, state.PotionSlots[1]);
+        Assert.InRange(state.PotionSlots[0], 1, 63);
+        Assert.InRange(state.PotionSlots[2], 1, 63);
+    }
+
+    // ── 20: Essence of Darkness ─────────────────────────────────────────────────────
+
+    [Fact]
+    public void EssenceOfDarkness_ChannelsDarkOrbsUpToCapacity()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.OrbCapacity = 3;
+
+        PotionEffects.Apply(20, state);
+
+        Assert.Equal(3, state.Orbs.Count);
+        Assert.All(state.Orbs, orb => Assert.Equal(OrbType.Dark, orb.Type));
+    }
+
+    [Fact]
+    public void EssenceOfDarkness_DoesNothingWithNoOrbSlots()
+    {
+        // Unlike a card's single Channel call, the loop count is read ONCE before any
+        // orb is queued, so it never hits ChannelOrb's own "give a slotless character
+        // one slot" fallback -- matching the decompiled `int count = Capacity; for (...)`.
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.OrbCapacity = 0;
+        state.BaseOrbSlots = 0;
+
+        PotionEffects.Apply(20, state);
+
+        Assert.Empty(state.Orbs);
+        Assert.Equal(0, state.OrbCapacity);
+    }
 }

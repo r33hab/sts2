@@ -40,6 +40,10 @@ public static class PotionEffects
                 }
 
                 break;
+            case 4: // Blessing of the Forge: BlessingOfTheForge.cs -- upgrade every
+                // upgradable card in hand (`if (card.IsUpgradable) Upgrade(card)`).
+                CardEffects.UpgradeAllCardsInHand(state);
+                break;
             case 5: // Block Potion: BlockPotion.cs -- BlockVar(12m, Unpowered).
                 // Was CardEffects.GainBlock (POWERED, so Dexterity/Frail applied) --
                 // GainUnpoweredBlock is the one that matches the decompiled ValueProp.
@@ -50,16 +54,44 @@ public static class PotionEffects
                 // game's own DynamicVar math lands on a final (int) cast.
                 CardEffects.HealPlayer(state, (int)(state.PlayerMaxHp * 20m / 100m));
                 break;
+            case 7: // Bone Brew: BoneBrew.cs -- SummonVar(15) (`OstyCmd.Summon`).
+                CardEffects.SummonOsty(state, 15);
+                break;
+            case 8: // Bottled Potential: BottledPotential.cs -- hand into the draw pile,
+                // THEN `CardPileCmd.Shuffle` (discard-plus-draw-pile StableShuffle, per
+                // AGENTS.md), THEN draw CardsVar(5). The hand cards join the draw pile
+                // before the shuffle, so they are part of what gets reshuffled together
+                // with the discard pile.
+                state.DrawPile.AddRange(state.Hand);
+                state.Hand.Clear();
+                CardEffects.ShuffleDiscardIntoDraw(state, rng!);
+                CardEffects.DrawCards(state, 5, rng!);
+                break;
             case 9: // Clarity: Clarity.cs -- CardsVar(1) drawn immediately, THEN
                 // PowerVar<ClarityPower>(3) applied. The immediate draw was missing: the
                 // power alone only pays out on each of the NEXT three turns.
                 CardEffects.DrawCards(state, 1, rng!);
                 BuffSystem.Apply(state.PlayerBuffs, BuffId.Clarity, ClarityTurns);
                 break;
+            case 11: // Cosmic Concoction: CosmicConcoction.cs -- CardsVar(3) distinct
+                // Colorless cards, each UPGRADED, added straight to hand -- no choice and
+                // not free (unlike Colorless Potion's id 10, which offers a pick).
+                CardEffects.AddColorlessCardsToHand(state, 3, rng!, upgraded: true);
+                break;
+            case 12: // Cunning Potion: CunningPotion.cs -- CardsVar(3) Shivs
+                // (`Shiv.CreateInHand`), each then upgraded.
+                CardEffects.AddGeneratedCardsToHand(state, SI.Shiv, 3, upgraded: true);
+                break;
             case 14: // Dexterity Potion: DexterityPotion.cs -- PowerVar<DexterityPower>(2).
                 // No Ruined-Helmet-style doubling chokepoint exists for Dexterity (only
                 // Strength has one, via RelicEffects.GainPlayerStrength).
                 BuffSystem.Apply(state.PlayerBuffs, BuffId.Dexterity, 2);
+                break;
+            case 15: // Distilled Chaos: DistilledChaos.cs -- RepeatVar(3):
+                // `CardPileCmd.AutoPlayFromDrawPile(..., 3, Top, forceExhaust: false)`.
+                // The same top-of-draw-pile auto-play loop MayhemPower uses, for a fixed
+                // count instead of a buff-driven one.
+                CombatEngine.AutoPlayFromDrawPileTop(state, 3, rng!);
                 break;
             case 17: // Duplicator: play the next card an extra time.
                 // `DuplicationPower`, NOT `OneTwoPunchPower`. Both add a play and both
@@ -71,6 +103,31 @@ public static class PotionEffects
                 break;
             case 18: // Energy Potion: EnergyPotion.cs -- EnergyVar(2).
                 CardEffects.GainEnergy(state, 2);
+                break;
+            case 19: // Entropic Brew: EntropicBrew.cs -- `while (HasOpenPotionSlots)
+                // CreateRandomPotionOutOfCombat`. `CardEffects.ProcureRandomPotion` is the
+                // same uniform-random approximation an existing card already uses for
+                // "gain a random potion" (the real PotionFactory rolls rarity-weighted
+                // odds this emulator does not model); looping it fills every empty slot
+                // rather than only the first.
+                for (int slot = 0; slot < state.MaxPotionSlots; slot++)
+                {
+                    CardEffects.ProcureRandomPotion(state, rng!);
+                }
+
+                break;
+            case 20: // Essence of Darkness: EssenceOfDarkness.cs -- Channel Dark orbs
+                // `OrbQueue.Capacity` times, read ONCE before the loop -- so a full row
+                // gets entirely re-filled with Dark (evicting whatever was queued), and a
+                // character with no orb slots (Capacity 0) channels nothing at all.
+                {
+                    int darkOrbs = state.OrbCapacity;
+                    for (int i = 0; i < darkOrbs; i++)
+                    {
+                        CardEffects.ChannelOrb(state, OrbType.Dark, rng);
+                    }
+                }
+
                 break;
             case 21: // Explosive Ampoule: ExplosiveAmpoule.cs -- DamageVar(10m, Unpowered)
                 // to every hittable enemy.

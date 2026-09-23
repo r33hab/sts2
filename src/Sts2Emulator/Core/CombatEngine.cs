@@ -3723,10 +3723,18 @@ public static class CombatEngine
         }
     }
 
-    private static void AutoPlayMayhemCards(CombatState state, Random rng)
+    private static void AutoPlayMayhemCards(CombatState state, Random rng) =>
+        AutoPlayFromDrawPileTop(state, BuffSystem.Get(state.PlayerBuffs, BuffId.MayhemPower), rng);
+
+    /// <summary>
+    /// Auto-plays the top <paramref name="count"/> cards of the draw pile, stopping early
+    /// if it runs out. MayhemPower's own loop, and also Distilled Chaos's whole effect --
+    /// `CardPileCmd.AutoPlayFromDrawPile(..., Top, forceExhaust: false)` for a fixed count
+    /// rather than a buff-driven one.
+    /// </summary>
+    internal static void AutoPlayFromDrawPileTop(CombatState state, int count, Random rng)
     {
-        int mayhem = BuffSystem.Get(state.PlayerBuffs, BuffId.MayhemPower);
-        for (int i = 0; i < mayhem && state.DrawPile.Count > 0; i++)
+        for (int i = 0; i < count && state.DrawPile.Count > 0; i++)
         {
             var card = state.DrawPile[0];
             state.RemoveFromDrawPileAt(0);
