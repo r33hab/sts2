@@ -37,6 +37,9 @@ public class StateCloningTests
     private static IEnumerable<FieldInfo> PublicFields(object instance) =>
         instance.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance);
 
+    private static IEnumerable<PropertyInfo> PublicProperties(object instance) =>
+        instance.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance);
+
     private static void AssertSharesNothing(object original, object copy)
     {
         foreach (var field in PublicFields(original))
@@ -282,5 +285,114 @@ public class StateCloningTests
         // The streams still stand where the run left them, so the combat's sync-back
         // of call counts stays coherent.
         Assert.Equal(engine.State.Rng.Shuffle.CallCount, first.State.Rng.Shuffle.CallCount);
+    }
+
+    [Fact]
+    public void PendingCardSelectionCloneCopiesEveryProperty()
+    {
+        // Every property set to a value its own type's default is not, so a property
+        // Clone forgets comes back as the default and fails here -- the same shape as
+        // EveryScalarFieldSurvivesTheClone above, but for PROPERTIES. PendingCardSelection
+        // is init-only properties throughout, which GetFields (PublicFields above) never
+        // sees, so a dropped property -- Skippable, GeneratedUpgraded and GeneratedRetained
+        // all were -- was invisible to every existing guard.
+        var selection = new PendingCardSelection
+        {
+            Kind = CardSelectionKind.DiscardToDrawPileTop,
+            Candidates = [1, 2, 3],
+            SourceCardDefId = 42,
+            Amount = 7,
+            GeneratedCandidates = [100, 200],
+            AfterSelectionToHand = [new CardInstance(10, true)],
+            Skippable = true,
+            GeneratedUpgraded = true,
+            GeneratedRetained = true,
+        };
+
+        var copy = selection.Clone();
+
+        foreach (var property in PublicProperties(selection))
+        {
+            Assert.Equal(property.GetValue(selection), property.GetValue(copy));
+        }
+    }
+
+    [Fact]
+    public void ResamplingReseedsEnergyCostRng()
+    {
+        var combat = new CombatState { EnergyCostRng = new CountingRandom(11) };
+        combat.EnergyCostRng.Next(1000);
+
+        var copy = combat.Clone(rngSeed: 999);
+
+        Assert.NotEqual(combat.EnergyCostRng.Seed, copy.EnergyCostRng!.Seed);
+        Assert.Equal(combat.EnergyCostRng.CallCount, copy.EnergyCostRng.CallCount);
+    }
+
+    [Fact]
+    public void ResamplingGivesDifferentStreamsDifferentDraws()
+    {
+        // Same seed and the same call count going in, so the only thing that can make
+        // these diverge after a reseed is a distinct PER-STREAM derived seed -- handing
+        // every stream the same bare int, as the code did before, would keep them
+        // identical.
+        var combat = new CombatState
+        {
+            ShuffleRng = new CountingRandom(4242),
+            TargetRng = new CountingRandom(4242),
+        };
+
+        var copy = combat.Clone(rngSeed: 17);
+
+        Assert.NotEqual(copy.ShuffleRng!.Next(1_000_000), copy.TargetRng!.Next(1_000_000));
+    }
+
+    [Fact]
+    public void NonResamplingCloneLeavesEveryStreamAtTheSameCallCountAndValue()
+    {
+        var combat = new CombatState
+        {
+            ShuffleRng = new CountingRandom(1),
+            TargetRng = new CountingRandom(2),
+            CardSelectionRng = new CountingRandom(3),
+            EnergyCostRng = new CountingRandom(4),
+            CardGenerationRng = new CountingRandom(5),
+            PotionGenerationRng = new CountingRandom(6),
+            OrbGenerationRng = new CountingRandom(7),
+            AiRng = new CountingRandom(8),
+            NicheHpRng = new CountingRandom(9),
+        };
+        combat.ShuffleRng.Next(10);
+        combat.TargetRng.Next(10);
+        combat.CardSelectionRng.Next(10);
+        combat.EnergyCostRng.Next(10);
+        combat.CardGenerationRng.Next(10);
+        combat.PotionGenerationRng.Next(10);
+        combat.OrbGenerationRng.Next(10);
+        ((CountingRandom)combat.AiRng!).Next(10);
+        combat.NicheHpRng.Next(10);
+
+        var copy = combat.Clone();
+
+        AssertSameCallCountAndNextValue(combat.ShuffleRng, copy.ShuffleRng);
+        AssertSameCallCountAndNextValue(combat.TargetRng, copy.TargetRng);
+        AssertSameCallCountAndNextValue(combat.CardSelectionRng, copy.CardSelectionRng);
+        AssertSameCallCountAndNextValue(combat.EnergyCostRng, copy.EnergyCostRng);
+        AssertSameCallCountAndNextValue(combat.CardGenerationRng, copy.CardGenerationRng);
+        AssertSameCallCountAndNextValue(combat.PotionGenerationRng, copy.PotionGenerationRng);
+        AssertSameCallCountAndNextValue(combat.OrbGenerationRng, copy.OrbGenerationRng);
+        AssertSameCallCountAndNextValue((CountingRandom)combat.AiRng!, (CountingRandom)copy.AiRng!);
+        AssertSameCallCountAndNextValue(combat.NicheHpRng, copy.NicheHpRng);
+    }
+
+    private static void AssertSameCallCountAndNextValue(
+        CountingRandom? original,
+        CountingRandom? copy
+    )
+    {
+        Assert.NotNull(original);
+        Assert.NotNull(copy);
+        Assert.Equal(original!.CallCount, copy!.CallCount);
+        Assert.Equal(original.Next(1_000_000), copy.Next(1_000_000));
     }
 }

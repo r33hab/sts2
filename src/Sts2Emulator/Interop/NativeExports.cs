@@ -1,4 +1,6 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
+using System.Text;
 using Sts2Emulator.Core;
 
 namespace Sts2Emulator.Interop;
@@ -43,7 +45,11 @@ public static class NativeExports
     // v29: Sts2_GetRelics reads the relic list back. Sts2_ResetArena could always PASS
     //      relics in, and the combat observation still does not carry them, so a combat
     //      with relics was conditioned on state nothing could read.
-    public const int NATIVE_API_VERSION = 29;
+    // v30: Sts2_LoadCombatSnapshot builds a combat from an `sts2-emu-snapshot/1` document,
+    //      Sts2_GetStateJson writes any combat back out as one, and Sts2_GetLastError says
+    //      why a load was refused. Every other entry point starts a fight from its first
+    //      turn; a search from a live game position needs to start from the position.
+    public const int NATIVE_API_VERSION = 30;
     private static ReadOnlySpan<int> StarterDeckIds =>
         [472, 472, 472, 472, 472, 131, 131, 131, 131, 30, 10001];
 
@@ -78,6 +84,7 @@ public static class NativeExports
                 State.ReshuffleUnknownDrawOrder(State.ShuffleRng ?? Rng);
             }
         }
+
         public bool LastPlayerWon { get; set; }
 
         public NativeCombat(int seed)
@@ -93,11 +100,43 @@ public static class NativeExports
         }
 
         /// <summary>
+        /// A combat loaded from a snapshot rather than built by a reset.
+        /// </summary>
+        /// <remarks>
+        /// <paramref name="state" /> comes from <c>CombatSnapshot.Read</c> and is taken as
+        /// it stands: the position it describes has been through the start of combat
+        /// already, so nothing of <c>CombatFactory.Reset</c> runs. Only the streams are
+        /// new, seeded from <paramref name="seed" />, because the document carries no RNG
+        /// -- the live game's is hidden information.
+        /// </remarks>
+        public NativeCombat(CombatState state, int seed)
+        {
+            Seed = seed;
+            State = state;
+            SeedStreams();
+            // The two streams SeedStreams predates, under the names the run's own
+            // RunRngSet gives them. Left null they fall back to the combat rng, which is
+            // the silent desync every other stream here was wired up to end.
+            State.EnergyCostRng = new CountingRandom(
+                new Sts2Emulator.Core.Rng.GameRng((uint)Seed, "combat_energy_costs").RawSeed
+            );
+            State.OrbGenerationRng = new CountingRandom(
+                new Sts2Emulator.Core.Rng.GameRng((uint)Seed, "combat_orbs").RawSeed
+            );
+            // Kept for the same reason as every other build in this class. A no-op unless
+            // the document says Whispering Earring has NOT yet played on turn one: the
+            // auto-play queue is empty on a fresh state, and an omitted earring counter
+            // reads as spent.
+            CombatEngine.ResolvePrePlayPhase(State, Rng);
+        }
+
+        /// <summary>
         /// Re-seeds every per-subsystem stream from the handle's seed and clears the
         /// win flag. Every Reset overload below opens with exactly this, so it lives in
         /// one place: six copies is six chances for a new stream to be added to five of
         /// them.
         /// </summary>
+        [MemberNotNull(nameof(Rng))]
         private void SeedStreams()
         {
             Rng = new CountingRandom(Seed);
@@ -416,6 +455,108 @@ public static class NativeExports
             }
         }
         return -1; // pool exhausted
+    }
+
+    /// <summary>Why the last <c>Sts2_LoadCombatSnapshot</c> was refused, as UTF-8; empty after a success.</summary>
+    private static byte[] _lastLoadError = [];
+
+    /// <summary>
+    /// Build a combat from an `sts2-emu-snapshot/1` document (UTF-8 JSON), so a search can
+    /// start from a live game position instead of from a reset.
+    /// </summary>
+    /// <remarks>
+    /// The document is validated in full before anything is registered: a refusal leaves
+    /// no handle behind, and <c>Sts2_GetLastError</c> names the field at fault. Nothing is
+    /// ever trimmed to make a document fit. <paramref name="seed" /> seeds every stream
+    /// and orders the unknown middle of the draw pile.
+    /// </remarks>
+    /// <returns>
+    /// The new handle; -1 if the document was refused; -2 if the handle pool is full.
+    /// </returns>
+    [UnmanagedCallersOnly(EntryPoint = "Sts2_LoadCombatSnapshot")]
+    public static unsafe int LoadCombatSnapshot(byte* json, int len, int seed, int* obsBuf)
+    {
+        // An exception must not cross this boundary -- it would take the whole host
+        // process down -- so an unexpected one is reported like a refusal.
+        try
+        {
+            if (json is null || len <= 0)
+            {
+                return RefuseLoad("$: no document (a null pointer or a zero length)", -1);
+            }
+
+            var state = CombatSnapshot.Read(new ReadOnlySpan<byte>(json, len), seed, out _);
+            for (int i = 0; i < _pool.Length; i++)
+            {
+                if (_pool[i] is null)
+                {
+                    var combat = new NativeCombat(state, seed);
+                    if (obsBuf is not null)
+                    {
+                        WriteObs(combat.State, obsBuf);
+                    }
+
+                    _pool[i] = combat;
+                    _lastLoadError = [];
+                    return i;
+                }
+            }
+
+            return RefuseLoad($"$: the handle pool is full ({_pool.Length} combats)", -2);
+        }
+        catch (SnapshotException e)
+        {
+            return RefuseLoad(e.Message, -1);
+        }
+        catch (Exception e)
+        {
+            return RefuseLoad($"$: internal error while loading: {e.Message}", -1);
+        }
+    }
+
+    private static int RefuseLoad(string message, int code)
+    {
+        _lastLoadError = Encoding.UTF8.GetBytes(message);
+        return code;
+    }
+
+    /// <summary>
+    /// The combat as an `sts2-emu-snapshot/1` document, UTF-8 JSON with no terminator.
+    /// Size-and-retry: nothing is written unless <paramref name="cap" /> holds all of it.
+    /// </summary>
+    /// <returns>The document's length in bytes, or -1 for an unknown handle.</returns>
+    [UnmanagedCallersOnly(EntryPoint = "Sts2_GetStateJson")]
+    public static unsafe int GetStateJson(int handle, byte* buf, int cap)
+    {
+        if (handle < 0 || handle >= _pool.Length || _pool[handle] is not { } combat)
+        {
+            return -1;
+        }
+
+        byte[] json = CombatSnapshot.Write(combat.State);
+        if (buf is not null && cap >= json.Length)
+        {
+            json.CopyTo(new Span<byte>(buf, cap));
+        }
+
+        return json.Length;
+    }
+
+    /// <summary>
+    /// Why the last <c>Sts2_LoadCombatSnapshot</c> was refused, UTF-8 with no terminator,
+    /// naming the field by its JSON path. Size-and-retry, like <c>Sts2_GetStateJson</c>.
+    /// </summary>
+    /// <returns>The message's length in bytes; 0 when the last load succeeded.</returns>
+    [UnmanagedCallersOnly(EntryPoint = "Sts2_GetLastError")]
+    public static unsafe int GetLastError(byte* buf, int cap)
+    {
+        byte[] message = _lastLoadError;
+        if (buf is not null && cap >= message.Length)
+        {
+            message.CopyTo(new Span<byte>(buf, cap));
+        }
+
+        return message.Length;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "Sts2_Reset")]
