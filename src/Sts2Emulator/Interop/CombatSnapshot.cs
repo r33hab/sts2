@@ -46,10 +46,11 @@ public sealed class SnapshotException : Exception
 /// <para>
 /// The loader refuses what it cannot honour exactly, naming the field: an unknown id, a
 /// missing required field, a value of the wrong type, a field the schema does not have,
-/// or a count past what the game allows (eleven cards in hand, a seventh enemy, a seventh
-/// potion slot). It never drops or trims anything to make a document fit -- a state that
-/// is silently half-built gives confident advice about a fight nobody is in. Buffs past
-/// the observation's ten (player) or five (enemy) slots are loaded all the same.
+/// a count past what the game allows (eleven cards in hand, a seventh enemy, a seventh
+/// potion slot), or a buff list the engine could not hold (one BuffId twice, or an
+/// amount of zero). It never drops or trims anything to make a document fit -- a state
+/// that is silently half-built gives confident advice about a fight nobody is in. Buffs
+/// past the observation's ten (player) or five (enemy) slots are loaded all the same.
 /// </para>
 /// <para>
 /// <c>counters</c> carries every per-turn and per-combat field of CombatState that has no
@@ -422,12 +423,13 @@ public static class CombatSnapshot
         state.OrbCapacity = player.Int("orb_capacity", state.OrbCapacity);
         state.BaseOrbSlots = player.Int("base_orb_slots", state.BaseOrbSlots);
         state.Orbs = player.Items("orbs", ReadOrb);
-        state.PlayerBuffs = player.Items("buffs", ReadBuff);
+        state.PlayerBuffs = ReadBuffs(player, "buffs");
         // Null means "what the engine would have snapshotted": the duration debuffs held
         // now, which is what `TickDurationDebuffs` records at every round boundary.
-        state.PlayerDebuffsAtRoundStart =
-            player.NullableItems("debuffs_at_round_start", ReadBuff)
-            ?? BuffSystem.DurationDebuffSnapshot(state.PlayerBuffs);
+        var atRoundStart = player.NullableItems("debuffs_at_round_start", ReadBuff);
+        state.PlayerDebuffsAtRoundStart = atRoundStart is null
+            ? BuffSystem.DurationDebuffSnapshot(state.PlayerBuffs)
+            : DistinctBuffs(atRoundStart, player.At("debuffs_at_round_start"));
     }
 
     private static void ReadPotions(Fields potions, CombatState state)
@@ -493,7 +495,7 @@ public static class CombatSnapshot
         enemy.Hp = fields.Int("hp");
         enemy.MaxHp = fields.Int("max_hp");
         enemy.Block = fields.Int("block", enemy.Block);
-        enemy.Buffs = fields.Items("buffs", ReadBuff);
+        enemy.Buffs = ReadBuffs(fields, "buffs");
         enemy.CurrentIntent = ReadIntent(fields.Child("intent", IntentFields));
 
         var ai = fields.OptionalChild("ai", AiFields);
@@ -566,10 +568,58 @@ public static class CombatSnapshot
         };
     }
 
+    /// <summary>
+    /// A buff list, held to the two rules every list the engine builds obeys: at most one
+    /// entry per BuffId, and none at zero. See <see cref="DistinctBuffs" /> and
+    /// <see cref="ReadBuff" />.
+    /// </summary>
+    private static List<BuffState> ReadBuffs(Fields fields, string name) =>
+        DistinctBuffs(fields.Items(name, ReadBuff), fields.At(name));
+
+    /// <summary>
+    /// Refuses a list holding one BuffId twice. The engine keeps at most one entry per id
+    /// -- `BuffSystem.Apply` merges into the first match and `BuffSystem.Get` reads only
+    /// the first -- so a second entry would be played as if absent while the export and
+    /// the observation still showed it. Two aliased live powers mapped onto one id is how
+    /// a converter would produce one.
+    /// </summary>
+    private static List<BuffState> DistinctBuffs(List<BuffState> buffs, string path)
+    {
+        for (int i = 1; i < buffs.Count; i++)
+        {
+            for (int first = 0; first < i; first++)
+            {
+                if (buffs[first].Id == buffs[i].Id)
+                {
+                    throw new SnapshotException(
+                        Field(Item(path, i), "id"),
+                        $"duplicate BuffId {(int)buffs[i].Id} (first at [{first}])"
+                    );
+                }
+            }
+        }
+
+        return buffs;
+    }
+
+    /// <summary>
+    /// One buff. A zero amount is refused: `BuffSystem.Apply` and the end-of-turn tick both
+    /// remove an entry the moment it reaches zero, so no combat ever holds one. Negative
+    /// amounts are real -- Strength below zero, the Shrinker Beetle's permanent Shrink.
+    /// </summary>
     private static BuffState ReadBuff(JsonElement element, string path)
     {
         var fields = new Fields(element, path, BuffFields);
-        return new BuffState(fields.EnumValue<BuffId>("id", nameof(BuffId)), fields.Int("amount"));
+        var buff = new BuffState(
+            fields.EnumValue<BuffId>("id", nameof(BuffId)),
+            fields.Int("amount")
+        );
+        return buff.Magnitude != 0
+            ? buff
+            : throw new SnapshotException(
+                fields.At("amount"),
+                "0; the engine never holds a buff at zero"
+            );
     }
 
     private static OrbState ReadOrb(JsonElement element, string path)

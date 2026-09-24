@@ -415,6 +415,33 @@ public class CombatSnapshotTests
         }
     }
 
+    /// <summary>
+    /// Every state the engine reaches must load back. The loader's refusals are for
+    /// documents no combat could be in, never for one the engine produced itself -- and a
+    /// fresh reset shows only turn one. Seeded random play from every encounter carries
+    /// the state through buff applications and ticks, Artifact, deaths and summons.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(EveryEncounter))]
+    public void EveryStateRandomPlayReachesExportsAndLoadsBackIdentically(int encounterId)
+    {
+        var state = Fight.Encounter((CombatFactory.ActOneEncounter)encounterId, seed: 3).State;
+        var rng = new CountingRandom(17);
+        var choices = new Random(encounterId);
+
+        for (int step = 0; step < 40; step++)
+        {
+            string exported = Write(state);
+            Assert.Equal(exported, Write(Read(exported, out _)));
+
+            int[] actions = CombatEngine.ValidActions(state);
+            if (CombatEngine.Step(state, actions[choices.Next(actions.Length)], rng).Terminal)
+            {
+                break;
+            }
+        }
+    }
+
     [Fact]
     public void ANativeResetCombatExportsLoadsAndExportsIdentically()
     {
@@ -552,6 +579,50 @@ public class CombatSnapshotTests
 
         Assert.Equal(-1, Native.Load(document.ToJsonString(), seed: 1));
         Assert.Equal(expected, Native.LastError());
+    }
+
+    /// <summary>
+    /// The engine holds at most one entry per BuffId: `BuffSystem.Apply` merges into the
+    /// first match and `BuffSystem.Get` reads only the first. A list holding an id twice
+    /// would load into a combat that plays the first entry while the export and the
+    /// observation show both -- the shape a converter produces when it maps two aliased
+    /// live powers onto one BuffId.
+    /// </summary>
+    [Theory]
+    [InlineData("player.buffs")]
+    [InlineData("player.debuffs_at_round_start")]
+    [InlineData("enemies[1].buffs")]
+    public void ABuffListHoldingOneIdTwiceIsRefused(string list)
+    {
+        var document = WithBuffList(
+            list,
+            Buffs((BuffId.Weak, 2), (BuffId.Strength, 1), (BuffId.Weak, 1))
+        );
+
+        Assert.Equal(-1, Native.Load(document.ToJsonString(), seed: 1));
+        Assert.Equal(
+            $"{list}[2].id: duplicate BuffId {(int)BuffId.Weak} (first at [0])",
+            Native.LastError()
+        );
+    }
+
+    /// <summary>
+    /// Nor does the engine ever hold a buff at zero: `BuffSystem.Apply` removes an entry
+    /// the moment its amount reaches zero, and so does the end-of-turn tick.
+    /// </summary>
+    [Theory]
+    [InlineData("player.buffs")]
+    [InlineData("player.debuffs_at_round_start")]
+    [InlineData("enemies[1].buffs")]
+    public void AZeroAmountBuffIsRefused(string list)
+    {
+        var document = WithBuffList(list, Buffs((BuffId.Strength, 1), (BuffId.Weak, 0)));
+
+        Assert.Equal(-1, Native.Load(document.ToJsonString(), seed: 1));
+        Assert.Equal(
+            $"{list}[1].amount: 0; the engine never holds a buff at zero",
+            Native.LastError()
+        );
     }
 
     [Fact]
@@ -720,6 +791,28 @@ public class CombatSnapshotTests
                 )
                 .ToArray()
         );
+
+    /// <summary>The minimal document with <paramref name="buffs"/> as the named buff list.</summary>
+    private static JsonObject WithBuffList(string list, JsonArray buffs)
+    {
+        var document = Minimal();
+        switch (list)
+        {
+            case "player.buffs":
+                document["player"]!["buffs"] = buffs;
+                break;
+            case "player.debuffs_at_round_start":
+                document["player"]!["debuffs_at_round_start"] = buffs;
+                break;
+            case "enemies[1].buffs":
+                document["enemies"] = new JsonArray(Enemy(), Enemy(buffs));
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(list), list, null);
+        }
+
+        return document;
+    }
 
     private static JsonObject Enemy(JsonArray? buffs = null) =>
         new()
