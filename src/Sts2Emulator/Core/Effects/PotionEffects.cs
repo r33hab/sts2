@@ -250,9 +250,12 @@ public static class PotionEffects
                 // the owner regardless of the (unused) target parameter.
                 BuffSystem.Apply(state.PlayerBuffs, BuffId.Focus, 2);
                 break;
-            case 26: // Fortifier: Fortifier.cs -- gain block equal to CURRENT block, again
-                // (`target.Block * 2` overall), Unpowered.
-                CardEffects.GainUnpoweredBlock(state, state.PlayerBlock, rng);
+            case 26: // Fortifier: Fortifier.cs:26 -- `GainBlock(target, target.Block * 2,
+                // Unpowered)`. GainBlock is ADDITIVE (CreatureCmd.cs's own
+                // `creature.GainBlockInternal`, mirrored by GainUnpoweredBlock's own
+                // chokepoint write), so the GAIN is twice current block, landing at TRIPLE
+                // the original (B + 2B = 3B), not double it.
+                CardEffects.GainUnpoweredBlock(state, state.PlayerBlock * 2, rng);
                 break;
             case 27: // Foul Potion: FoulPotion.cs -- DamageVar(12m, Unpowered) to
                 // `CombatState.Creatures.Where(!IsPet)`, which is allies-plus-enemies: the

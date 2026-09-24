@@ -285,14 +285,16 @@ public class PotionEffectTests
     // ── 26: Fortifier ───────────────────────────────────────────────────────────────
 
     [Fact]
-    public void Fortifier_DoublesCurrentBlock()
+    public void Fortifier_TriplesCurrentBlock()
     {
+        // Fortifier.cs:26 -- `GainBlock(target, target.Block * 2, Unpowered)`. GainBlock is
+        // additive, so the gain (2x) lands on top of the existing block (1x): 8 -> 24, not 16.
         var state = CombatFactory.NewCombat(seed: 0);
         state.PlayerBlock = 8;
 
         PotionEffects.Apply(26, state);
 
-        Assert.Equal(16, state.PlayerBlock);
+        Assert.Equal(24, state.PlayerBlock);
     }
 
     [Fact]
