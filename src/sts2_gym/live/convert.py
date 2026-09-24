@@ -39,6 +39,13 @@ STARTING_ENERGY = 3
 # `CombatState.PotionSlots` is `RunConstants.PotionSlotCapacity` wide (CombatState.cs).
 POTION_SLOT_CAPACITY = 6
 
+# The snapshot loader refuses more than MAX_ENEMIES enemies or MAX_HAND cards in hand
+# (NativeExports.cs:35-36; CombatSnapshot.cs:380-385, :473) -- the game's own limits, so a
+# live document past them is malformed. (It also refuses an empty roster, with its own
+# message; a live combat always has an enemy.)
+MAX_ENEMIES = 6
+MAX_HAND = 10
+
 # `Character.BaseOrbSlotCount`: only Defect.cs overrides it, to 3 (CombatState.cs, the
 # `OrbCapacity` and `BaseOrbSlots` remarks).
 DEFECT_ORB_SLOTS = 3
@@ -436,6 +443,20 @@ def _pile(
     ]
 
 
+def _hand(
+    live: dict[str, Any],
+    warnings: list[str],
+    corruption: bool,
+) -> list[dict[str, Any]]:
+    hand = _pile(live, "hand", warnings, corruption)
+    if len(hand) > MAX_HAND:
+        raise ConversionError(
+            f"{len(hand)} cards; a hand holds at most {MAX_HAND}",
+            path="hand",
+        )
+    return hand
+
+
 def _enemy_shape(value: object, path: str) -> dict[str, Any]:
     enemy = _object(
         value,
@@ -530,10 +551,13 @@ def _enemies(
     turn: int,
     warnings: list[str],
 ) -> list[dict[str, Any]]:
-    roster = [
-        _enemy_shape(enemy, f"enemies[{i}]")
-        for i, enemy in enumerate(_list(live["enemies"], "enemies"))
-    ]
+    listed = _list(live["enemies"], "enemies")
+    if len(listed) > MAX_ENEMIES:
+        raise ConversionError(
+            f"{len(listed)} enemies; the emulator holds at most {MAX_ENEMIES}",
+            path="enemies",
+        )
+    roster = [_enemy_shape(enemy, f"enemies[{i}]") for i, enemy in enumerate(listed)]
     out = []
     for i, enemy in enumerate(roster):
         where = f"enemies[{i}]"
@@ -720,7 +744,7 @@ def convert(live: dict[str, Any]) -> ConversionResult:
         "relics": relic_state.relics,
         "potions": _potions(player, warnings),
         "piles": {
-            "hand": _pile(top, "hand", warnings, corruption),
+            "hand": _hand(top, warnings, corruption),
             "discard": _pile(top, "discard_pile", warnings, corruption),
             "exhaust": _pile(top, "exhaust_pile", warnings, corruption),
             "draw": _draw(top, warnings, corruption),

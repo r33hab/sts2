@@ -408,6 +408,15 @@ RELICS: dict[str, Relic] = {
     ),
     # Cards added to the deck, every fifth healing (RunNonCombatEffects.cs:203-215).
     "BOOK_OF_FIVE_RINGS": Relic(counter=_residue("_cardsAdded", 5)),
+    # KindleCount, the fights the candle stays lit for: the emulator's Counter is the same
+    # count (RunNonCombatEffects.cs:756-772, :1225-1239) and it adds the +1 max energy
+    # while it is above 0 (RelicEffects.cs:652-657), as `ModifyMaxEnergy` does. The game
+    # shows it as is (`DisplayAmount => KindleCount`) and burns it down only after the
+    # fight (`AfterCombatEnd`, decompiled PumpkinCandle.cs), so mid-fight it is this
+    # fight's count. An Ancient's relic, not an Act 1 one, but it changes max energy.
+    "PUMPKIN_CANDLE": Relic(
+        counter=_count("_kindleCount", from_display=lambda shown: shown),
+    ),
     "POCKETWATCH": Relic(counter=_pocketwatch, reads=("card_plays_this_turn",)),
     # ── State the emulator keeps on CombatState rather than on the relic.
     # BeltBuckleApplied (CombatState.cs:330; RelicEffects.cs:2864-2879).

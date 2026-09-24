@@ -13,12 +13,14 @@ so the output is checked against the schema structurally here, not by loading it
 
 from __future__ import annotations
 
+import copy
 import importlib
 import json
 import operator
 import re
 import sys
 import unittest
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -1713,3 +1715,216 @@ class DecompiledConsistencyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── Carried from the Task 1 review (Task 2's addendum) ───────────────────────
+
+
+class PumpkinCandleTests(unittest.TestCase):
+    """KindleCount rides the relic's Counter, and a lit candle is +1 max energy."""
+
+    @staticmethod
+    def relic_bar(**candle: Any) -> Any:
+        doc = load("player")
+        doc["player"]["relics"].append({"id": "PUMPKIN_CANDLE", **candle})
+        return convert.convert(doc)
+
+    def test_a_lit_candle_keeps_its_count_and_adds_energy(self) -> None:
+        # RelicEffects.cs:652-657 adds the candle's +1 while its Counter is above 0; the
+        # game shows KindleCount (decompiled PumpkinCandle.cs `DisplayAmount`).
+        for candle in (
+            {"counter": 3, "fields": {}},
+            {"counter": 3, "fields": {"_kindleCount": 3}},
+        ):
+            result = self.relic_bar(**candle)
+            self.assertEqual(
+                result.doc["relics"][-1],
+                {"id": ids.relic_id("PUMPKIN_CANDLE"), "counter": 3},
+            )
+            self.assertEqual(result.doc["player"]["max_energy"], 4)
+            self.assertEqual(result.warnings, [])
+
+    def test_a_burnt_out_candle_adds_nothing(self) -> None:
+        result = self.relic_bar(counter=0, fields={"_kindleCount": 0})
+        self.assertEqual(result.doc["relics"][-1]["counter"], 0)
+        self.assertEqual(result.doc["player"]["max_energy"], 3)
+
+
+class HistoryGapTests(unittest.TestCase):
+    """A history key the position reads, missing past round 1, warns; one it does not, does not.
+
+    Nothing in the emulator reads these counters but relics, powers and cards (CombatEngine.cs,
+    RelicEffects.cs, CardEffects.cs; no enemy AI does). The relics and powers known to read
+    one warn when it is missing (`relics.reads_warnings`, `powers.combat_counters`); the
+    cards that do are left for later (the addendum's deferred list).
+    """
+
+    def test_a_reader_warns_past_round_one(self) -> None:
+        doc = load("relics")
+        self.assertEqual(doc["round"], 3)
+        del doc["history"]["attacks_played_this_turn"]
+        result = convert.convert(doc)
+        # Rainbow Ring, Kunai and friends read their own fields; Art of War is not held, so
+        # nothing reads the attack count.
+        self.assertEqual(result.warnings, [])
+        doc["player"]["relics"].append(
+            {"id": "ART_OF_WAR", "counter": None, "fields": {}},
+        )
+        result = convert.convert(doc)
+        self.assertEqual(len(result.warnings), 1)
+        self.assertIn("attack_cards_played_this_turn", result.warnings[0])
+        self.assertFalse(result.reliable)
+
+    def test_a_power_reader_warns_past_round_one(self) -> None:
+        doc = load("player")
+        self.assertEqual(doc["round"], 2)
+        doc["player"]["powers"].append({"id": "SLOTH_POWER", "amount": 3})
+        del doc["history"]["cards_played_this_turn"]
+        result = convert.convert(doc)
+        self.assertTrue(any("cards_played_this_turn" in w for w in result.warnings))
+
+
+class LoaderLimitTests(Refusals):
+    """Past the game's own limits the loader refuses a document, so convert does first."""
+
+    def test_seven_enemies_are_refused(self) -> None:
+        doc = load("enemy")
+        doc["enemies"] = [copy.deepcopy(doc["enemies"][0]) for _ in range(7)]
+        self.assert_refused(doc, "enemies")
+
+    def test_eleven_cards_in_hand_are_refused(self) -> None:
+        doc = load("player")
+        doc["hand"] = [card("STRIKE_IRONCLAD") for _ in range(11)]
+        self.assert_refused(doc, "hand")
+
+
+LOADER_SOURCE = ROOT / "src" / "Sts2Emulator" / "Interop" / "CombatSnapshot.cs"
+
+# The fields the loader cannot do without (CombatSnapshot.cs:349-358, :380, :414-418,
+# :493-496, :529, :542-543, and the buff, relic and orb readers): each is read with no
+# default, and a document missing one is refused.
+LOADER_REQUIRED = {
+    "combat": {"schema", "ascension", "turn", "player", "enemies"},
+    "player": {"hp", "max_hp", "energy", "max_energy"},
+    "enemy": {"def_id", "hp", "max_hp", "intent"},
+    "intent": {"type", "magnitude"},
+    "card": {"def_id", "upgraded"},
+    "buff": {"id", "amount"},
+    "relic": {"id"},
+    "orb": {"type"},
+}
+
+
+def loader_fields() -> dict[str, set[str]]:
+    """Read the loader's own field lists, `static readonly string[] XFields`."""
+    source = LOADER_SOURCE.read_text(encoding="utf-8")
+    out = {}
+    for match in re.finditer(
+        r"string\[\] (\w+)Fields\s*=\s*\[(.*?)\];",
+        source,
+        re.DOTALL,
+    ):
+        out[match.group(1).lower()] = set(re.findall(r'"(\w+)"', match.group(2)))
+    out["counter"] = set(re.findall(r'new\("(\w+)", s => ref', source))
+    return out
+
+
+class LoaderShapeTests(unittest.TestCase):
+    """The converter writes exactly the document the snapshot loader validates.
+
+    The loader refuses an unknown field, a missing required one and a potions list that is
+    not six wide (CombatSnapshot.cs); every fixture's document is checked against the
+    loader's own field lists, and loaded for real through `Sts2_LoadCombatSnapshot`.
+    """
+
+    @staticmethod
+    def documents() -> Iterator[tuple[str, dict[str, Any]]]:
+        for path in sorted(FIXTURES.glob("*.json")):
+            live_doc = json.loads(path.read_text(encoding="utf-8"))
+            yield path.stem, convert.convert(live_doc).doc
+
+    def assert_fields(self, obj: dict[str, Any], kind: str, where: str) -> None:
+        known = loader_fields()[kind]
+        self.assertLessEqual(set(obj), known, f"{where}: fields the loader refuses")
+        self.assertLessEqual(
+            LOADER_REQUIRED.get(kind, set()),
+            set(obj),
+            f"{where}: missing",
+        )
+
+    def test_the_loaders_field_lists_are_read(self) -> None:
+        fields = loader_fields()
+        for kind in (*LOADER_REQUIRED, "potion", "pile", "draw", "incoming", "ai"):
+            self.assertIn(kind, fields)
+        self.assertEqual(len(fields["ai"]), 19)
+        self.assertEqual(len(fields["card"]), 23)
+        self.assertGreater(len(fields["counter"]), 60)
+
+    def test_every_object_has_the_loaders_fields_and_no_others(self) -> None:
+        for name, doc in self.documents():
+            with self.subTest(fixture=name):
+                self.assert_fields(doc, "combat", "$")
+                self.assert_fields(doc["player"], "player", "player")
+                for i, orb in enumerate(doc["player"]["orbs"]):
+                    self.assert_fields(orb, "orb", f"player.orbs[{i}]")
+                for i, item in enumerate(doc["player"]["buffs"]):
+                    self.assert_fields(item, "buff", f"player.buffs[{i}]")
+                for i, relic in enumerate(doc["relics"]):
+                    self.assert_fields(relic, "relic", f"relics[{i}]")
+                self.assert_fields(doc["potions"], "potion", "potions")
+                self.assertEqual(len(doc["potions"]["slots"]), 6)
+                self.assert_fields(doc["piles"], "pile", "piles")
+                self.assert_fields(doc["piles"]["draw"], "draw", "piles.draw")
+                self.assert_fields(doc["incoming"], "incoming", "incoming")
+                piles = [
+                    *(doc["piles"][pile] for pile in ("hand", "discard", "exhaust")),
+                    *doc["piles"]["draw"].values(),
+                    *doc["incoming"].values(),
+                ]
+                for pile in piles:
+                    for emu in pile:
+                        self.assert_fields(emu, "card", "a card")
+                for i, enemy in enumerate(doc["enemies"]):
+                    self.assert_fields(enemy, "enemy", f"enemies[{i}]")
+                    self.assert_fields(
+                        enemy["intent"],
+                        "intent",
+                        f"enemies[{i}].intent",
+                    )
+                    self.assert_fields(enemy["ai"], "ai", f"enemies[{i}].ai")
+                    for j, item in enumerate(enemy["buffs"]):
+                        self.assert_fields(item, "buff", f"enemies[{i}].buffs[{j}]")
+                self.assertLessEqual(set(doc["counters"]), loader_fields()["counter"])
+
+    def test_every_counter_the_converter_can_write_is_one_the_loader_reads(
+        self,
+    ) -> None:
+        self.assertLessEqual(convert.counter_names(), loader_fields()["counter"])
+
+    def test_every_fixture_loads(self) -> None:
+        native = importlib.import_module("sts2_gym.native")
+        nibbit = {
+            "entity_id": "NIBBIT_0",
+            "id": "NIBBIT",
+            "slot": 0,
+            "hp": 40,
+            "max_hp": 44,
+            "block": 0,
+            "powers": [],
+            "intents": [{"type": "ATTACK", "damage": 12, "base_damage": 12, "hits": 1}],
+            "move_id": "BUTT_MOVE",
+            "state_log": ["BUTT_MOVE"],
+            "ai_fields": {},
+        }
+        for path in sorted(FIXTURES.glob("*.json")):
+            live_doc = json.loads(path.read_text(encoding="utf-8"))
+            if not live_doc["enemies"]:
+                # The loader refuses an empty roster; a lone Nibbit on the round's move.
+                ring = ["BUTT_MOVE", "SLICE_MOVE", "HISS_MOVE"]
+                nibbit["state_log"] = [ring[i % 3] for i in range(live_doc["round"])]
+                nibbit["move_id"] = nibbit["state_log"][-1]
+                live_doc["enemies"] = [nibbit]
+            doc = convert.convert(live_doc).doc
+            with self.subTest(fixture=path.stem):
+                handle = native.load_combat_snapshot(doc, 1)
+                native.destroy(handle)
