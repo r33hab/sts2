@@ -56,7 +56,7 @@
       "powers": [],
       "intents": [{"type": "DEBUFF", "damage": null, "base_damage": null, "hits": null}],
       "move_id": "SCREECH_MOVE",
-      "state_log": ["SCRATCH_MOVE", "RAND", "SCREECH_MOVE"],
+      "state_log": ["SCRATCH_MOVE", "SCREECH_MOVE"],
       "ai_fields": {
         "_starterMoveIndex": 0,
         "_turnsUntilSummonable": 1,

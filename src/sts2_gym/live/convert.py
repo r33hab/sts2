@@ -81,6 +81,9 @@ _ATTACK_OR_SKILL_PARTS = (
 # loaded position is always past the point where it would run.
 _ALWAYS = {"whispering_earring_spent": True}
 
+# The one card that reads an enemy's powered hits this turn (CardEffects.cs:7076-7087).
+_BEAT_INTO_SHAPE = "BEAT_INTO_SHAPE"
+
 
 @dataclass
 class ConversionResult:
@@ -491,6 +494,30 @@ def _enemies(
     return out
 
 
+def _powered_hits(live: dict[str, Any], history: dict[str, int]) -> list[str]:
+    """Warn when Beat Into Shape could read a powered-hit count the snapshot drops.
+
+    Beat Into Shape forges from the powered hits its target has taken this turn
+    (CardEffects.cs:7076-7087, EnemyState.PoweredHitsThisTurn), which no live field
+    carries and which convert leaves at 0. That is only wrong once attacks have been played
+    this turn: history's count of them, or -- when it has none -- a turn with any card
+    played.
+    """
+    piles = ("hand", "draw_pile", "discard_pile", "exhaust_pile")
+    if not any(card["id"] == _BEAT_INTO_SHAPE for key in piles for card in live[key]):
+        return []
+    attacks = history.get("attack_cards_played_this_turn")
+    if attacks == 0 or (attacks is None and history.get("cards_played_this_turn") == 0):
+        return []
+    return [
+        f"piles: {_BEAT_INTO_SHAPE} forges from the powered hits each enemy has taken "
+        "this turn (EnemyState.PoweredHitsThisTurn, CardEffects.cs:7076-7087), which no "
+        "live field carries; the emulator counts them from 0 though attacks "
+        + ("were" if attacks else "may have been")
+        + " played this turn",
+    ]
+
+
 def _pending_selection(value: object, warnings: list[str]) -> None:
     """Check a pending selection; mapping it onto `PendingCardSelection` is not done yet."""
     if value is None:
@@ -610,6 +637,7 @@ def convert(live: dict[str, Any]) -> ConversionResult:
     warnings.extend(relic_state.warnings)
 
     history = _history(top["history"])
+    warnings.extend(_powered_hits(top, history))
     warnings.extend(relics.reads_warnings(live_relics, history, path="player.relics"))
     power_counters, power_warnings = powers.combat_counters(
         player_powers,

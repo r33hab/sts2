@@ -24,7 +24,7 @@ from __future__ import annotations
 import copy
 import ctypes
 import importlib
-import itertools
+import inspect
 import re
 import sys
 import unittest
@@ -36,6 +36,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT / "scripts"))
 
 names = importlib.import_module("sts2_gym.names")
 native = importlib.import_module("sts2_gym.native")
@@ -43,6 +44,7 @@ env = importlib.import_module("sts2_gym.env")
 enemy_ai = importlib.import_module("sts2_gym.live.enemy_ai")
 ids = importlib.import_module("sts2_gym.live.ids")
 powers = importlib.import_module("sts2_gym.live.powers")
+enemy_moves = importlib.import_module("enemy_moves")
 
 DECOMPILED = ROOT / "decompiled"
 MONSTER_SOURCE = DECOMPILED / "MegaCrit.Sts2.Core.Models.Monsters"
@@ -298,13 +300,16 @@ def creatures(frames: list[Frame]) -> dict[tuple[Any, ...], list[Seen]]:
 
 
 def _live_powers(emu: dict[str, Any]) -> list[dict[str, Any]]:
-    """Name the emulator's buffs as the game names its powers, companions left out."""
-    out = []
-    for item in emu["buffs"]:
-        entry = powers.BUFF_ID_TO_LIVE.get(item["id"])
-        if item["id"] not in COMPANIONS and entry is not None:
-            out.append({"id": entry, "amount": item["amount"]})
-    return out
+    """Name the emulator's buffs as the game names its powers, companions left out.
+
+    A buff with no live power cannot be named, so it is not: the comparison of the whole
+    buff list then reports it, since `to_ai` has no way to rebuild it.
+    """
+    return [
+        {"id": powers.BUFF_ID_TO_LIVE[item["id"]], "amount": item["amount"]}
+        for item in emu["buffs"]
+        if item["id"] not in COMPANIONS and item["id"] in powers.BUFF_ID_TO_LIVE
+    ]
 
 
 def _live_slot(frame: Frame, seen: Seen, *, phrog_fight: bool) -> int:
@@ -430,6 +435,9 @@ class Rebuilt:
     buffs: list[dict[str, int]]
     warnings: list[str]
 
+    def live_label(self) -> str:
+        return f"enemy {self.live['entity_id']} ({self.live['id']})"
+
 
 def rebuild(
     frames: list[Frame],
@@ -447,9 +455,8 @@ def rebuild(
         roster = [view for _, view in views]
         out = []
         for seen, view in views:
-            buffs = [
-                dict(item) for item in seen.emu["buffs"] if item["id"] not in COMPANIONS
-            ]
+            # The enemy's buffs as convert builds them, from the live powers alone.
+            buffs = powers.to_buffs(view["powers"], owner="enemy", warnings=[])
             ai, intent, warnings = enemy_ai.to_ai(
                 view,
                 roster=roster,
@@ -472,15 +479,16 @@ def differences(item: Rebuilt) -> list[str]:
     ]
     if item.intent != seen.emu["intent"]:
         out.append(f"intent: rebuilt {item.intent}, emulator {seen.emu['intent']}")
-    rebuilt = sorted(
-        (b["id"], b["amount"]) for b in item.buffs if b["id"] in COMPANIONS
-    )
-    held = sorted(
-        (b["id"], b["amount"]) for b in seen.emu["buffs"] if b["id"] in COMPANIONS
-    )
+    # Every buff: the live powers' own, as convert translates them, and the companions.
+    rebuilt = sorted((b["id"], b["amount"]) for b in item.buffs)
+    held = sorted((b["id"], b["amount"]) for b in seen.emu["buffs"])
     if rebuilt != held:
-        out.append(f"companion buffs: rebuilt {rebuilt}, emulator {held}")
-    out.extend(f"warning: {warning}" for warning in item.warnings)
+        out.append(f"buffs: rebuilt {rebuilt}, emulator {held}")
+    # The one warning a model may owe on every conversion: the gap it declares.
+    declared = [f"{item.live_label()}: {seen.model.gap}"] if seen.model.gap else []
+    out.extend(f"warning: {w}" for w in item.warnings if w not in declared)
+    if declared and declared[0] not in item.warnings:
+        out.append(f"missing warning: {declared[0]}")
     return out
 
 
@@ -595,6 +603,19 @@ class SelfConsistencyTests(unittest.TestCase):
             "LAGAVULIN_MATRIARCH STUNNED",
         ):
             self.assertGreater(shown[display], 0, display)
+
+    def test_every_enemy_buff_but_the_companions_has_a_live_power(self) -> None:
+        # So `to_ai` sees exactly what the live side can say: a buff with no live power
+        # would be emulator-only state reaching the rebuilt enemy unannounced.
+        held: set[int] = set()
+        for fight in (*fights(), *hit_fights()):
+            for frame in _Played.frames(fight):
+                for emu in frame.doc["enemies"]:
+                    held.update(
+                        b["id"] for b in emu["buffs"] if b["id"] not in COMPANIONS
+                    )
+        self.assertEqual(held - set(powers.BUFF_ID_TO_LIVE), set())
+        self.assertGreater(len(held), 20)
 
     def test_every_move_of_every_model_was_on_display(self) -> None:
         shown: Counter[str] = Counter()
@@ -711,111 +732,43 @@ UNMODELLED = {
     "BYGONE_EFFIGY": {"SLEEP_MOVE_2"},
 }
 
-_STATEMENT_STATE = re.compile(
-    r'new (?P<kind>MoveState|RandomBranchState|ConditionalBranchState)\(\s*"(?P<id>\w+)"',
-)
-_MOVE_STATE = re.compile(
-    r'new MoveState\(\s*"(?P<id>\w+)"\s*,\s*\w+\s*,\s*new (?P<intent>\w+Intent)\('
-    r"(?P<args>[^()]*(?:\([^()]*\)[^()]*)*)\)",
-)
-_ASSIGNED = re.compile(r"(?P<name>[A-Za-z_][\w.]*)\s*=(?!=)")
-_FOLLOW_UP = re.compile(r"(?P<source>[A-Za-z_]\w*)\.FollowUpState\s*=(?!=)")
-_BRANCH_EDGE = re.compile(
-    r"(?P<source>[A-Za-z_]\w*)\.(?:AddBranch|AddState)\(\s*(?P<target>\w+)",
-)
-_MACHINE = re.compile(
-    r"new MonsterMoveStateMachine\(\s*\w+\s*,\s*(?P<initial>.+?)\)\s*;",
-    re.DOTALL,
-)
-_IDENTIFIER = re.compile(r"[A-Za-z_]\w*")
+
+def machine(entry: str) -> Any:
+    """Parse the monster class whose `ModelId.Entry` is `entry` (StringHelper.Slugify)."""
+    return enemy_moves.parse_machine(
+        (MONSTER_SOURCE / f"{_class_name(entry)}.cs").read_text(),
+    )
 
 
-@dataclass
-class Machine:
-    """A monster's decompiled move machine: moves, branches, edges and initial states."""
+def first_intent(written: tuple[str, ...]) -> str:
+    """Map a move's first intent, as the parser wrote it, to the live `IntentType`.
 
-    moves: dict[str, str]  # MoveState id -> its first intent, as a live IntentType
-    branches: set[str]
-    edges: dict[str, set[str]]
-    initial: set[str]
-
-    def expand(self, states: set[str]) -> set[str]:
-        """Give the moves a set of states leads to, walking through branch states."""
-        out: set[str] = set()
-        seen: set[str] = set()
-        todo = list(states)
-        while todo:
-            state = todo.pop()
-            if state in seen:
-                continue
-            seen.add(state)
-            if state in self.moves:
-                out.add(state)
-            else:
-                todo.extend(self.edges.get(state, ()))
-        return out
-
-    def successors(self, move: str) -> set[str]:
-        return self.expand(self.edges.get(move, set()))
-
-    def openers(self) -> set[str]:
-        return self.expand(self.initial)
+    `DebuffIntent(strong: true)` reads DebuffStrong (decompiled DebuffIntent.cs).
+    """
+    kind, _, args = written[0].partition("(")
+    if kind == "DebuffIntent":
+        return "DEBUFF_STRONG" if "strong: true" in args else "DEBUFF"
+    return INTENT_CLASSES[kind]
 
 
-def machine(class_name: str) -> Machine:
-    """Parse `GenerateMoveStateMachine` statement by statement, the way enemy_moves.py does."""
-    text = (MONSTER_SOURCE / f"{class_name}.cs").read_text(encoding="utf-8")
-    moves: dict[str, str] = {}
-    for match in _MOVE_STATE.finditer(text):
-        kind = match.group("intent")
-        if kind == "DebuffIntent":
-            # `DebuffIntent(strong: true)` reads DebuffStrong (decompiled DebuffIntent.cs).
-            strong = "strong: true" in match.group("args")
-            moves[match.group("id")] = "DEBUFF_STRONG" if strong else "DEBUFF"
-        else:
-            moves[match.group("id")] = INTENT_CLASSES[kind]
-    names_: dict[str, str] = {}
-    edges: dict[str, set[str]] = {}
-    branches: set[str] = set()
+def stun_targets(parsed: Any) -> set[str]:
+    """Find the moves a forced stun leads to, per the machine's own unreachable stun states.
 
-    def resolve(expression: str) -> set[str]:
-        return {
-            names_[word] for word in _IDENTIFIER.findall(expression) if word in names_
-        }
-
-    # In statement order: a later `x.FollowUpState = ...` replaces an earlier one, as it
-    # does when the constructor runs (Inklet points its moves at RAND, then re-points two
-    # of them at JAB).
-    for statement in text.split(";"):
-        declared = _STATEMENT_STATE.search(statement)
-        if declared is not None:
-            state = declared.group("id")
-            if declared.group("kind") != "MoveState":
-                branches.add(state)
-            head = statement[: declared.start()]
-            for assigned in _ASSIGNED.finditer(head):
-                names_[assigned.group("name")] = state
-            for follow in _FOLLOW_UP.finditer(head):
-                edges[follow.group("source")] = {state}
-            continue
-        follow = _FOLLOW_UP.search(statement)
-        if follow is not None:
-            edges[follow.group("source")] = resolve(statement[follow.end() :])
-        for branch in _BRANCH_EDGE.finditer(statement):
-            edges.setdefault(branch.group("source"), set()).add(branch.group("target"))
-    by_state = {
-        names_[source]: {names_.get(target, target) for target in targets}
-        for source, targets in edges.items()
-        if source in names_
+    A stun is `Creature.StunInternal`'s STUNNED state, set without logging, whose
+    follow-up is the stun's `nextMoveId`. The game's two explicit ones are the eel's
+    TERROR (ShriekPower) and the Beast's BEAST_CRY (PlowPower), and each machine declares
+    that stun as a StunIntent state nothing walks to, whose FollowUpState is the same move
+    (decompiled TerrorEel.cs, CeremonialBeast.cs). The Matriarch's wake stun leads to
+    SLASH (AsleepPower), which her sleep already leads to.
+    """
+    forced = {
+        move
+        for move, written in parsed.moves.items()
+        if written
+        and written[0].startswith("StunIntent")
+        and move not in parsed.reachable()
     }
-    initial: set[str] = set()
-    for found in _MACHINE.finditer(text):
-        expression = found.group("initial")
-        initial |= resolve(expression)
-        for word in _IDENTIFIER.findall(expression):
-            for assignment in re.finditer(rf"\b{re.escape(word)}\s*=\s*([^;]+);", text):
-                initial |= resolve(assignment.group(1))
-    return Machine(moves, branches, by_state, initial)
+    return {target for move in forced for target in parsed.successors(move)}
 
 
 def _class_name(entry: str) -> str:
@@ -847,6 +800,55 @@ def _act1_monster_classes() -> set[str]:
     return classes
 
 
+class ParseMachineTests(unittest.TestCase):
+    """`enemy_moves.parse_machine`, the one reader of the decompiled machines, on its own."""
+
+    # Both ways a follow-up is set, each replacing an earlier one as the constructor does:
+    # a plain statement (Inklet.cs:76-77) and inside a declaration (Inklet.cs:70,
+    # LagavulinMatriarch's SLEEP_BRANCH).
+    SOURCE = """
+        MoveState a = new MoveState("A_MOVE", A, new SingleAttackIntent(Damage));
+        MoveState b = new MoveState("B_MOVE", B, new BuffIntent(), new DefendIntent());
+        MoveState c = new MoveState("C_MOVE", C, new DebuffIntent(strong: true));
+        a.FollowUpState = b;
+        b.FollowUpState = c;
+        RandomBranchState r = (RandomBranchState)(a.FollowUpState = new RandomBranchState("RAND"));
+        r.AddBranch(c, 1f);
+        r.AddBranch(b, MoveRepeatType.CannotRepeat, 1f);
+        b.FollowUpState = a;
+        c.FollowUpState = a;
+        return new MonsterMoveStateMachine(list, flag ? a : b);
+    """
+
+    def test_it_reads_moves_branches_edges_and_openers_in_order(self) -> None:
+        parsed = enemy_moves.parse_machine(self.SOURCE)
+        self.assertEqual(
+            parsed.moves,
+            {
+                "A_MOVE": ("SingleAttackIntent(Damage)",),
+                "B_MOVE": ("BuffIntent()", "DefendIntent()"),
+                "C_MOVE": ("DebuffIntent(strong: true)",),
+            },
+        )
+        self.assertEqual(parsed.branches, {"RAND"})
+        self.assertEqual(
+            parsed.edges,
+            {
+                "A_MOVE": ("RAND",),
+                "RAND": ("C_MOVE", "B_MOVE"),
+                "B_MOVE": ("A_MOVE",),
+                "C_MOVE": ("A_MOVE",),
+            },
+        )
+        self.assertEqual(parsed.openers(), {"A_MOVE", "B_MOVE"})
+        self.assertEqual(parsed.successors("A_MOVE"), {"B_MOVE", "C_MOVE"})
+        self.assertEqual(parsed.reachable(), {"A_MOVE", "B_MOVE", "C_MOVE", "RAND"})
+
+    def test_a_class_without_a_machine_counts_everything(self) -> None:
+        # reachable_state_ids' None means "count every declared move" (enemy_moves.py).
+        self.assertIsNone(enemy_moves.reachable_state_ids("class Osty {}"))
+
+
 @unittest.skipUnless(MONSTER_SOURCE.is_dir(), "decompiled/ is not present")
 class DecompiledConsistencyTests(unittest.TestCase):
     """The tables' game side, read against the decompiled monster classes."""
@@ -857,42 +859,87 @@ class DecompiledConsistencyTests(unittest.TestCase):
         self.assertEqual(len(wanted), 51)
         self.assertEqual(enemy_ai.SUPPORTED, frozenset(enemy_ai.MONSTERS))
 
+    def test_a_later_follow_up_replaces_an_earlier_one(self) -> None:
+        # Inklet points all three moves at RAND, then re-points WHIRLWIND and PIERCING_GAZE
+        # at JAB (decompiled Inklet.cs:70-77), so only JAB rolls RAND.
+        parsed = machine("INKLET")
+        self.assertEqual(parsed.successors("WHIRLWIND_MOVE"), {"JAB_MOVE"})
+        self.assertEqual(parsed.successors("PIERCING_GAZE_MOVE"), {"JAB_MOVE"})
+        self.assertEqual(
+            parsed.successors("JAB_MOVE"),
+            {"WHIRLWIND_MOVE", "PIERCING_GAZE_MOVE"},
+        )
+
     def test_move_ids_intents_and_branches_are_the_classes_own(self) -> None:
         for entry, model in MODEL_BY_ENTRY.items():
             with self.subTest(monster=entry):
-                parsed = machine(_class_name(entry))
+                parsed = machine(entry)
                 self.assertEqual(
                     set(model.moves) | UNMODELLED.get(entry, set()),
                     set(parsed.moves),
                 )
                 self.assertEqual(
                     {move: spec.live for move, spec in model.moves.items()},
-                    {move: parsed.moves[move] for move in model.moves},
+                    {move: first_intent(parsed.moves[move]) for move in model.moves},
                 )
                 self.assertEqual(set(model.branches), parsed.branches)
                 self.assertLessEqual(parsed.branches, enemy_ai.BRANCH_STATE_IDS)
 
     def test_the_emulator_fights_are_walks_the_game_machines_can_make(self) -> None:
-        machines = {entry: machine(_class_name(entry)) for entry in MODEL_BY_ENTRY}
+        machines = {entry: machine(entry) for entry in MODEL_BY_ENTRY}
         walked: Counter[str] = Counter()
-        for fight in fights():
+        stunned_steps: Counter[str] = Counter()
+        for fight in (*fights(), *hit_fights()):
             for seen_list in creatures(_Played.frames(fight)).values():
-                log = seen_list[-1].log
                 entry = seen_list[0].model.entry
                 parsed = machines[entry]
+                log = seen_list[-1].log
                 with self.subTest(fight=fight.label(), monster=entry, log=log):
                     self.assertIn(log[0], parsed.openers())
-                    for before, after in itertools.pairwise(log):
-                        self.assertIn(
-                            after,
-                            parsed.successors(before),
-                            f"{before} -> {after}",
-                        )
+                    for before, after, interrupted in steps(seen_list):
+                        legal = parsed.successors(before)
+                        if interrupted:
+                            # Stunned or reviving since `before` was logged: the game
+                            # resumes the pending move (the default follow-up), or takes
+                            # the stun's own follow-up.
+                            legal = legal | {before} | stun_targets(parsed)
+                            stunned_steps[entry] += 1
+                        self.assertIn(after, legal, f"{before} -> {after}")
                 walked[entry] += len(log)
-        self.assertEqual(
-            set(walked),
-            set(MODEL_BY_ENTRY) - {"SNEAKY_GREMLIN", "FAT_GREMLIN"},
+        self.assertEqual(set(walked), set(MODEL_BY_ENTRY))
+        # The stun and revive paths were walked too.
+        self.assertLessEqual(
+            {
+                "CORPSE_SLUG",
+                "EYE_WITH_TEETH",
+                "TERROR_EEL",
+                "CEREMONIAL_BEAST",
+                "LAGAVULIN_MATRIARCH",
+            },
+            set(stunned_steps),
         )
+
+
+def steps(seen_list: list[Seen]) -> Iterator[tuple[str, str, bool]]:
+    """Each logged step of one creature, and whether a stun or revive fell between.
+
+    The game logs no STUNNED or REVIVE_MOVE (Creature.StunInternal, IllusionPower): a
+    frame showing one marks the step that follows it.
+
+    Yields:
+        Each (move before, move after, interrupted) step, in log order.
+
+    """
+    interrupted = False
+    logged: list[str] = []
+    for seen in seen_list:
+        if seen.shown in (enemy_ai.STUNNED, enemy_ai.REVIVE):
+            interrupted = True
+        for move in seen.log[len(logged) :]:
+            if logged:
+                yield logged[-1], move, interrupted
+                interrupted = False
+            logged.append(move)
 
 
 # ── to_ai on hand-written positions ──────────────────────────────────────────
@@ -1047,13 +1094,13 @@ class ToAiTests(unittest.TestCase):
         self.assertEqual(len(warnings), 1)
         self.assertIn("BUFF", warnings[0])
 
-    def test_branch_states_in_the_log_are_skipped(self) -> None:
-        # A starter rat on StarterMoveIndex 0 (CombatFactory.cs:1726-1733), one SCRATCH
+    def test_a_rat_rebuilds_its_history_and_summon_cooldown(self) -> None:
+        # A starter rat on StarterMoveIndex 0 (CombatFactory.cs:1736-1742), one SCRATCH
         # performed: SummonCooldown 2 - 1 (EnemyAI.cs:5362-5374), and SCREECH is Debuff 1
         # (EnemyAI.cs:3278), the Frail it applies (EnemyAI.cs:4058-4061).
         live = enemy(
             "TWO_TAILED_RAT",
-            ["SCRATCH_MOVE", "RAND", "SCREECH_MOVE"],
+            ["SCRATCH_MOVE", "SCREECH_MOVE"],
             "SCREECH_MOVE",
             intents=[other_intent("DEBUFF")],
             slot=2,
@@ -1123,10 +1170,35 @@ class ToAiTests(unittest.TestCase):
             intents=[attack_intent(None, None)],
         )
         ai, intent, warnings, _ = to_ai(live, turn=9)
-        self.assertEqual(
-            (ai["move_index"], intent, warnings),
-            (9, emu_intent("Attack", 25), []),
+        self.assertEqual((ai["move_index"], intent), (9, emu_intent("Attack", 25)))
+        # Its death is not modelled, which every conversion says (the one warning).
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("ABOUT_TO_BLOW", warnings[0])
+
+    def test_a_waterfall_giant_always_warns_that_its_death_is_not_modelled(
+        self,
+    ) -> None:
+        # The emulator drops a dead giant from the enemy phase instead of playing its
+        # forced ABOUT_TO_BLOW and EXPLODE (decompiled WaterfallGiant.cs:200-204,
+        # :291-301), so any position holding one is unreliable.
+        live = enemy(
+            "WATERFALL_GIANT",
+            ["PRESSURIZE_MOVE"],
+            "PRESSURIZE_MOVE",
+            intents=[other_intent("BUFF")],
         )
+        _, intent, warnings, _ = to_ai(live, turn=0)
+        self.assertEqual(intent, emu_intent("Buff", 15))
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("Waterfall Giant's death", warnings[0])
+        self.assertIn("EXPLODE", warnings[0])
+
+    def test_ascension_and_buffs_must_be_given(self) -> None:
+        # Both change the result (magnitudes, companions), so neither has a default.
+        parameters = inspect.signature(enemy_ai.to_ai).parameters
+        for name in ("ascension", "buffs"):
+            self.assertIs(parameters[name].kind, inspect.Parameter.KEYWORD_ONLY, name)
+            self.assertIs(parameters[name].default, inspect.Parameter.empty, name)
 
 
 class StunReviveSpawnTests(unittest.TestCase):
@@ -1321,6 +1393,73 @@ class FallbackTests(unittest.TestCase):
                     any("not a walk" in w for w in warnings),
                     warnings,
                 )
+
+    def test_a_branch_state_in_the_log_warns_and_is_dropped(self) -> None:
+        # The game logs moves only (ShouldAppearInLogs => false on every branch state), so
+        # a branch id means the log did not come from the machine. The rest still counts.
+        live = enemy(
+            "TWO_TAILED_RAT",
+            ["SCRATCH_MOVE", "RAND", "SCREECH_MOVE"],
+            "SCREECH_MOVE",
+            intents=[other_intent("DEBUFF")],
+            slot=2,
+            ai_fields={
+                "_starterMoveIndex": 0,
+                "_turnsUntilSummonable": 1,
+                "_callForBackupCount": 0,
+            },
+        )
+        ai, _, warnings, _ = to_ai(live, turn=1)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("unexpected branch state in log", warnings[0])
+        self.assertIn("RAND", warnings[0])
+        self.assertEqual(ai["move_history"], [0, 2])
+
+    def test_a_branch_state_in_an_unsupported_log_warns_too(self) -> None:
+        live = enemy("CHOMPER", ["CLAMP_MOVE", "RAND", "SCREECH_MOVE"], "SCREECH_MOVE")
+        ai, _, warnings, _ = to_ai(live, turn=1)
+        self.assertEqual(ai["move_index"], 1)
+        self.assertTrue(any("unexpected branch state" in w for w in warnings))
+
+    def test_a_stunned_creature_stays_stunned_when_its_log_falls_back(self) -> None:
+        # BUTT is followed by SLICE, never HISS: the log cannot be rebuilt, but the stun on
+        # display is still a Stunned stack and an Unknown readout (EnemyAI.cs:55-63).
+        live = enemy(
+            "NIBBIT",
+            ["BUTT_MOVE", "HISS_MOVE"],
+            "STUNNED",
+            intents=[other_intent("STUN")],
+        )
+        _, intent, warnings, buffs = to_ai(live, turn=1)
+        self.assertEqual(intent, emu_intent("Unknown", 0))
+        self.assertEqual(buffs, [{"id": BUFF["Stunned"], "amount": 1}])
+        self.assertTrue(any("not a walk" in w for w in warnings))
+
+    def test_an_unsupported_creature_keeps_its_stun_and_its_revive(self) -> None:
+        stunned = enemy(
+            "CHOMPER",
+            ["CLAMP_MOVE"],
+            "STUNNED",
+            intents=[other_intent("STUN")],
+        )
+        _, intent, _, buffs = to_ai(stunned, turn=0)
+        self.assertEqual(
+            (intent, buffs),
+            (emu_intent("Unknown", 0), [{"id": BUFF["Stunned"], "amount": 1}]),
+        )
+        # The Obscura's Parafright is an illusion (decompiled Parafright.cs:38), Hive's.
+        reviving = enemy(
+            "PARAFRIGHT",
+            ["SLAM_MOVE"],
+            "REVIVE_MOVE",
+            intents=[other_intent("HEAL")],
+            hp=0,
+        )
+        _, intent, _, buffs = to_ai(reviving, turn=2)
+        self.assertEqual(
+            (intent, buffs),
+            (emu_intent("Buff", 0), [{"id": BUFF["Reviving"], "amount": 1}]),
+        )
 
     def test_an_unknown_move_warns_and_falls_back(self) -> None:
         live = enemy(

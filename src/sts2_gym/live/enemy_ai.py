@@ -45,9 +45,9 @@ __all__ = [
 
 # Every `RandomBranchState` / `ConditionalBranchState` id in the game's monster machines
 # (decompiled MegaCrit.Sts2.Core.Models.Monsters; no id doubles as a MoveState id). The
-# game's StateLog skips them (`ShouldAppearInLogs => false`, MonsterMoveStateMachine.cs:
-# 30-32 and :75-80), but the live schema allows a log that includes them, so they are
-# dropped before a log is read. Checked against the decompiled source by the test suite.
+# game's StateLog never holds one (`ShouldAppearInLogs => false`, MonsterMoveStateMachine
+# .cs:30-32 and :75-80), and the mod's docs say the same, so one that turns up in a live
+# log is dropped with a warning. Checked against the decompiled source by the test suite.
 BRANCH_STATE_IDS = frozenset(
     {
         "BRANCH",
@@ -213,6 +213,10 @@ def ai_defaults() -> dict[str, Any]:
         "last_spawned_def_id": 0,
         "stolen_gold": 0,
         "heist_gold": 0,
+        # The powered hits the enemy has taken this turn (Enemy.cs:88-92). No live field
+        # carries it, so it converts to 0. Only the Regent card Beat Into Shape reads it
+        # (CardEffects.cs:7076-7087); `convert` warns when that card is in a pile and
+        # attacks were played this turn.
         "powered_hits_this_turn": 0,
         "stolen_card": None,
     }
@@ -269,10 +273,12 @@ class Monster:
         revives: bool = False,
         spawned: str | None = None,
         resumes_after_stun: bool = False,
+        gap: str | None = None,
     ) -> None:
         self.entry = entry
         self.moves = dict(moves)
-        # This machine's own branch-state ids, which a live log may carry.
+        # This machine's own branch-state ids. The game never logs one; one that turns up
+        # in a live log is dropped with a warning.
         self.branches = frozenset(branches)
         # Can join the fight after it starts, so its log may be shorter than the round.
         self.summoned = summoned
@@ -291,6 +297,9 @@ class Monster:
         # Its emulator stun skips the `MoveIndex++`, so the pending move comes back after
         # it as it does in the game.
         self.resumes_after_stun = resumes_after_stun
+        # Something the emulator does not play for this monster at all, which makes any
+        # position holding it unreliable: warned on every conversion.
+        self.gap = gap
 
     @property
     def def_id(self) -> int:
@@ -1530,6 +1539,13 @@ _MODELS: tuple[Monster, ...] = (
             "PRESSURE_GUN_MOVE",
             "PRESSURE_UP_MOVE",
         ),
+        # remove when the emulator models the death explosion
+        gap=(
+            "the emulator does not play the Waterfall Giant's death: killed, it is forced "
+            "onto ABOUT_TO_BLOW and then EXPLODEs for its Steam Eruption damage (decompiled "
+            "WaterfallGiant.cs:200-204, :291-301), where the emulator just drops it from the "
+            "enemy phase, so any line that kills it plays out wrong"
+        ),
     ),
 )
 
@@ -1682,15 +1698,15 @@ def to_ai(
     *,
     roster: Sequence[Mapping[str, Any]],
     turn: int,
-    ascension: int = 0,
-    buffs: list[dict[str, int]] | None = None,
+    ascension: int,
+    buffs: list[dict[str, int]],
 ) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
     """Rebuild a validated live enemy's emulator AI block and intent: (ai, intent, warnings).
 
     `turn` is the emulator's 0-based Turn (the game's round less one) and `ascension` the
-    run's, which the monster tables' values depend on. `buffs`, when given, is the enemy's
-    converted buff list; the emulator-only BuffIds that carry AI state (`Stunned`,
-    `Reviving`, `SummonCooldown`, `BackupCount`, `TerrorQueued`) are set on it in place.
+    run's, which the monster tables' values depend on. `buffs` is the enemy's converted
+    buff list; the emulator-only BuffIds that carry AI state (`Stunned`, `Reviving`,
+    `SummonCooldown`, `BackupCount`, `TerrorQueued`) are set on it in place.
 
     A monster outside `SUPPORTED`, a log its model cannot walk, or a displayed move the
     model does not know gives the generic best effort and a warning, never an error.
@@ -1699,19 +1715,65 @@ def to_ai(
     warnings: list[str] = []
     model = MONSTERS.get(ids.enemy_id(enemy["id"]))
     if model is None or model.def_id not in SUPPORTED:
-        moves = [state for state in enemy["state_log"] if state not in BRANCH_STATE_IDS]
-        intent = _live_intent(enemy, label, warnings)
+        moves = _logged_moves(enemy, BRANCH_STATE_IDS, label, warnings)
+        intent = _shown_intent(enemy) or _live_intent(enemy, label, warnings)
         warnings.append(
             f"{label}: AI state is generic (move_index from the move log, no move "
             "history); no per-monster table has verified it",
         )
+        _merge(buffs, _shown_state(enemy))
         return _generic(moves), intent, warnings
 
     ctx = Context(enemy, roster, turn, ascension, label, warnings)
     ai, intent, companions = _reconstruct(model, ctx)
-    if buffs is not None:
-        _merge(buffs, companions)
+    if model.gap is not None:
+        warnings.append(f"{label}: {model.gap}")
+    _merge(buffs, companions)
     return ai, intent, warnings
+
+
+def _logged_moves(
+    enemy: Mapping[str, Any],
+    branches: frozenset[str],
+    label: str,
+    warnings: list[str],
+) -> list[str]:
+    """Give the live log's moves, warning about and dropping any branch state in it.
+
+    The game's StateLog holds moves only: a branch state has `ShouldAppearInLogs =>
+    false` (decompiled MonsterState.cs, RandomBranchState.cs, ConditionalBranchState.cs),
+    so a branch id in a live log means the log did not come from the game's machine.
+    """
+    found = [state for state in enemy["state_log"] if state in branches]
+    if found:
+        warnings.append(
+            f"{label}: unexpected branch state in log: {found} (the game logs moves "
+            "only); dropped",
+        )
+    return [state for state in enemy["state_log"] if state not in branches]
+
+
+def _shown_state(enemy: Mapping[str, Any]) -> dict[str, int]:
+    """Give the companion a stunned or reviving display stands for, whatever the log says.
+
+    A stun is a `Stunned` stack in the emulator (EnemyAI.cs:55-63), a revive a `Reviving`
+    one (CombatEngine.cs:3206-3222); either is true of the creature on display even when
+    its history cannot be rebuilt.
+    """
+    if enemy["move_id"] == STUNNED:
+        return {"Stunned": 1}
+    if enemy["move_id"] == REVIVE:
+        return {"Reviving": 1}
+    return {}
+
+
+def _shown_intent(enemy: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Give the readout of a stunned (Unknown) or reviving (Buff) creature, else None."""
+    if enemy["move_id"] == STUNNED:
+        return _bare_intent("Unknown")
+    if enemy["move_id"] == REVIVE:
+        return _bare_intent("Buff")
+    return None
 
 
 def _reconstruct(
@@ -1719,17 +1781,18 @@ def _reconstruct(
     ctx: Context,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, int]]:
     enemy, label, warnings = ctx.enemy, ctx.label, ctx.warnings
-    moves = [state for state in enemy["state_log"] if state not in model.branches]
+    moves = _logged_moves(enemy, model.branches | BRANCH_STATE_IDS, label, warnings)
     move_id = enemy["move_id"]
 
     def fallback(reason: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, int]]:
         warnings.append(f"{label}: {reason}; its AI state is a best effort")
         ai = _generic(moves)
-        if move_id in model.moves:
+        intent = _shown_intent(enemy)
+        if intent is None and move_id in model.moves:
             intent = _table_intent(model, move_id, Fields(ai["move_index"]), ctx)
-        else:
+        elif intent is None:
             intent = _live_intent(enemy, label, warnings)
-        return ai, intent, {}
+        return ai, intent, _shown_state(enemy)
 
     unknown = [state for state in moves if state not in model.moves]
     if unknown:

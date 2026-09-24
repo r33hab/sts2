@@ -614,8 +614,7 @@ class EnemyFixtureTests(unittest.TestCase):
         # GOOP opens the slug on MoveIndex 2 (StarterMoveIdx 2, CombatFactory.cs:
         # 1752-1778); one turn on, WHIP_SLAP is 3 (EnemyAI.cs:3285-3301).
         self.assertEqual(slug["ai"], {**enemy_ai.ai_defaults(), "move_index": 3})
-        # A starter rat on StarterMoveIndex 0, SCRATCH then SCREECH (EnemyAI.cs:3203-3283);
-        # RAND is a RandomBranchState (decompiled TwoTailedRat.cs), not a move.
+        # A starter rat on StarterMoveIndex 0, SCRATCH then SCREECH (EnemyAI.cs:3203-3283).
         self.assertEqual(
             {k: rat["ai"][k] for k in ("move_index", "last_move", "move_history")},
             {"move_index": 1, "last_move": 2, "move_history": [0, 2]},
@@ -1753,10 +1752,6 @@ class DecompiledConsistencyTests(unittest.TestCase):
         self.assertEqual(game - emulator, cards.UNMODELLED_ENCHANTMENTS)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 # ── Carried from the Task 1 review (Task 2's addendum) ───────────────────────
 
 
@@ -1968,3 +1963,94 @@ class LoaderShapeTests(unittest.TestCase):
             with self.subTest(fixture=path.stem):
                 handle = native.load_combat_snapshot(doc, 1)
                 native.destroy(handle)
+
+
+class EnemyWarningTests(unittest.TestCase):
+    """What convert says about the enemies it cannot carry exactly."""
+
+    def test_a_branch_state_in_a_live_log_warns(self) -> None:
+        # The game logs moves only (ShouldAppearInLogs => false); a branch id means the
+        # log did not come from the machine (the mod's docs say the same).
+        doc = load("enemy")
+        doc["enemies"][1]["state_log"] = ["SCRATCH_MOVE", "RAND", "SCREECH_MOVE"]
+        result = convert.convert(doc)
+        self.assertEqual(len(result.warnings), 1)
+        self.assertIn("unexpected branch state in log", result.warnings[0])
+        self.assertFalse(result.reliable)
+
+    def test_a_waterfall_giant_makes_the_position_unreliable(self) -> None:
+        # The emulator does not play its forced death explosion (decompiled
+        # WaterfallGiant.cs:200-204, :291-301).
+        doc = load("enemy")
+        doc["enemies"] = [
+            {
+                "entity_id": "WATERFALL_GIANT_0",
+                "id": "WATERFALL_GIANT",
+                "slot": 0,
+                "hp": 250,
+                "max_hp": 250,
+                "block": 0,
+                "powers": [],
+                "intents": [
+                    {"type": "ATTACK", "damage": 15, "base_damage": 15, "hits": 1},
+                ],
+                "move_id": "STOMP_MOVE",
+                "state_log": ["PRESSURIZE_MOVE", "STOMP_MOVE"],
+                "ai_fields": {},
+            },
+        ]
+        result = convert.convert(doc)
+        self.assertEqual(len(result.warnings), 1)
+        self.assertIn("Waterfall Giant's death", result.warnings[0])
+        self.assertFalse(result.reliable)
+
+
+class PoweredHitsTests(unittest.TestCase):
+    """Beat Into Shape reads each enemy's powered hits this turn, which no live field carries."""
+
+    @staticmethod
+    def with_beat_into_shape(**history: int) -> Any:
+        doc = load("player")
+        doc["hand"].append(card("BEAT_INTO_SHAPE"))
+        doc["history"] = history
+        return convert.convert(doc)
+
+    def beat_into_shape_warnings(self, **history: int) -> list[str]:
+        result = self.with_beat_into_shape(**history)
+        return [w for w in result.warnings if "BEAT_INTO_SHAPE" in w]
+
+    def test_attacks_played_this_turn_warn(self) -> None:
+        # CardEffects.cs:7076-7087 forges from EnemyState.PoweredHitsThisTurn, which convert
+        # leaves at 0 (enemy_ai.ai_defaults).
+        warnings = self.beat_into_shape_warnings(
+            cards_played_this_turn=2,
+            attacks_played_this_turn=1,
+        )
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("PoweredHitsThisTurn", warnings[0])
+
+    def test_no_attack_yet_is_exact(self) -> None:
+        self.assertEqual(
+            self.beat_into_shape_warnings(
+                cards_played_this_turn=1,
+                attacks_played_this_turn=0,
+            ),
+            [],
+        )
+        self.assertEqual(self.beat_into_shape_warnings(cards_played_this_turn=0), [])
+
+    def test_an_unreported_attack_count_warns(self) -> None:
+        warnings = self.beat_into_shape_warnings(cards_played_this_turn=3)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("may have been", warnings[0])
+
+    def test_without_the_card_nothing_is_said(self) -> None:
+        doc = load("player")
+        doc["history"] = {"cards_played_this_turn": 2, "attacks_played_this_turn": 2}
+        self.assertFalse(
+            any("BEAT_INTO_SHAPE" in w for w in convert.convert(doc).warnings),
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
