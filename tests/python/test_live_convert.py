@@ -7,17 +7,23 @@ live documents, one per area, and every expected value below is read off the gen
 id tables, the emulator's C# or the decompiled game -- never off the converter's output,
 which would only prove the converter agrees with itself.
 
-The emulator's own loader (`Sts2_LoadCombatSnapshot`) is being written on another branch,
-so the output is checked against the schema structurally here, not by loading it.
+The output is checked against the loader's own field lists, and then for real: every
+fixture, the in-combat selections under `fixtures/live/selection/` included, is converted,
+loaded through `Sts2_LoadCombatSnapshot` and exported again with `Sts2_GetStateJson`,
+and must come back as the converter wrote it (`EndToEndLoadTests`).
 """
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import importlib
+import io
 import json
 import operator
+import os
 import re
+import subprocess
 import sys
 import unittest
 from collections.abc import Iterator
@@ -38,6 +44,8 @@ relics = importlib.import_module("sts2_gym.live.relics")
 cards = importlib.import_module("sts2_gym.live.cards")
 potions = importlib.import_module("sts2_gym.live.potions")
 enemy_ai = importlib.import_module("sts2_gym.live.enemy_ai")
+cli = importlib.import_module("sts2_gym.live.__main__")
+native = importlib.import_module("sts2_gym.native")
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "live"
 DECOMPILED = ROOT / "decompiled"
@@ -899,35 +907,6 @@ class WarningTests(unittest.TestCase):
         result = convert.convert(doc)
         self.assertEqual(result.doc["enemies"][0]["intent"]["magnitude"], 5)
         self.assertTrue(any("base_damage" in w for w in result.warnings))
-
-    def test_a_pending_selection_is_not_converted_yet(self) -> None:
-        doc = load("player")
-        doc["pending_selection"] = {
-            "kind": "EXHAUST",
-            "source_card": "BURNING_PACT",
-            "candidates": [card("STRIKE_IRONCLAD"), card("DEFEND_IRONCLAD")],
-            "min": 1,
-            "max": 1,
-            "selected_uids": [],
-        }
-        result = convert.convert(doc)
-        self.assertIsNone(result.doc["pending_selection"])
-        self.assertEqual(len(result.warnings), 1)
-        self.assertIn("pending_selection", result.warnings[0])
-
-    def test_a_pending_selection_is_still_validated(self) -> None:
-        doc = load("player")
-        doc["pending_selection"] = {
-            "kind": "EXHAUST",
-            "source_card": "NOT_A_CARD",
-            "candidates": [],
-            "min": 1,
-            "max": 1,
-            "selected_uids": [],
-        }
-        with self.assertRaises(live.ConversionError) as caught:
-            convert.convert(doc)
-        self.assertEqual(caught.exception.path, "pending_selection.source_card")
 
     def test_a_relic_reading_an_unreported_counter_warns(self) -> None:
         # Art of War's turn-start check reads AttackCardsPlayedThisTurn
@@ -1849,6 +1828,7 @@ LOADER_REQUIRED = {
     "buff": {"id", "amount"},
     "relic": {"id"},
     "orb": {"type"},
+    "selection": {"kind", "candidates", "source_card_def_id"},
 }
 
 
@@ -1876,7 +1856,7 @@ class LoaderShapeTests(unittest.TestCase):
 
     @staticmethod
     def documents() -> Iterator[tuple[str, dict[str, Any]]]:
-        for path in sorted(FIXTURES.glob("*.json")):
+        for path in sorted(FIXTURES.rglob("*.json")):
             live_doc = json.loads(path.read_text(encoding="utf-8"))
             yield path.stem, convert.convert(live_doc).doc
 
@@ -1932,6 +1912,12 @@ class LoaderShapeTests(unittest.TestCase):
                     for j, item in enumerate(enemy["buffs"]):
                         self.assert_fields(item, "buff", f"enemies[{i}].buffs[{j}]")
                 self.assertLessEqual(set(doc["counters"]), loader_fields()["counter"])
+                if doc["pending_selection"] is not None:
+                    self.assert_fields(
+                        doc["pending_selection"],
+                        "selection",
+                        "pending_selection",
+                    )
 
     def test_every_counter_the_converter_can_write_is_one_the_loader_reads(
         self,
@@ -1939,32 +1925,266 @@ class LoaderShapeTests(unittest.TestCase):
         self.assertLessEqual(convert.counter_names(), loader_fields()["counter"])
 
     def test_every_fixture_loads(self) -> None:
-        native = importlib.import_module("sts2_gym.native")
-        nibbit = {
-            "entity_id": "NIBBIT_0",
-            "id": "NIBBIT",
-            "slot": 0,
-            "hp": 40,
-            "max_hp": 44,
-            "block": 0,
-            "powers": [],
-            "intents": [{"type": "ATTACK", "damage": 12, "base_damage": 12, "hits": 1}],
-            "move_id": "BUTT_MOVE",
-            "state_log": ["BUTT_MOVE"],
-            "ai_fields": {},
-        }
-        for path in sorted(FIXTURES.glob("*.json")):
-            live_doc = json.loads(path.read_text(encoding="utf-8"))
-            if not live_doc["enemies"]:
-                # The loader refuses an empty roster; a lone Nibbit on the round's move.
-                ring = ["BUTT_MOVE", "SLICE_MOVE", "HISS_MOVE"]
-                nibbit["state_log"] = [ring[i % 3] for i in range(live_doc["round"])]
-                nibbit["move_id"] = nibbit["state_log"][-1]
-                live_doc["enemies"] = [nibbit]
+        for path in sorted(FIXTURES.rglob("*.json")):
+            live_doc = loadable(json.loads(path.read_text(encoding="utf-8")))
             doc = convert.convert(live_doc).doc
             with self.subTest(fixture=path.stem):
                 handle = native.load_combat_snapshot(doc, 1)
                 native.destroy(handle)
+
+
+def loadable(live_doc: dict[str, Any]) -> dict[str, Any]:
+    """Return the live document, given a lone Nibbit on the round's move if it has no enemy.
+
+    The loader refuses an empty roster (CombatSnapshot.cs:386-389), and the piles fixture,
+    which is about the piles, has none.
+    """
+    if live_doc["enemies"]:
+        return live_doc
+    ring = ["BUTT_MOVE", "SLICE_MOVE", "HISS_MOVE"]
+    log = [ring[i % 3] for i in range(live_doc["round"])]
+    nibbit = {
+        "entity_id": "NIBBIT_0",
+        "id": "NIBBIT",
+        "slot": 0,
+        "hp": 40,
+        "max_hp": 44,
+        "block": 0,
+        "powers": [],
+        "intents": [{"type": "ATTACK", "damage": 12, "base_damage": 12, "hits": 1}],
+        "move_id": log[-1],
+        "state_log": log,
+        "ai_fields": {},
+    }
+    return {**live_doc, "enemies": [nibbit]}
+
+
+def loader_defaults() -> dict[str, Any]:
+    """Read what the loader fills an omitted field with, off a document that omits them all.
+
+    Each object the loader reads appears once, with only its required fields
+    (`LOADER_REQUIRED`). `Sts2_GetStateJson` writes every field, so each field that comes
+    back beside those is the loader's default.
+    """
+    minimal = {
+        "schema": "sts2-emu-snapshot/1",
+        "ascension": 0,
+        "turn": 0,
+        "player": {"hp": 1, "max_hp": 1, "energy": 0, "max_energy": 3},
+        "relics": [{"id": BURNING_BLOOD}],
+        "piles": {"hand": [{"def_id": STRIKE, "upgraded": False}]},
+        "enemies": [
+            {
+                "def_id": CORPSE_SLUG,
+                "hp": 1,
+                "max_hp": 1,
+                "intent": {"type": 0, "magnitude": 0},
+            },
+        ],
+        "pending_selection": {"kind": 2, "candidates": [0], "source_card_def_id": 0},
+    }
+    handle = native.load_combat_snapshot(minimal, 1)
+    try:
+        out = native.get_state_json(handle)
+    finally:
+        native.destroy(handle)
+    enemy = out["enemies"][0]
+    return {
+        "combat": {
+            key: out[key]
+            for key in (
+                "encounter_id",
+                "is_elite_combat",
+                "is_elite_room",
+                "fur_coat_bites",
+            )
+        },
+        "player": out["player"],
+        "relic": out["relics"][0],
+        "potions": out["potions"],
+        "piles": out["piles"] | {"hand": []},
+        "incoming": out["incoming"],
+        "card": out["piles"]["hand"][0],
+        "enemy": enemy,
+        "intent": enemy["intent"],
+        "ai": enemy["ai"],
+        "counters": out["counters"],
+        "selection": out["pending_selection"],
+    }
+
+
+def normalized(
+    doc: dict[str, Any],
+    defaults: dict[str, Any],
+    derived: dict[str, Any],
+) -> dict[str, Any]:
+    """Normalize a document per schema section 2.1, so two documents compare as states.
+
+    - omitted optional fields take the loader's defaults;
+    - `piles.draw.unordered` is a multiset, so it is sorted;
+    - a null `debuffs_at_round_start` becomes its derived value, which only the loader
+      computes, so it is taken from `derived`, the exported document.
+    """
+    out = copy.deepcopy(doc)
+    card_defaults = defaults["card"]
+
+    def cards(pile: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [card_defaults | item for item in pile]
+
+    out = defaults["combat"] | out
+    out["player"] = defaults["player"] | out["player"]
+    if out["player"]["debuffs_at_round_start"] is None:
+        out["player"]["debuffs_at_round_start"] = derived["player"][
+            "debuffs_at_round_start"
+        ]
+    out["relics"] = [defaults["relic"] | relic for relic in out["relics"]]
+    out["potions"] = defaults["potions"] | out.get("potions", {})
+    out["counters"] = defaults["counters"] | out.get("counters", {})
+    piles = defaults["piles"] | out.get("piles", {})
+    draw = defaults["piles"]["draw"] | piles["draw"]
+    piles["draw"] = {
+        "known_top": cards(draw["known_top"]),
+        "known_bottom": cards(draw["known_bottom"]),
+        "unordered": sorted(
+            cards(draw["unordered"]),
+            key=lambda item: json.dumps(item, sort_keys=True),
+        ),
+    }
+    for key in ("hand", "discard", "exhaust"):
+        piles[key] = cards(piles[key])
+    out["piles"] = piles
+    incoming = defaults["incoming"] | out.get("incoming", {})
+    out["incoming"] = {key: cards(pile) for key, pile in incoming.items()}
+    out["enemies"] = [
+        defaults["enemy"]
+        | enemy
+        | {
+            "intent": defaults["intent"] | enemy["intent"],
+            "ai": defaults["ai"] | enemy.get("ai", {}),
+        }
+        for enemy in out["enemies"]
+    ]
+    if out.get("pending_selection") is not None:
+        pending = defaults["selection"] | out["pending_selection"]
+        pending["after_selection_to_hand"] = cards(pending["after_selection_to_hand"])
+        out["pending_selection"] = pending
+    return out
+
+
+def round_trip(doc: dict[str, Any], seed: int) -> dict[str, Any]:
+    """Load a document through `Sts2_LoadCombatSnapshot` and export it again."""
+    handle = native.load_combat_snapshot(doc, seed)
+    try:
+        return native.get_state_json(handle)
+    finally:
+        native.destroy(handle)
+
+
+@unittest.skipUnless(
+    hasattr(native, "load_combat_snapshot"),
+    "the snapshot loader is not merged into this branch",
+)
+class EndToEndLoadTests(unittest.TestCase):
+    """Every live fixture: convert, load, export, and get the converter's document back.
+
+    `Sts2_GetStateJson(Sts2_LoadCombatSnapshot(doc))` must equal `doc` after the
+    normalization schema section 2.1 allows (`normalized`). Two seeds, because the seed
+    orders the draw pile's unknown middle and must change nothing else, a pending draw-pile
+    selection's candidates included.
+    """
+
+    def test_every_fixture_round_trips(self) -> None:
+        defaults = loader_defaults()
+        paths = sorted(FIXTURES.rglob("*.json"))
+        # Tasks 1 and 2's area fixtures and Task 3's selections.
+        self.assertGreaterEqual(len(paths), 23)
+        for path in paths:
+            live_doc = loadable(json.loads(path.read_text(encoding="utf-8")))
+            doc = convert.convert(live_doc).doc
+            for seed in (1, 2):
+                with self.subTest(fixture=path.stem, seed=seed):
+                    exported = round_trip(doc, seed)
+                    self.assertEqual(
+                        normalized(doc, defaults, exported),
+                        normalized(exported, defaults, exported),
+                    )
+
+    def test_the_comparison_sees_a_changed_field(self) -> None:
+        defaults = loader_defaults()
+        doc = convert.convert(load("selection/headbutt")).doc
+        exported = round_trip(doc, 1)
+        for change in (
+            lambda d: d["piles"]["discard"][-1].update(upgraded=True),
+            lambda d: d["piles"]["draw"]["unordered"].pop(),
+            lambda d: d["pending_selection"].update(candidates=[0, 1]),
+            lambda d: d["counters"].update(cards_played_this_turn=0),
+        ):
+            changed = copy.deepcopy(exported)
+            change(changed)
+            with self.subTest(change=change):
+                self.assertNotEqual(
+                    normalized(doc, defaults, exported),
+                    normalized(changed, defaults, exported),
+                )
+
+
+class CliTests(unittest.TestCase):
+    """`python -m sts2_gym.live <live.json>` prints the document, then the warnings."""
+
+    @staticmethod
+    def run_cli(*argv: str, stdin: str = "") -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with (
+            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(err),
+            mock.patch("sys.stdin", io.StringIO(stdin)),
+        ):
+            status = cli.main(list(argv))
+        return status, out.getvalue(), err.getvalue()
+
+    def test_the_document_on_stdout_and_the_warnings_on_stderr(self) -> None:
+        result = convert.convert(load("selection/headbutt"))
+        status, out, err = self.run_cli(str(FIXTURES / "selection" / "headbutt.json"))
+        self.assertEqual(status, 0)
+        self.assertEqual(json.loads(out), result.doc)
+        self.assertEqual(
+            err.splitlines(),
+            [f"warning: {w}" for w in result.warnings] + ["unreliable: 1 warning(s)"],
+        )
+
+    def test_a_reliable_position_from_stdin(self) -> None:
+        text = (FIXTURES / "player.json").read_text(encoding="utf-8")
+        status, out, err = self.run_cli("-", stdin=text)
+        self.assertEqual(status, 0)
+        self.assertEqual(json.loads(out), convert.convert(json.loads(text)).doc)
+        self.assertEqual(err, "reliable: 0 warning(s)\n")
+
+    def test_a_refused_document_names_the_field(self) -> None:
+        doc = load("player")
+        doc["hand"][0]["id"] = "NOT_A_CARD"
+        status, out, err = self.run_cli("-", stdin=json.dumps(doc))
+        self.assertEqual((status, out), (1, ""))
+        self.assertEqual(err, "error: hand[0].id: unknown card 'NOT_A_CARD'\n")
+
+    def test_an_unreadable_input(self) -> None:
+        status, out, err = self.run_cli(str(FIXTURES / "no_such_fixture.json"))
+        self.assertEqual((status, out), (2, ""))
+        self.assertIn("no_such_fixture.json", err)
+        status, _, err = self.run_cli("-", stdin="{not json")
+        self.assertEqual(status, 2)
+        self.assertTrue(err.startswith("error: -:"))
+
+    def test_it_runs_as_a_module(self) -> None:
+        env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+        done = subprocess.run(
+            [sys.executable, "-m", "sts2_gym.live", str(FIXTURES / "piles.json")],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(json.loads(done.stdout)["schema"], "sts2-emu-snapshot/1")
 
 
 class EnemyWarningTests(unittest.TestCase):

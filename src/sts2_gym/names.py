@@ -53,6 +53,7 @@ class CardInfo:
     target: str
     ethereal: bool
     exhaust: bool
+    exhaust_removed_when_upgraded: bool
     unplayable: bool
     retain: bool
     innate: bool
@@ -176,6 +177,7 @@ def cards() -> dict[int, CardInfo]:
             target=_member(fields, "Target", "Self"),
             ethereal=_flag(fields, "Ethereal"),
             exhaust=_flag(fields, "Exhaust"),
+            exhaust_removed_when_upgraded=_flag(fields, "ExhaustRemovedWhenUpgraded"),
             unplayable=_flag(fields, "Unplayable"),
             retain=_flag(fields, "Retain"),
             innate=_flag(fields, "Innate"),
@@ -243,6 +245,12 @@ def enchantments() -> dict[int, str]:
 def deck_selections() -> dict[int, str]:
     """`DeckSelection` -- what answering an open card-select screen does to the card."""
     return _enum(_CORE / "Run" / "RunState.cs", "DeckSelection")
+
+
+@cache
+def card_selection_kinds() -> dict[int, str]:
+    """`CardSelectionKind` -- what answering an open in-combat card selection does."""
+    return _enum(_CORE / "PendingCardSelection.cs", "CardSelectionKind")
 
 
 @cache

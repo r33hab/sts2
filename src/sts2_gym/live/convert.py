@@ -2,8 +2,8 @@
 
 `convert` walks the live document once, refusing any key the live schema does not define
 and any id the emulator does not know, and assembles the emulator document from the
-per-area translators: `powers`, `relics`, `cards`, and `enemy_ai` for each enemy's AI state
-and intent.
+per-area translators: `powers`, `relics`, `cards`, `enemy_ai` for each enemy's AI state
+and intent, and `selection` for an open in-combat card selection.
 
 What it could not carry faithfully goes into `ConversionResult.warnings`, and any warning
 makes the result unreliable: each one names content the emulator's copy of the position
@@ -15,7 +15,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, cast
 
-from sts2_gym.live import ConversionError, cards, enemy_ai, ids, potions, powers, relics
+from sts2_gym.live import (
+    ConversionError,
+    cards,
+    enemy_ai,
+    ids,
+    potions,
+    powers,
+    relics,
+    selection,
+)
 from sts2_gym.live.enemy_ai import BRANCH_STATE_IDS
 
 __all__ = [
@@ -311,17 +320,20 @@ def _same_face(a: dict[str, Any], b: dict[str, Any]) -> bool:
     )
 
 
-def _draw(
+def _draw_regions(
     live: dict[str, Any],
-    warnings: list[str],
-    corruption: bool,
-) -> dict[str, Any]:
+) -> tuple[
+    list[dict[str, Any]],
+    list[tuple[int, dict[str, Any]]],
+    list[dict[str, Any]],
+]:
     """Split the draw pile into known top and bottom, in order, and the rest as a multiset.
 
     `draw_pile` is the whole pile (the game lets the player see its contents, sorted);
     `known_draw_top` and `known_draw_bottom` say which of those cards have a known place.
     Each known card is taken out of `draw_pile` -- by uid when it has one, by face when it
-    does not -- and what is left is the unordered middle the loader shuffles.
+    does not -- and what is left is the unordered middle the loader shuffles, each card
+    with its index in `draw_pile`.
 
     Raises:
         ConversionError: for a known card that `draw_pile` does not hold.
@@ -350,21 +362,23 @@ def _draw(
                         "this card is not in draw_pile",
                         path=f"{key}[{i}]",
                     )
-    top, bottom = (
-        [
-            cards.to_emu_card(
-                card,
-                path=f"{key}[{i}]",
-                warnings=warnings,
-                corruption=corruption,
-            )
-            for i, card in enumerate(known[key])
-        ]
-        for key in ("known_draw_top", "known_draw_bottom")
-    )
+    return known["known_draw_top"], remaining, known["known_draw_bottom"]
+
+
+def _draw(
+    regions: tuple[
+        list[dict[str, Any]],
+        list[tuple[int, dict[str, Any]]],
+        list[dict[str, Any]],
+    ],
+    warnings: list[str],
+    corruption: bool,
+) -> dict[str, Any]:
+    """Translate the draw pile's three regions (`_draw_regions`) into `piles.draw`."""
+    top, middle, bottom = regions
     return {
-        "known_top": top,
-        "known_bottom": bottom,
+        "known_top": _translated(top, "known_draw_top", warnings, corruption),
+        "known_bottom": _translated(bottom, "known_draw_bottom", warnings, corruption),
         "unordered": [
             cards.to_emu_card(
                 card,
@@ -372,17 +386,18 @@ def _draw(
                 warnings=warnings,
                 corruption=corruption,
             )
-            for i, card in remaining
+            for i, card in middle
         ],
     }
 
 
-def _pile(
-    live: dict[str, Any],
+def _translated(
+    live_cards: list[dict[str, Any]],
     key: str,
     warnings: list[str],
     corruption: bool,
 ) -> list[dict[str, Any]]:
+    """Translate a validated live pile, keeping its order."""
     return [
         cards.to_emu_card(
             card,
@@ -390,16 +405,12 @@ def _pile(
             warnings=warnings,
             corruption=corruption,
         )
-        for i, card in enumerate(_cards(live[key], key))
+        for i, card in enumerate(live_cards)
     ]
 
 
-def _hand(
-    live: dict[str, Any],
-    warnings: list[str],
-    corruption: bool,
-) -> list[dict[str, Any]]:
-    hand = _pile(live, "hand", warnings, corruption)
+def _hand(live: dict[str, Any]) -> list[dict[str, Any]]:
+    hand = _cards(live["hand"], "hand")
     if len(hand) > MAX_HAND:
         raise ConversionError(
             f"{len(hand)} cards; a hand holds at most {MAX_HAND}",
@@ -530,34 +541,76 @@ def _powered_hits(piles: dict[str, Any], history: dict[str, int]) -> list[str]:
     ]
 
 
-def _pending_selection(value: object, warnings: list[str]) -> None:
-    """Check a pending selection; mapping it onto `PendingCardSelection` is not done yet."""
+def _pending_selection(value: object) -> dict[str, Any] | None:
+    """Check a pending in-combat selection against schema section 1.1.
+
+    Raises:
+        ConversionError: for an undefined field, a malformed value, an unknown source or
+            candidate id, more than one source, or a toggled uid no candidate carries.
+
+    """
     if value is None:
-        return
+        return None
+    path = "pending_selection"
     pending = _object(
         value,
-        "pending_selection",
-        ("kind", "source_card", "candidates", "min", "max", "selected_uids"),
+        path,
+        (
+            "kind",
+            "pile",
+            "prompt_key",
+            "source_card",
+            "source_potion",
+            "source_relic",
+            "candidates",
+            "min",
+            "max",
+            "can_skip",
+            "selected_uids",
+        ),
     )
-    _str(pending["kind"], "pending_selection.kind")
-    ids.card_id(
-        _str(pending["source_card"], "pending_selection.source_card"),
-        path="pending_selection.source_card",
-    )
-    for i, card in enumerate(
-        _cards(pending["candidates"], "pending_selection.candidates"),
-    ):
-        ids.card_id(card["id"], path=f"pending_selection.candidates[{i}].id")
-    _int(pending["min"], "pending_selection.min", minimum=0)
-    _int(pending["max"], "pending_selection.max", minimum=0)
-    for i, uid in enumerate(
-        _list(pending["selected_uids"], "pending_selection.selected_uids"),
-    ):
-        _str(uid, f"pending_selection.selected_uids[{i}]")
-    warnings.append(
-        f"pending_selection: a {pending['kind']} selection from {pending['source_card']} is "
-        "open and is not converted; the emulator position has none",
-    )
+    kind = _str(pending["kind"], f"{path}.kind")
+    if kind not in selection.SCREENS:
+        raise ConversionError(
+            f"expected one of {list(selection.SCREENS)}",
+            path=f"{path}.kind",
+        )
+    pile = _str_or_none(pending["pile"], f"{path}.pile")
+    if pile is not None and (kind != "GRID" or pile not in selection.GRID_PILES):
+        raise ConversionError(
+            f"a pile is one of {list(selection.GRID_PILES)}, and only for a GRID",
+            path=f"{path}.pile",
+        )
+    _str_or_none(pending["prompt_key"], f"{path}.prompt_key")
+    lookups = {"card": ids.card_id, "potion": ids.potion_id, "relic": ids.relic_id}
+    named = []
+    for kind_of_source, lookup in lookups.items():
+        key = f"source_{kind_of_source}"
+        entry = _str_or_none(pending[key], f"{path}.{key}")
+        if entry is not None:
+            lookup(entry, path=f"{path}.{key}")
+            named.append(key)
+    if len(named) > 1:
+        raise ConversionError(
+            f"a selection has one source, not {named}",
+            path=f"{path}.{named[1]}",
+        )
+    candidates = _cards(pending["candidates"], f"{path}.candidates")
+    for i, card in enumerate(candidates):
+        ids.card_id(card["id"], path=f"{path}.candidates[{i}].id")
+    low = _int(pending["min"], f"{path}.min", minimum=0)
+    high = _int(pending["max"], f"{path}.max", minimum=0)
+    if low > high:
+        raise ConversionError(f"min {low} is above max {high}", path=f"{path}.min")
+    _bool(pending["can_skip"], f"{path}.can_skip")
+    offered = {card["uid"] for card in candidates if card["uid"] is not None}
+    for i, uid in enumerate(_list(pending["selected_uids"], f"{path}.selected_uids")):
+        if _str(uid, f"{path}.selected_uids[{i}]") not in offered:
+            raise ConversionError(
+                "not the uid of a candidate",
+                path=f"{path}.selected_uids[{i}]",
+            )
+    return pending
 
 
 def convert(live: dict[str, Any]) -> ConversionResult:
@@ -649,6 +702,32 @@ def convert(live: dict[str, Any]) -> ConversionResult:
     warnings.extend(relic_state.warnings)
 
     history = _history(top["history"])
+
+    # The live piles, validated, and the open selection over them. A selection is mapped
+    # before anything reads history: when a card opened it, the emulator has already
+    # counted that card's play (selection.count_play).
+    hand = _hand(top)
+    discard = _cards(top["discard_pile"], "discard_pile")
+    exhaust = _cards(top["exhaust_pile"], "exhaust_pile")
+    draw = _draw_regions(top)
+    live_pending = _pending_selection(top["pending_selection"])
+    pending = None
+    # The live selection, once it maps; a card that opened it has a play to finish.
+    opened: dict[str, Any] | None = None
+    if live_pending is not None:
+        pending = selection.to_pending(
+            live_pending,
+            hand,
+            discard=discard,
+            exhaust=exhaust,
+            draw=selection.Draw(draw[0], [card for _, card in draw[1]], draw[2]),
+            warnings=warnings,
+        )
+        opened = live_pending if pending is not None else None
+    played = opened["source_card"] if opened is not None else None
+    if played is not None:
+        history = selection.count_play(history, ids.card_id(played))
+
     warnings.extend(relics.reads_warnings(live_relics, history, path="player.relics"))
     power_counters, power_warnings = powers.combat_counters(
         player_powers,
@@ -659,6 +738,22 @@ def convert(live: dict[str, Any]) -> ConversionResult:
 
     osty_hp, osty_max_hp = _osty(player["osty"])
     corruption = any(buff["id"] == powers.buff_id("CORRUPTION_POWER") for buff in buffs)
+    piles: dict[str, Any] = {
+        "hand": _translated(hand, "hand", warnings, corruption),
+        "discard": _translated(discard, "discard_pile", warnings, corruption),
+        "exhaust": _translated(exhaust, "exhaust_pile", warnings, corruption),
+        "draw": _draw(draw, warnings, corruption),
+    }
+    if opened is not None and played is not None:
+        # The card that asked lands where the emulator's play would have put it.
+        pile, copy, warning = selection.played_card(
+            opened,
+            hand,
+            corruption=corruption,
+        )
+        if pile is not None:
+            piles[pile].append(copy)
+        warnings.append(warning)
 
     doc = {
         "schema": EMU_SCHEMA,
@@ -687,18 +782,21 @@ def convert(live: dict[str, Any]) -> ConversionResult:
         },
         "relics": relic_state.relics,
         "potions": _potions(player, warnings),
-        "piles": {
-            "hand": _hand(top, warnings, corruption),
-            "discard": _pile(top, "discard_pile", warnings, corruption),
-            "exhaust": _pile(top, "exhaust_pile", warnings, corruption),
-            "draw": _draw(top, warnings, corruption),
-        },
+        "piles": piles,
         "incoming": {"return_to_hand": [], "copies_to_hand": []},
         "enemies": _enemies(top, turn, ascension, warnings),
         "counters": {**history, **power_counters, **relic_state.counters, **_ALWAYS},
-        "pending_selection": None,
+        "pending_selection": pending,
     }
+    if opened is not None and played is None:
+        warnings.extend(
+            selection.hook_warnings(
+                opened,
+                relics=live_relics,
+                powers=player_powers,
+                potions_left=any(doc["potions"]["slots"]),
+            ),
+        )
     # Only once the piles are validated and converted (hand, discard, exhaust, draw above).
     warnings.extend(_powered_hits(doc["piles"], history))
-    _pending_selection(top["pending_selection"], warnings)
     return ConversionResult(doc=doc, warnings=warnings, reliable=not warnings)

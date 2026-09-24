@@ -9,6 +9,7 @@ here, beside the emulator whose meaning it encodes:
 - `powers`: game powers to `BuffId`s, amounts translated where the two sides differ;
 - `relics`: relic counters and flags in the emulator's meaning;
 - `cards`: live cards to `CardInstance` fields;
+- `selection`: an open in-combat card selection to `PendingCardSelection`;
 - `convert`: schema checks and orchestration.
 
 The two schemas are the spire-coach spec `2026-09-24-snapshot-schemas.md`, sections 1 and 2.
