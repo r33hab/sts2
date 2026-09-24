@@ -310,7 +310,9 @@ public class ReptileTrinketTests
     {
         var fight = Fight.WithRelics(RelicEffects.ReptileTrinket);
         fight.State.PlayerHp = 999;
-        fight.State.PotionSlots[0] = 1;
+        fight.State.PotionSlots[0] = 5; // Block Potion: gains block, nothing else -- any
+        // potion would arm Reptile Trinket, and this one does not also open a
+        // card-selection screen (Ashwater's id 1 now does) to complicate the end-turn step.
 
         fight.Potion(0);
         Assert.Equal(3, fight.PlayerBuffAmount(BuffId.Strength));

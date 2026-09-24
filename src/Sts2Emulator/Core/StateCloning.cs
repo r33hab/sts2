@@ -35,12 +35,28 @@ public static class StateCloning
     /// A copy of this stream, from a DIFFERENT seed but at the same call count.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The position is kept deliberately. A stream's call count is not hidden information --
     /// it is a fact about how much has happened -- so a determinization should change what
     /// the next value IS, not how far along the sequence stands. Keeping it also means a
     /// reseeded copy stays comparable to the original in the stream-position diff.
+    /// </para>
+    /// <para>
+    /// A non-null <paramref name="streamName" /> is mixed into the seed, so that reseeding
+    /// several sibling streams from the same <paramref name="seed" /> -- as
+    /// <see cref="Clone(CombatState, int?)" /> does -- gives each of them a DIFFERENT
+    /// derived seed instead of the same one. Without it, two streams at the same call
+    /// count would draw the identical sequence of values after reseeding, which is not
+    /// what an independent stream coming out of a determinization is supposed to look
+    /// like. The one caller with no sibling to decorrelate from (<c>NativeCombat</c>'s own
+    /// top-level Rng) omits it and keeps the un-derived, single-stream behaviour.
+    /// </para>
     /// </remarks>
-    public static CountingRandom? Reseeded(this CountingRandom? rng, int? seed)
+    public static CountingRandom? Reseeded(
+        this CountingRandom? rng,
+        int? seed,
+        string? streamName = null
+    )
     {
         if (rng is null)
         {
@@ -52,7 +68,13 @@ public static class StateCloning
             return rng.Clone();
         }
 
-        var copy = new CountingRandom(seed.Value);
+        int streamSeed = streamName is null
+            ? seed.Value
+            : unchecked(
+                seed.Value * (int)0x9E3779B1
+                + DeterministicHash.GetDeterministicHashCode(streamName)
+            );
+        var copy = new CountingRandom(streamSeed);
         for (int i = 0; i < rng.CallCount; i++)
         {
             copy.Next();
@@ -113,6 +135,9 @@ public static class StateCloning
             Amount = selection.Amount,
             GeneratedCandidates = [.. selection.GeneratedCandidates],
             AfterSelectionToHand = [.. selection.AfterSelectionToHand],
+            Skippable = selection.Skippable,
+            GeneratedUpgraded = selection.GeneratedUpgraded,
+            GeneratedRetained = selection.GeneratedRetained,
         };
 
     /// <summary>
@@ -179,20 +204,32 @@ public static class StateCloning
             Enemies = [.. combat.Enemies.Select(enemy => enemy.Clone())],
             EncounterId = combat.EncounterId,
             IsEliteCombat = combat.IsEliteCombat,
-            ShuffleRng = combat.ShuffleRng.Reseeded(rngSeed),
-            TargetRng = combat.TargetRng.Reseeded(rngSeed),
-            CardSelectionRng = combat.CardSelectionRng.Reseeded(rngSeed),
-            EnergyCostRng = combat.EnergyCostRng?.Clone(),
-            CardGenerationRng = combat.CardGenerationRng.Reseeded(rngSeed),
-            PotionGenerationRng = combat.PotionGenerationRng.Reseeded(rngSeed),
-            OrbGenerationRng = combat.OrbGenerationRng.Reseeded(rngSeed),
+            ShuffleRng = combat.ShuffleRng.Reseeded(rngSeed, nameof(combat.ShuffleRng)),
+            TargetRng = combat.TargetRng.Reseeded(rngSeed, nameof(combat.TargetRng)),
+            CardSelectionRng = combat.CardSelectionRng.Reseeded(
+                rngSeed,
+                nameof(combat.CardSelectionRng)
+            ),
+            EnergyCostRng = combat.EnergyCostRng.Reseeded(rngSeed, nameof(combat.EnergyCostRng)),
+            CardGenerationRng = combat.CardGenerationRng.Reseeded(
+                rngSeed,
+                nameof(combat.CardGenerationRng)
+            ),
+            PotionGenerationRng = combat.PotionGenerationRng.Reseeded(
+                rngSeed,
+                nameof(combat.PotionGenerationRng)
+            ),
+            OrbGenerationRng = combat.OrbGenerationRng.Reseeded(
+                rngSeed,
+                nameof(combat.OrbGenerationRng)
+            ),
             // A CountingRandom carries its seed and position, so it clones exactly. A
             // plain Random does not, and only the combat-only environment supplies one
             // -- that path has no clone export, so the shared reference is unreachable.
             AiRng = combat.AiRng is CountingRandom counting
-                ? counting.Reseeded(rngSeed)
+                ? counting.Reseeded(rngSeed, nameof(combat.AiRng))
                 : combat.AiRng,
-            NicheHpRng = combat.NicheHpRng.Reseeded(rngSeed),
+            NicheHpRng = combat.NicheHpRng.Reseeded(rngSeed, nameof(combat.NicheHpRng)),
             PendingSelection = combat.PendingSelection?.Clone(),
             AutoPlaying = combat.AutoPlaying,
             PlayedCardBonusDamage = combat.PlayedCardBonusDamage,
@@ -489,10 +526,7 @@ public static class StateCloning
         for (int i = end - 1; i > start; i--)
         {
             int j = start + rng.Next(i - start + 1);
-            (combat.DrawPile[i], combat.DrawPile[j]) = (
-                combat.DrawPile[j],
-                combat.DrawPile[i]
-            );
+            (combat.DrawPile[i], combat.DrawPile[j]) = (combat.DrawPile[j], combat.DrawPile[i]);
         }
     }
 }

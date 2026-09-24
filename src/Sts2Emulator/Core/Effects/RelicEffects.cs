@@ -1603,7 +1603,7 @@ public static class RelicEffects
     /// last-resort "anything at all" branch. Both filters are affected, so the pick came
     /// from the wrong pool AND the card-selection stream was drawn against the wrong size.
     /// </remarks>
-    private static bool CostsAnything(CardInstance card) =>
+    internal static bool CostsAnything(CardInstance card) =>
         PrintedCost(card) > 0 || HasStarCost(card);
 
     /// <summary>
