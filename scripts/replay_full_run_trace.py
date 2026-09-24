@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -525,7 +527,14 @@ def replay_trace(
     *,
     emulator_seed: int | str,
     max_steps: int | None = None,
+    observer: Callable[[dict[str, Any], Any], None] | None = None,
 ) -> ReplayResult:
+    """Replay a retained trace step by step against a fresh `Sts2RunEnv`.
+
+    `observer(reference_step, env)`, when given, is called after each replayed step with
+    the reference step just replayed and the env that step left, so a caller can compare
+    the two sides at every step (rl/run_train/DESIGN.md 3.6).
+    """
     reference = compare_traces.load_trace_from_payload(reference_payload)
     env = Sts2RunEnv(seed=emulator_seed)
     try:
@@ -582,6 +591,8 @@ def replay_trace(
                         valid_actions(env),
                     ),
                 )
+                if observer is not None:
+                    observer(reference_step, env)
                 continue
 
             try:
@@ -643,6 +654,8 @@ def replay_trace(
                     [] if terminated or truncated else valid_actions(env),
                 ),
             )
+            if observer is not None:
+                observer(reference_step, env)
             if terminated or truncated:
                 break
 

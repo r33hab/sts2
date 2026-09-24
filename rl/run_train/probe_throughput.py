@@ -50,7 +50,6 @@ from __future__ import annotations
 
 import argparse
 import ctypes
-import hashlib
 import json
 import multiprocessing
 import os
@@ -62,7 +61,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass, field
 from functools import cache
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 
@@ -72,9 +71,13 @@ sys.path.insert(0, str(_RL.parent / "src"))
 
 import combat_mcts  # noqa: E402
 
+from run_train.engine import new_run_env  # noqa: E402
+from run_train.seeding import MAX_SIMS, RUN_STEP_CAP, run_streams  # noqa: E402
 from sts2_gym import names, native  # noqa: E402
 from sts2_gym import run_constants as rc  # noqa: E402
-from sts2_gym.run_env import Sts2RunEnv  # noqa: E402
+
+if TYPE_CHECKING:
+    from sts2_gym.run_env import Sts2RunEnv
 
 # Combat actions are hand indices, end turn, potion slots and selection candidates -- all
 # below 32, the width `combat_mcts` and the combat observation use.
@@ -100,14 +103,14 @@ SEL_REMOVE = 7
 SEL_REMOVE_UPGRADABLE = 8
 SEL_REMOVE_TAGGED_BASIC = 9
 
-STEP_CAP = 6000  # a run that has not ended by here is a bug, not a long run
+# A run that has not ended by here is a bug, not a long run. The bound that keeps every
+# determinization seed inside a C int lives with the stream derivation in `seeding.py`.
+STEP_CAP = RUN_STEP_CAP
 
-# `run_search` seeds simulation j of combat decision `move` with `move * sims + j`, and the
-# native clone takes that seed as a C int. Keeping `move` below this bound keeps the product
-# inside int32 for any budget up to MAX_SIMS.
-MOVE_BASE_LIMIT = 1_000_000
-MAX_SIMS = 2_000
-assert (MOVE_BASE_LIMIT + STEP_CAP) * MAX_SIMS < 2**31
+# The ascension every number in DESIGN.md section 2 was measured at, passed explicitly
+# (erratum RF1): `new_run_env` hands it to a run engine that takes one and refuses any
+# other level on an engine that models A8 only.
+PROBE_ASCENSION = 8
 
 
 class RunCombat:
@@ -540,25 +543,6 @@ class RunRecord:
     decisions_by_phase: dict[int, int] = field(default_factory=dict)
 
 
-def run_streams(seed: str) -> tuple[np.random.Generator, np.random.Generator, int]:
-    """Return the run's MCTS stream, its exploration stream and its determinization base.
-
-    The whole canonical seed (the game's canonicalization: upper case, O -> 0, I -> 1) is
-    hashed with blake2b to 64 bits and fed to a `SeedSequence`, which spawns one child per
-    consumer. Two run seeds therefore share no stream even when they share a suffix, and
-    search never draws from the stream exploration uses (DESIGN.md 5.10). The base offsets
-    `run_search`'s `move` argument, so determinization seeds differ between runs too.
-    """
-    canonical = seed.upper().replace("O", "0").replace("I", "1").strip()
-    digest = hashlib.blake2b(canonical.encode("utf-8"), digest_size=8).digest()
-    mcts_seq, explore_seq = np.random.SeedSequence(
-        int.from_bytes(digest, "little"),
-    ).spawn(2)
-    mcts = np.random.default_rng(mcts_seq)
-    move_base = int(mcts.integers(0, MOVE_BASE_LIMIT))
-    return mcts, np.random.default_rng(explore_seq), move_base
-
-
 def parse_budget(label: str) -> tuple[int, int]:
     """Turn "120" or "120/500" into (sims per decision, sims in elite and boss fights)."""
     base, _, hard = label.partition("/")
@@ -644,7 +628,7 @@ def play_run(
     policy = RulesPolicy()
     # The rules policy draws nothing, so the exploration stream is unused here.
     rng, _explore, move_base = run_streams(seed)
-    env = Sts2RunEnv(seed=seed, max_episode_steps=10**9)
+    env = new_run_env(seed, PROBE_ASCENSION)
     start = time.perf_counter()
     try:
         obs, info = env.reset()
@@ -746,7 +730,7 @@ def _advance_to_combat(seed: str, fight_index: int) -> tuple[Sts2RunEnv, int]:
         RuntimeError: If the run ends before that fight.
 
     """
-    env = Sts2RunEnv(seed=seed, max_episode_steps=10**9)
+    env = new_run_env(seed, PROBE_ASCENSION)
     obs, info = env.reset()
     handle = env._run_handle
     assert handle is not None
@@ -895,6 +879,7 @@ def micro(n: int = 3000, sims_n: int = 200, ab_seeds: int = 6) -> dict:
                 encounter_id=encounter,
                 relic_ids=[_BURNING_BLOOD],
                 player_gold=99,
+                ascension=PROBE_ASCENSION,
                 completed_combat_rooms=3,
             )
             us, steps = _rollout_cost(combat, sims_n // 4, np.random.default_rng(seed))
@@ -1197,7 +1182,12 @@ def main() -> None:
             "cpu_count": os.cpu_count(),
             "load_average_start": _load_average(),
         },
-        "settings": {"c": 0.1, "crn_fraction": 0.2, "rollout": "tempo", "ascension": 8},
+        "settings": {
+            "c": 0.1,
+            "crn_fraction": 0.2,
+            "rollout": "tempo",
+            "ascension": PROBE_ASCENSION,
+        },
     }
     if not args.no_micro:
         print("micro-benchmarks (single process) ...")

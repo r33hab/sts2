@@ -13,6 +13,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "black==26.5.1",
+    "jsonschema==4.26.0",
     "ruff==0.15.15",
     "ty==0.0.39",
 ]
