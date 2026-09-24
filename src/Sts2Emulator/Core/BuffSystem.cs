@@ -417,5 +417,11 @@ public static class BuffSystem
                 or BuffId.Constrict
                 or BuffId.Smoggy
                 or BuffId.NoBlock
-                or BuffId.Doom;
+                or BuffId.Doom
+                // `DemisePower.Type => PowerType.Debuff` in the decompiled source, so
+                // `ArtifactPower.TryModifyPowerAmountReceived` (which blocks any power whose
+                // `GetTypeForAmount` resolves to Debuff) blocks it in the real game. Missing
+                // here, Powdered Demise ignored Artifact entirely -- found verifying the
+                // potion against the source, the same way Task 1 found Fortifier's bug.
+                or BuffId.Demise;
 }
