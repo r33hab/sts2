@@ -242,7 +242,7 @@ public class RunEngineTests
         // round(5 * 1.6) with SwarmingElites), not 5 — assignment and post-prune
         // repair used to disagree about this, which left the map under-pruned.
         Assert.Equal(
-            RunConstants.MapEliteCount,
+            RunConstants.MapEliteCount(s.AscensionLevel),
             s.MapNodes.Values.Count(n => n.NodeType == RunConstants.NodeElite)
         );
         Assert.Equal(

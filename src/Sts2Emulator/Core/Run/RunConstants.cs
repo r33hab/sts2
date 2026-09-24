@@ -127,10 +127,10 @@ public static class RunConstants
 
     /// <summary>
     /// The game's <c>MapPointTypeCounts.NumOfElites</c>:
-    /// <c>round(5 * (SwarmingElites ? 1.6 : 1))</c>. The emulator models high
-    /// ascension, so SwarmingElites is on and this is 8.
+    /// <c>round(5 * (SwarmingElites ? 1.6 : 1))</c> -- eight from A1, five at A0.
     /// </summary>
-    public const int MapEliteCount = 8;
+    public static int MapEliteCount(int ascension) =>
+        (int)Math.Round(5f * (Ascension.Has(ascension, Ascension.SwarmingElites) ? 1.6f : 1f));
 
     /// <summary>The game's <c>MapPointTypeCounts.NumOfShops</c>.</summary>
     public const int MapShopCount = 3;

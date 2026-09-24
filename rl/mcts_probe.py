@@ -80,7 +80,12 @@ class Handle:
 
 def section_invariants(args) -> None:
     print("\n── clone invariants ──")
-    env = Sts2RunEnv(seed="MCTS000001", max_floors=64, max_episode_steps=4000)
+    env = Sts2RunEnv(
+        seed="MCTS000001",
+        max_floors=64,
+        max_episode_steps=4000,
+        ascension=8,
+    )
     env.reset()
     root = Handle(env._run_handle)
 
@@ -211,7 +216,12 @@ args_c = 1.4
 def section_search(args) -> None:
     print("\n── search cost ──")
     rng = np.random.default_rng(0)
-    env = Sts2RunEnv(seed="MCTS000001", max_floors=64, max_episode_steps=4000)
+    env = Sts2RunEnv(
+        seed="MCTS000001",
+        max_floors=64,
+        max_episode_steps=4000,
+        ascension=8,
+    )
     env.reset()
     root_handle = Handle(env._run_handle)
     for _ in range(10):
@@ -244,7 +254,12 @@ def section_search(args) -> None:
 
 def section_pressure(args) -> None:
     print("\n── handle pool pressure ──")
-    env = Sts2RunEnv(seed="MCTS000001", max_floors=64, max_episode_steps=4000)
+    env = Sts2RunEnv(
+        seed="MCTS000001",
+        max_floors=64,
+        max_episode_steps=4000,
+        ascension=8,
+    )
     env.reset()
     root = Handle(env._run_handle)
 
@@ -267,7 +282,12 @@ def section_pressure(args) -> None:
 
 def play_run(seed: str, sims: int, depth: int, rollout: int, rng, use_search: bool) -> int:
     """Play one run to its end, and report the floor it died on."""
-    env = Sts2RunEnv(seed=seed, max_floors=64, max_episode_steps=4000)
+    env = Sts2RunEnv(
+        seed=seed,
+        max_floors=64,
+        max_episode_steps=4000,
+        ascension=8,
+    )
     env.reset()
     handle = Handle(env._run_handle)
     try:

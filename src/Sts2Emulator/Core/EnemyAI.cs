@@ -5448,14 +5448,17 @@ public static class EnemyAI
         Random rng,
         Intent intent,
         bool stunned = false,
-        int ascension = Ascension.DefaultLevel,
+        // Null is the fight's own level. Every summon passes the fight, and most of them
+        // passed no level either, so their HP took the combat layer's A8 default whatever
+        // the fight ran at.
+        int? ascension = null,
         // The combat, for the HP roll. Without it the roll falls back to the combat
         // stream, which is not where the game takes it from.
         CombatState? state = null
     )
     {
         var def = GeneratedData.Enemies.Get(defId);
-        var band = def.HpBand(ascension);
+        var band = def.HpBand(ascension ?? state?.AscensionLevel ?? Ascension.DefaultLevel);
         int hp = RollSummonedHp(band.Min, band.Max, state, rng);
         var enemy = new EnemyState
         {

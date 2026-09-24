@@ -183,7 +183,8 @@ public class EndOfTurnHandTests
     public void SeedPrb00058SoulFyshFightPlaysToTheEnd()
     {
         var run = new RunEngine();
-        run.Reset("PRB00058");
+        // A8: the probe played this run when A8 was the only level the engine had.
+        run.Reset("PRB00058", ascension: 8);
         foreach (int action in Prb00058RootActions)
         {
             Assert.Equal(0, run.Step(action, -1, out _, out _, out _));

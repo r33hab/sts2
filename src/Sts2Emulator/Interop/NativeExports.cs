@@ -909,9 +909,15 @@ public static class NativeExports
     public static int Sts2Run_Create() => RunNativeExports.Sts2Run_Create();
 
     [UnmanagedCallersOnly(EntryPoint = "Sts2Run_Reset")]
-    public static unsafe int Sts2Run_Reset(int handle, byte* seedPtr, int seedLen, int* obsBuf)
+    public static unsafe int Sts2Run_Reset(
+        int handle,
+        byte* seedPtr,
+        int seedLen,
+        int ascension,
+        int* obsBuf
+    )
     {
-        return RunNativeExports.Sts2Run_Reset(handle, seedPtr, seedLen, obsBuf);
+        return RunNativeExports.Sts2Run_Reset(handle, seedPtr, seedLen, ascension, obsBuf);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "Sts2Run_Step")]

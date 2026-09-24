@@ -82,6 +82,7 @@ def main() -> None:
                     if args.max_episode_steps is not None
                     else 1000
                 ),
+                ascension=8,
             )
             if args.run_env
             else Sts2CombatEnv(

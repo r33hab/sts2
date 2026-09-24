@@ -121,7 +121,7 @@ def main() -> None:
     public void RunGeneration_MatchesCapture_{method_name(seed)}()
     {{
         var engine = new RunEngine();
-        engine.Reset("{seed}");
+        engine.Reset("{seed}", ascension: {int(save["ascension"])});
         var s = engine.State;
 
         Assert.Equal(RunConstants.{ACT_CONSTANT[act["id"]]}, s.Act);

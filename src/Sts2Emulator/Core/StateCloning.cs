@@ -327,6 +327,7 @@ public static class StateCloning
         return new RunState
         {
             StringSeed = state.StringSeed,
+            AscensionLevel = state.AscensionLevel,
             Rng = rng,
             PlayerRng = CloneAt(rng, state.PlayerRng),
             PlayerHp = state.PlayerHp,

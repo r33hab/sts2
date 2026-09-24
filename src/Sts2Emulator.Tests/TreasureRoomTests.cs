@@ -37,7 +37,7 @@ public class TreasureRoomTests
     private static RunEngine BelowTheTreasureRow(string seed)
     {
         var engine = new RunEngine();
-        engine.Reset(seed);
+        engine.Reset(seed, ascension: 8);
         var state = engine.State;
         var parent = state
             .MapNodes.Values.Where(node =>
@@ -212,7 +212,7 @@ public class TreasureRoomTests
         var state = engine.State;
         int goldBefore = state.Gold;
         var rewards = StateCloning.CloneAt(state.Rng, state.PlayerRng).Rewards;
-        // `NextInt(42, 53)`, and the emulator models A8's Poverty (x0.75).
+        // `NextInt(42, 53)`, cut to three quarters by Poverty -- these runs are A8.
         int expectedGold = (int)(rewards.NextInt(42, 53) * 0.75);
 
         EnterTheChest(engine);

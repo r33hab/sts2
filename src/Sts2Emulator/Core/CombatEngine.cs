@@ -4738,7 +4738,9 @@ public static class CombatEngine
         Random rng,
         Intent intent,
         bool stunned = false,
-        int ascension = Ascension.DefaultLevel,
+        // Null is the fight's own level -- a Wriggler passed none, and took the combat
+        // layer's A8 default whatever the fight ran at.
+        int? ascension = null,
         int moveIndex = 0,
         // The combat, so the HP roll uses the stream the game uses. Without it the roll
         // falls back to the combat rng with no unique-HP rule.
@@ -4746,7 +4748,7 @@ public static class CombatEngine
     )
     {
         var def = GeneratedData.Enemies.Get(defId);
-        var band = def.HpBand(ascension);
+        var band = def.HpBand(ascension ?? state?.AscensionLevel ?? Ascension.DefaultLevel);
         int hp = EnemyAI.RollSummonedHp(band.Min, band.Max, state, rng);
         var enemy = new EnemyState
         {

@@ -58,11 +58,15 @@ class Sts2RunEnv(gym.Env):
         seed: int | str = 0,
         max_episode_steps: int = RUN_MAX_EPISODE_STEPS,
         max_floors: int = 16,
+        ascension: int = 0,
     ):
         super().__init__()
         self._seed = seed
         self._max_episode_steps = max_episode_steps
         self._max_floors = max_floors
+        # The run's ascension level, 0-9. Every ascension rule in the run and in its
+        # combats reads it; the committed traces were captured at 8 and pass it.
+        self._ascension = ascension
         self._elapsed_steps = 0
         self._run_handle: int | None = None
         self._run_obs_buf = (ctypes.c_int * native.RUN_OBS_SIZE)()
@@ -85,9 +89,17 @@ class Sts2RunEnv(gym.Env):
         if self._run_handle is not None:
             native.run_destroy(self._run_handle)
         self._run_handle = native.run_create()
-        status = native.run_reset(self._run_handle, str(actual_seed), self._run_obs_buf)
+        status = native.run_reset(
+            self._run_handle,
+            str(actual_seed),
+            self._run_obs_buf,
+            self._ascension,
+        )
         if status != 0:
-            raise RuntimeError(f"Sts2Run_Reset failed with status {status}.")
+            raise RuntimeError(
+                f"Sts2Run_Reset failed with status {status} "
+                f"(ascension {self._ascension}).",
+            )
         return self._obs(), self._info()
 
     def clone(self, *, resample_hidden: bool = True, seed: int | None = None):
@@ -118,6 +130,7 @@ class Sts2RunEnv(gym.Env):
             seed=self._seed,
             max_episode_steps=self._max_episode_steps,
             max_floors=self._max_floors,
+            ascension=self._ascension,
         )
         copy._run_handle = native.run_clone(
             self._run_handle,

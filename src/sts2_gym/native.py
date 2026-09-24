@@ -13,7 +13,7 @@ _LIB_NAMES = {
 }
 _ALLOW_STALE_ENV = "STS2_ALLOW_STALE_NATIVE"
 _REQUIRED_NATIVE_API_VERSION = 29
-_REQUIRED_RUN_NATIVE_API_VERSION = 19
+_REQUIRED_RUN_NATIVE_API_VERSION = 20
 
 
 def _repo_root() -> Path:
@@ -412,6 +412,7 @@ _lib.Sts2Run_Reset.argtypes = [
     ctypes.c_int,
     ctypes.POINTER(ctypes.c_ubyte),
     ctypes.c_int,
+    ctypes.c_int,  # ascension
     ctypes.POINTER(ctypes.c_int),
 ]
 
@@ -1010,10 +1011,34 @@ def run_clone(
     return handle_out
 
 
-def run_reset(handle: int, seed: str, obs_buf: ctypes.Array) -> int:
+def run_reset(
+    handle: int,
+    seed: str,
+    obs_buf: ctypes.Array,
+    ascension: int = 0,
+) -> int:
+    """Start a new run on this handle at the given ascension level.
+
+    Every ascension rule in the run and its combats reads the level -- starting HP, the
+    elite count, gold, the belt, Ascender's Bane, card odds, monster HP and damage. The
+    default is 0; the committed traces and live fixtures were captured at 8 and pass it.
+
+    Returns:
+        0 on success, -1 for an unknown handle, -2 for a level the run engine does not
+        model (anything outside 0-9: DoubleBoss is not modelled).
+
+    """
     seed_bytes = seed.encode("utf-8")
     seed_buf = (ctypes.c_ubyte * len(seed_bytes))(*seed_bytes)
-    return int(_lib.Sts2Run_Reset(handle, seed_buf, len(seed_bytes), obs_buf))
+    return int(
+        _lib.Sts2Run_Reset(
+            handle,
+            seed_buf,
+            len(seed_bytes),
+            ascension,
+            obs_buf,
+        ),
+    )
 
 
 def run_step(
