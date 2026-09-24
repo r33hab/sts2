@@ -6,8 +6,10 @@ using Xunit;
 namespace Sts2Emulator.Tests;
 
 /// <summary>
-/// Potion combat effects: <see cref="PotionEffects.Apply"/> and
-/// <see cref="PotionEffects.NeedsEnemyTarget"/>, ids 1-31. Expected numbers come from
+/// Potion combat effects: <see cref="PotionEffects.Apply"/>,
+/// <see cref="PotionEffects.NeedsEnemyTarget"/> and <see cref="PotionEffects.IsModelled"/>,
+/// ids 1-63 (1-31 from Task 1, 32-63 plus the unsupported-potion guard from Task 2).
+/// Expected numbers come from
 /// `decompiled/MegaCrit.Sts2.Core.Models.Potions/&lt;Name&gt;.cs`, cited per case.
 /// </summary>
 public class PotionEffectTests
@@ -834,5 +836,819 @@ public class PotionEffectTests
         PotionEffects.Apply(30, state);
 
         Assert.Null(state.PendingSelection);
+    }
+
+    // ── 32: Gigantification (pre-existing; verified against the source) ───────────────
+
+    [Fact]
+    public void Gigantification_GrantsOneStackOfTripleDamageOnTheNextAttack()
+    {
+        // GigantificationPotion.cs: PowerVar<GigantificationPower>(1) -- a STACK COUNT,
+        // not a multiplier; GigantificationPower itself triples the next powered Attack
+        // card's damage and then decrements.
+        var state = CombatFactory.NewCombat(seed: 0);
+
+        PotionEffects.Apply(32, state);
+
+        Assert.Equal(1, BuffSystem.Get(state.PlayerBuffs, BuffId.Gigantification));
+    }
+
+    // ── 33: Glowwater Potion ────────────────────────────────────────────────────────
+
+    [Fact]
+    public void GlowwaterPotion_ExhaustsTheWholeHandThenDrawsTen()
+    {
+        // GlowwaterPotion.cs: exhaust every card in hand, unconditionally, THEN draw
+        // CardsVar(10).
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = TestDeck.Pile(IC.StrikeIronclad, IC.StrikeIronclad, IC.DefendIronclad);
+        state.DrawPile = TestDeck.Pile(
+            IC.StrikeIronclad,
+            IC.StrikeIronclad,
+            IC.StrikeIronclad,
+            IC.StrikeIronclad,
+            IC.DefendIronclad,
+            IC.DefendIronclad,
+            IC.DefendIronclad,
+            IC.DefendIronclad,
+            IC.Bash,
+            IC.Bash
+        );
+
+        PotionEffects.Apply(33, state, new Random(0));
+
+        Assert.Equal(10, state.Hand.Count);
+        Assert.Equal(3, state.ExhaustPile.Count);
+        Assert.Empty(state.DrawPile);
+    }
+
+    // ── 34: Heart of Iron ───────────────────────────────────────────────────────────
+
+    [Fact]
+    public void HeartOfIron_GrantsSevenPlating()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+
+        PotionEffects.Apply(34, state);
+
+        Assert.Equal(7, BuffSystem.Get(state.PlayerBuffs, BuffId.Plating));
+    }
+
+    // ── 35: King's Courage ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public void KingsCourage_ForgesFifteen()
+    {
+        // KingsCourage.cs: ForgeVar(15). `CardEffects.Forge` gives a Sovereign Blade if
+        // none is live, then adds the amount as BonusDamage to every one -- 15 is the
+        // number this potion contributes.
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [];
+
+        PotionEffects.Apply(35, state);
+
+        Assert.Single(state.Hand);
+        Assert.Equal(15, state.Hand[0].BonusDamage);
+    }
+
+    // ── 36: Liquid Bronze ───────────────────────────────────────────────────────────
+
+    [Fact]
+    public void LiquidBronze_GrantsThreeThorns()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+
+        PotionEffects.Apply(36, state);
+
+        Assert.Equal(3, BuffSystem.Get(state.PlayerBuffs, BuffId.Thorns));
+    }
+
+    // ── 37: Liquid Memories ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public void LiquidMemories_OffersEveryCardInTheDiscardPile()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.DiscardPile = TestDeck.Pile(IC.StrikeIronclad, IC.DefendIronclad, IC.Bash);
+
+        PotionEffects.Apply(37, state);
+
+        var selection = state.PendingSelection;
+        Assert.NotNull(selection);
+        Assert.Equal(CardSelectionKind.DiscardToHandFree, selection!.Kind);
+        Assert.False(selection.Skippable);
+        Assert.Equal(3, selection.Candidates.Count);
+    }
+
+    [Fact]
+    public void LiquidMemories_ChosenCardMovesToHandFreeThisTurn()
+    {
+        // Unlike Hologram's DiscardToHand, the recovered card is playable for nothing.
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [];
+        state.DiscardPile = TestDeck.Pile(IC.StrikeIronclad, IC.DefendIronclad, IC.Bash);
+        var rng = new Random(0);
+
+        PotionEffects.Apply(37, state);
+        CombatEngine.Step(state, 1, rng); // pick discard-pile index 1: DefendIronclad.
+
+        Assert.Single(state.Hand);
+        Assert.Equal(IC.DefendIronclad, state.Hand[0].DefId);
+        Assert.True(state.Hand[0].FreeThisTurn);
+        Assert.Equal(2, state.DiscardPile.Count);
+        Assert.Null(state.PendingSelection);
+    }
+
+    [Fact]
+    public void LiquidMemories_DoesNothingWithAnEmptyDiscardPile()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.DiscardPile = [];
+
+        PotionEffects.Apply(37, state);
+
+        Assert.Null(state.PendingSelection);
+    }
+
+    [Fact]
+    public void LiquidMemories_ObservationReportsDiscardPileCandidates()
+    {
+        // CombatObservation's selection-candidate pile switch defaulted to Hand for any
+        // kind it did not name explicitly -- DiscardToHandFree needed adding alongside
+        // DiscardToHand and DiscardToDrawPileTop, or a policy would have been shown hand
+        // cards instead of the discard pile this selection actually offers.
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = TestDeck.Pile(IC.Bash);
+        state.DiscardPile = TestDeck.Pile(IC.StrikeIronclad, IC.DefendIronclad);
+
+        PotionEffects.Apply(37, state);
+
+        var obs = new int[CombatObservation.ObsSize];
+        CombatObservation.Write(state, obs);
+
+        Assert.Equal(IC.StrikeIronclad, obs[CombatObservation.SelectionOffset]);
+        Assert.Equal(
+            IC.DefendIronclad,
+            obs[CombatObservation.SelectionOffset + CombatObservation.CardSlotSize]
+        );
+    }
+
+    // ── 38: Lucky Tonic ─────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void LuckyTonic_GrantsOneBuffer()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+
+        PotionEffects.Apply(38, state);
+
+        Assert.Equal(1, BuffSystem.Get(state.PlayerBuffs, BuffId.Buffer));
+    }
+
+    // ── 39: Mazaleth's Gift ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public void MazalethsGift_GrantsOneRitual()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+
+        PotionEffects.Apply(39, state);
+
+        Assert.Equal(1, BuffSystem.Get(state.PlayerBuffs, BuffId.Ritual));
+    }
+
+    [Fact]
+    public void MazalethsGift_RitualPaysOutStrengthAtTheEndOfTheVeryTurnItWasGranted()
+    {
+        // RitualPower.AfterApplied only latches its skip-first-tick flag when the
+        // power's OWNER `IsEnemy` (Cultists' Incantation, on the enemy side). A
+        // player-held Ritual has no such skip and pays out Strength at the end of the
+        // SAME turn it is quaffed -- and every turn after, since AfterSideTurnEnd never
+        // decrements or removes it (unlike Regen).
+        var fight = Fight.Hand().Enemy();
+        fight.State.PotionSlots[0] = 39;
+
+        fight.Potion(0);
+        fight.EndTurn();
+
+        Assert.Equal(1, fight.PlayerBuffAmount(BuffId.Strength));
+        Assert.Equal(1, fight.PlayerBuffAmount(BuffId.Ritual));
+
+        fight.EndTurn();
+
+        Assert.Equal(2, fight.PlayerBuffAmount(BuffId.Strength));
+    }
+
+    // ── 40: Orobic Acid ─────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void OrobicAcid_AddsOneDistinctAttackSkillAndPowerFreeThisTurn()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [];
+
+        PotionEffects.Apply(40, state, new Random(0));
+
+        Assert.Equal(3, state.Hand.Count);
+        Assert.All(state.Hand, card => Assert.True(card.FreeThisTurn));
+        Assert.All(state.Hand, card => Assert.False(card.Upgraded));
+        var types = state
+            .Hand.Select(c => GeneratedData.Cards.Get(c.DefId).Type)
+            .OrderBy(t => t)
+            .ToList();
+        Assert.Equal(
+            new[] { CardType.Attack, CardType.Skill, CardType.Power }.OrderBy(t => t).ToList(),
+            types
+        );
+    }
+
+    // ── 41: Poison Potion ───────────────────────────────────────────────────────────
+
+    [Fact]
+    public void PoisonPotion_AppliesSixPoisonToTheAimedAtEnemy()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Enemies = [Enemy(), Enemy()];
+        state.TargetEnemyIndex = 1;
+
+        PotionEffects.Apply(41, state);
+
+        Assert.Equal(0, BuffSystem.Get(state.Enemies[0].Buffs, BuffId.Poison));
+        Assert.Equal(6, BuffSystem.Get(state.Enemies[1].Buffs, BuffId.Poison));
+    }
+
+    [Fact]
+    public void PoisonPotion_ArtifactEatsThePoison()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Enemies = [Enemy(buffs: new BuffState(BuffId.Artifact, 1))];
+
+        PotionEffects.Apply(41, state);
+
+        Assert.Equal(0, BuffSystem.Get(state.Enemies[0].Buffs, BuffId.Artifact));
+        Assert.Equal(0, BuffSystem.Get(state.Enemies[0].Buffs, BuffId.Poison));
+    }
+
+    // ── 42: Potion of Binding ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void PotionOfBinding_AppliesWeakAndVulnerableToEveryHittableEnemy()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Enemies = [Enemy(), Enemy(hp: 0)]; // the second is dead: not hittable.
+
+        PotionEffects.Apply(42, state);
+
+        Assert.Equal(1, BuffSystem.Get(state.Enemies[0].Buffs, BuffId.Weak));
+        Assert.Equal(1, BuffSystem.Get(state.Enemies[0].Buffs, BuffId.Vulnerable));
+        Assert.Equal(0, BuffSystem.Get(state.Enemies[1].Buffs, BuffId.Weak));
+        Assert.Equal(0, BuffSystem.Get(state.Enemies[1].Buffs, BuffId.Vulnerable));
+    }
+
+    [Fact]
+    public void PotionOfBinding_OneArtifactBlocksOnlyTheFirstOfTheTwoDebuffs()
+    {
+        // Applied in the decompiled order -- Weak, then Vulnerable -- so a single
+        // Artifact charge eats Weak and lets Vulnerable through.
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Enemies = [Enemy(buffs: new BuffState(BuffId.Artifact, 1))];
+
+        PotionEffects.Apply(42, state);
+
+        Assert.Equal(0, BuffSystem.Get(state.Enemies[0].Buffs, BuffId.Artifact));
+        Assert.Equal(0, BuffSystem.Get(state.Enemies[0].Buffs, BuffId.Weak));
+        Assert.Equal(1, BuffSystem.Get(state.Enemies[0].Buffs, BuffId.Vulnerable));
+    }
+
+    // ── 43: Potion of Capacity ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void PotionOfCapacity_GrantsTwoOrbSlots()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.OrbCapacity = 1;
+
+        PotionEffects.Apply(43, state);
+
+        Assert.Equal(3, state.OrbCapacity);
+    }
+
+    // ── 44: Potion of Doom ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public void PotionOfDoom_AppliesThirtyThreeDoomToTheAimedAtEnemy()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Enemies = [Enemy(), Enemy()];
+        state.TargetEnemyIndex = 1;
+
+        PotionEffects.Apply(44, state);
+
+        Assert.Equal(0, BuffSystem.Get(state.Enemies[0].Buffs, BuffId.Doom));
+        Assert.Equal(33, BuffSystem.Get(state.Enemies[1].Buffs, BuffId.Doom));
+    }
+
+    // ── 45: Potion-Shaped Rock ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void PotionShapedRock_DealsFifteenUnpoweredDamageToTheAimedAtEnemy()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Enemies = [Enemy(hp: 30), Enemy(hp: 30)];
+        state.TargetEnemyIndex = 1;
+
+        PotionEffects.Apply(45, state);
+
+        Assert.Equal(30, state.Enemies[0].Hp);
+        Assert.Equal(15, state.Enemies[1].Hp);
+    }
+
+    // ── 46: Pot of Ghouls ───────────────────────────────────────────────────────────
+
+    [Fact]
+    public void PotOfGhouls_AddsTwoSoulsToHand()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [];
+
+        PotionEffects.Apply(46, state);
+
+        Assert.Equal(2, state.Hand.Count);
+        Assert.All(state.Hand, card => Assert.Equal(446, card.DefId)); // Soul
+    }
+
+    // ── 47: Powdered Demise (pre-existing; verified against the source) ───────────────
+
+    [Fact]
+    public void PowderedDemise_AppliesNineDemiseToTheAimedAtEnemy()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Enemies = [Enemy(), Enemy()];
+        state.TargetEnemyIndex = 1;
+
+        PotionEffects.Apply(47, state);
+
+        Assert.Equal(0, BuffSystem.Get(state.Enemies[0].Buffs, BuffId.Demise));
+        Assert.Equal(9, BuffSystem.Get(state.Enemies[1].Buffs, BuffId.Demise));
+    }
+
+    [Fact]
+    public void PowderedDemise_ArtifactEatsTheDemise()
+    {
+        // Fixed: `BuffId.Demise` was missing from `BuffSystem.IsDebuff`, so Artifact
+        // never blocked it even though `DemisePower.Type => PowerType.Debuff` in the
+        // decompiled source -- confirmed against
+        // `ArtifactPower.TryModifyPowerAmountReceived`, which blocks any power whose
+        // `GetTypeForAmount` resolves to Debuff.
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Enemies = [Enemy(buffs: new BuffState(BuffId.Artifact, 1))];
+
+        PotionEffects.Apply(47, state);
+
+        Assert.Equal(0, BuffSystem.Get(state.Enemies[0].Buffs, BuffId.Artifact));
+        Assert.Equal(0, BuffSystem.Get(state.Enemies[0].Buffs, BuffId.Demise));
+    }
+
+    // ── 48: Power Potion ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void PowerPotion_OffersThreeDistinctPowers()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [];
+
+        PotionEffects.Apply(48, state, new Random(0));
+
+        var selection = state.PendingSelection;
+        Assert.NotNull(selection);
+        Assert.Equal(CardSelectionKind.GeneratedCardToHand, selection!.Kind);
+        Assert.True(selection.Skippable);
+        Assert.Equal(3, selection.GeneratedCandidates.Distinct().Count());
+        Assert.All(
+            selection.GeneratedCandidates,
+            id => Assert.Equal(CardType.Power, GeneratedData.Cards.Get(id).Type)
+        );
+    }
+
+    [Fact]
+    public void PowerPotion_ChosenCardJoinsHandFreeThisTurnAndUnupgraded()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [];
+        var rng = new Random(0);
+
+        PotionEffects.Apply(48, state, rng);
+        int picked = state.PendingSelection!.GeneratedCandidates[0];
+        CombatEngine.Step(state, 0, rng); // choose the first offered card.
+
+        Assert.Single(state.Hand);
+        Assert.Equal(picked, state.Hand[0].DefId);
+        Assert.True(state.Hand[0].FreeThisTurn);
+        Assert.False(state.Hand[0].Upgraded);
+    }
+
+    // ── 49: Radiant Tincture (pre-existing; verified against the source) ──────────────
+
+    [Fact]
+    public void RadiantTincture_GainsOneEnergyImmediatelyAndGrantsThreeTurnsOfRadiance()
+    {
+        // RadiantTincture.cs: EnergyVar(1) gained IMMEDIATELY, THEN
+        // PowerVar<RadiancePower>(3). Fixed: the immediate gain was missing, the same
+        // shape as Clarity's (id 9, Task 1) missing immediate draw -- the multi-turn
+        // power alone does not pay out on the turn it is quaffed, since that turn's
+        // energy was already reset before the potion was used.
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Energy = 1;
+
+        PotionEffects.Apply(49, state);
+
+        Assert.Equal(2, state.Energy);
+        Assert.Equal(3, BuffSystem.Get(state.PlayerBuffs, BuffId.Radiance));
+    }
+
+    // ── 50: Regen Potion (pre-existing; verified against the source) ──────────────────
+
+    [Fact]
+    public void RegenPotion_GrantsFiveRegen()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+
+        PotionEffects.Apply(50, state);
+
+        Assert.Equal(5, BuffSystem.Get(state.PlayerBuffs, BuffId.Regen));
+    }
+
+    // ── 51: Shackling Potion (pre-existing; verified against the source) ──────────────
+
+    [Fact]
+    public void ShacklingPotion_AllHittableEnemiesLoseSevenStrengthForTheTurn()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Enemies = [Enemy(), Enemy(hp: 0)]; // the second is dead: not hittable.
+
+        PotionEffects.Apply(51, state);
+
+        Assert.Equal(-7, BuffSystem.Get(state.Enemies[0].Buffs, BuffId.Strength));
+        Assert.Equal(7, BuffSystem.Get(state.Enemies[0].Buffs, BuffId.TemporaryStrength));
+        Assert.Equal(0, BuffSystem.Get(state.Enemies[1].Buffs, BuffId.Strength));
+    }
+
+    [Fact]
+    public void ShacklingPotion_ArtifactEatsTheStrengthLoss()
+    {
+        // Review Focus #2, and this potion had no test proving it before now: Strength
+        // is not in BuffSystem's generic debuff whitelist (a negative application is a
+        // debuff only conditionally), so the Artifact check has to be the explicit one
+        // `CardEffects.ApplyTemporaryStrengthDownToAll` already makes.
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Enemies = [Enemy(buffs: new BuffState(BuffId.Artifact, 1))];
+
+        PotionEffects.Apply(51, state);
+
+        Assert.Equal(0, BuffSystem.Get(state.Enemies[0].Buffs, BuffId.Artifact));
+        Assert.Equal(0, BuffSystem.Get(state.Enemies[0].Buffs, BuffId.Strength));
+        Assert.Equal(0, BuffSystem.Get(state.Enemies[0].Buffs, BuffId.TemporaryStrength));
+    }
+
+    // ── 52: Ship in a Bottle ────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ShipInABottle_GainsTenUnpoweredBlockNowAndGrantsTenBlockNextTurn()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.PlayerBuffs = [new BuffState(BuffId.Dexterity, 3)];
+
+        PotionEffects.Apply(52, state, new Random(0));
+
+        Assert.Equal(10, state.PlayerBlock); // unpowered -- Dexterity does not add.
+        Assert.Equal(10, BuffSystem.Get(state.PlayerBuffs, BuffId.BlockNextTurn));
+    }
+
+    // ── 53: Skill Potion ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void SkillPotion_OffersThreeDistinctSkills()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [];
+
+        PotionEffects.Apply(53, state, new Random(0));
+
+        var selection = state.PendingSelection;
+        Assert.NotNull(selection);
+        Assert.Equal(CardSelectionKind.GeneratedCardToHand, selection!.Kind);
+        Assert.True(selection.Skippable);
+        Assert.Equal(3, selection.GeneratedCandidates.Distinct().Count());
+        Assert.All(
+            selection.GeneratedCandidates,
+            id => Assert.Equal(CardType.Skill, GeneratedData.Cards.Get(id).Type)
+        );
+    }
+
+    [Fact]
+    public void SkillPotion_ChosenCardJoinsHandFreeThisTurnAndUnupgraded()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [];
+        var rng = new Random(0);
+
+        PotionEffects.Apply(53, state, rng);
+        int picked = state.PendingSelection!.GeneratedCandidates[0];
+        CombatEngine.Step(state, 0, rng);
+
+        Assert.Single(state.Hand);
+        Assert.Equal(picked, state.Hand[0].DefId);
+        Assert.True(state.Hand[0].FreeThisTurn);
+        Assert.False(state.Hand[0].Upgraded);
+    }
+
+    // ── 54: Snecko Oil ──────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void SneckoOil_DrawsSevenThenRerollsEveryHandCardsCost()
+    {
+        // SneckoOil.cs: draw CardsVar(7), then every non-X-cost card in the WHOLE hand
+        // (not just the seven just drawn) has its cost re-rolled 0..3 for the rest of
+        // combat -- so the card already in hand before the draw must be touched too.
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [new CardInstance(IC.StrikeIronclad, false)];
+        state.DrawPile = TestDeck.Pile(
+            IC.StrikeIronclad,
+            IC.StrikeIronclad,
+            IC.StrikeIronclad,
+            IC.DefendIronclad,
+            IC.DefendIronclad,
+            IC.DefendIronclad,
+            IC.Bash
+        );
+
+        PotionEffects.Apply(54, state, new Random(0));
+
+        Assert.Equal(8, state.Hand.Count); // 1 already there + 7 drawn.
+        Assert.All(state.Hand, card => Assert.NotEqual(int.MinValue, card.CostForCombat));
+        Assert.All(
+            state.Hand,
+            card => Assert.InRange(CombatEngine.EffectiveCost(card, state), 0, 3)
+        );
+    }
+
+    // ── 55: Soldier's Stew ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public void SoldiersStew_GivesEveryStrikeTaggedCardAnywhereOneExtraPlay()
+    {
+        // SoldiersStew.cs: `c.Tags.Contains(CardTag.Strike)` over `PlayerCombatState
+        // .AllCards` -- the extracted `CardDef.StrikeTag`, not name-matching (Bash is an
+        // Ironclad Attack that is not Strike-tagged, and would wrongly pass a
+        // name-based "Strike" test only if it were literally named Strike).
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = TestDeck.Pile(IC.StrikeIronclad, IC.DefendIronclad);
+        state.DrawPile = TestDeck.Pile(IC.StrikeIronclad);
+        state.DiscardPile = TestDeck.Pile(IC.Bash);
+        state.ExhaustPile = TestDeck.Pile(IC.StrikeIronclad);
+
+        PotionEffects.Apply(55, state);
+
+        Assert.Equal(1, state.Hand[0].ReplayCount); // Strike.
+        Assert.Equal(0, state.Hand[1].ReplayCount); // Defend: not Strike-tagged.
+        Assert.Equal(1, state.DrawPile[0].ReplayCount);
+        Assert.Equal(0, state.DiscardPile[0].ReplayCount); // Bash: not Strike-tagged.
+        Assert.Equal(1, state.ExhaustPile[0].ReplayCount);
+    }
+
+    // ── 56: Speed Potion ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void SpeedPotion_GrantsFiveDexterityForTheRestOfTheTurnOnly()
+    {
+        // SpeedPotion.cs: PowerVar<DexterityPower>(5) via SpeedPotionPower, a
+        // TemporaryDexterityPower -- Dexterity now, handed back at the OWNER's side turn
+        // end (Anticipate's own pattern).
+        var fight = Fight.Hand().Enemy();
+        fight.State.PotionSlots[0] = 56;
+
+        fight.Potion(0);
+        Assert.Equal(5, fight.PlayerBuffAmount(BuffId.Dexterity));
+        Assert.Equal(5, fight.PlayerBuffAmount(BuffId.TemporaryDexterity));
+
+        fight.EndTurn();
+        Assert.Equal(0, fight.PlayerBuffAmount(BuffId.Dexterity));
+        Assert.Equal(0, fight.PlayerBuffAmount(BuffId.TemporaryDexterity));
+    }
+
+    // ── 57: Stable Serum ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void StableSerum_GrantsTwoRetainHand()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+
+        PotionEffects.Apply(57, state);
+
+        Assert.Equal(2, BuffSystem.Get(state.PlayerBuffs, BuffId.RetainHand));
+    }
+
+    // ── 58: Star Potion ─────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void StarPotion_GrantsThreeStars()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Stars = 1;
+
+        PotionEffects.Apply(58, state);
+
+        Assert.Equal(4, state.Stars);
+    }
+
+    // ── 59: Strength Potion ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public void StrengthPotion_GrantsTwoPermanentStrength()
+    {
+        // StrengthPotion.cs: plain PowerVar<StrengthPower>(2) -- PERMANENT, unlike Speed
+        // Potion's and Flex Potion's Temporary* variants.
+        var state = CombatFactory.NewCombat(seed: 0);
+
+        PotionEffects.Apply(59, state);
+
+        Assert.Equal(2, BuffSystem.Get(state.PlayerBuffs, BuffId.Strength));
+        Assert.Equal(0, BuffSystem.Get(state.PlayerBuffs, BuffId.TemporaryStrength));
+    }
+
+    // ── 60: Swift Potion ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void SwiftPotion_DrawsThreeCards()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [];
+        state.DrawPile = TestDeck.Pile(
+            IC.StrikeIronclad,
+            IC.StrikeIronclad,
+            IC.DefendIronclad,
+            IC.Bash
+        );
+
+        PotionEffects.Apply(60, state, new Random(0));
+
+        Assert.Equal(3, state.Hand.Count);
+        Assert.Single(state.DrawPile);
+    }
+
+    // ── 61: Touch of Insanity ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void TouchOfInsanity_OffersOnlyHandCardsThatCostSomething()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = TestDeck.Pile(IC.StrikeIronclad, IC.DefendIronclad); // both cost 1.
+
+        PotionEffects.Apply(61, state);
+
+        var selection = state.PendingSelection;
+        Assert.NotNull(selection);
+        Assert.Equal(CardSelectionKind.FreeCardForCombat, selection!.Kind);
+        Assert.Equal(2, selection.Candidates.Count);
+    }
+
+    [Fact]
+    public void TouchOfInsanity_ExcludesCardsThatAlreadyCostNothing()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [new CardInstance(IC.StrikeIronclad, false, CostForCombat: 0)];
+
+        PotionEffects.Apply(61, state);
+
+        Assert.Null(state.PendingSelection);
+    }
+
+    [Fact]
+    public void TouchOfInsanity_ChosenCardBecomesFreeForTheRestOfCombat()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = TestDeck.Pile(IC.StrikeIronclad, IC.DefendIronclad);
+        var rng = new Random(0);
+
+        PotionEffects.Apply(61, state);
+        CombatEngine.Step(state, 1, rng); // choose hand index 1: DefendIronclad.
+
+        Assert.Equal(0, state.Hand[1].CostForCombat);
+        Assert.Equal(int.MinValue, state.Hand[0].CostForCombat); // untouched.
+        Assert.Null(state.PendingSelection);
+    }
+
+    [Fact]
+    public void TouchOfInsanity_ObservationReportsHandCandidates()
+    {
+        // FreeCardForCombat falls through CombatObservation's selection-pile switch to
+        // its `_ => s.Hand` default, which is the right pile for this kind -- checked
+        // explicitly rather than left to coincidence.
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = TestDeck.Pile(IC.StrikeIronclad, IC.DefendIronclad);
+
+        PotionEffects.Apply(61, state);
+
+        var obs = new int[CombatObservation.ObsSize];
+        CombatObservation.Write(state, obs);
+
+        Assert.Equal(IC.StrikeIronclad, obs[CombatObservation.SelectionOffset]);
+        Assert.Equal(
+            IC.DefendIronclad,
+            obs[CombatObservation.SelectionOffset + CombatObservation.CardSlotSize]
+        );
+    }
+
+    // ── 62: Vulnerable Potion ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void VulnerablePotion_AppliesThreeVulnerableToTheAimedAtEnemy()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Enemies = [Enemy(), Enemy()];
+        state.TargetEnemyIndex = 1;
+
+        PotionEffects.Apply(62, state);
+
+        Assert.Equal(0, BuffSystem.Get(state.Enemies[0].Buffs, BuffId.Vulnerable));
+        Assert.Equal(3, BuffSystem.Get(state.Enemies[1].Buffs, BuffId.Vulnerable));
+    }
+
+    // ── 63: Weak Potion ─────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void WeakPotion_AppliesThreeWeakToTheAimedAtEnemy()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Enemies = [Enemy(), Enemy()];
+        state.TargetEnemyIndex = 1;
+
+        PotionEffects.Apply(63, state);
+
+        Assert.Equal(0, BuffSystem.Get(state.Enemies[0].Buffs, BuffId.Weak));
+        Assert.Equal(3, BuffSystem.Get(state.Enemies[1].Buffs, BuffId.Weak));
+    }
+
+    // ── IsModelled ──────────────────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(31)]
+    [InlineData(32)]
+    [InlineData(63)]
+    public void IsModelled_TrueForEveryRealPotionId(int potionId)
+    {
+        Assert.True(PotionEffects.IsModelled(potionId));
+    }
+
+    // ── CombatEngine.ValidActions ───────────────────────────────────────────────────
+
+    [Fact]
+    public void ValidActions_DoesNotOfferPotionSlotsAtOrPastMaxPotionSlots()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [];
+        state.MaxPotionSlots = 1;
+        state.PotionSlots = new int[3];
+        state.PotionSlots[0] = 5; // Block Potion: within the cap.
+        state.PotionSlots[1] = 6; // Blood Potion: PAST the cap, must not be offered.
+        state.PotionSlots[2] = 7; // Bone Brew: also past the cap.
+
+        var actions = CombatEngine.ValidActions(state);
+
+        int endTurn = state.Hand.Count;
+        Assert.Contains(endTurn + 1, actions); // slot 0.
+        Assert.DoesNotContain(endTurn + 2, actions); // slot 1.
+        Assert.DoesNotContain(endTurn + 3, actions); // slot 2.
+    }
+
+    [Fact]
+    public void ValidActions_DoesNotOfferAnUnmodelledPotion()
+    {
+        // Every real potion id is modelled today, so this proves the WIRING -- that
+        // ValidActions actually consults IsModelled -- with a synthetic id added to
+        // Unsupported for just this test. A search must never be offered an action for
+        // a potion slot that would silently do nothing.
+        const int fakeUnsupportedId = -1;
+        PotionEffects.Unsupported.Add(fakeUnsupportedId);
+        try
+        {
+            var state = CombatFactory.NewCombat(seed: 0);
+            state.Hand = [];
+            state.MaxPotionSlots = 3;
+            state.PotionSlots = new int[3];
+            state.PotionSlots[0] = 5; // Block Potion: modelled.
+            state.PotionSlots[1] = fakeUnsupportedId;
+
+            var actions = CombatEngine.ValidActions(state);
+
+            int endTurn = state.Hand.Count;
+            Assert.Contains(endTurn + 1, actions);
+            Assert.DoesNotContain(endTurn + 2, actions);
+        }
+        finally
+        {
+            PotionEffects.Unsupported.Remove(fakeUnsupportedId);
+        }
     }
 }

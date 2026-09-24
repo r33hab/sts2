@@ -3050,6 +3050,30 @@ public static class CardEffects
     }
 
     /// <summary>
+    /// Snecko Oil's whole effect after its draw: every card CURRENTLY in hand that is not
+    /// X-cost has its cost re-rolled 0..3 for the rest of combat. The same skip test, the
+    /// same `CombatEnergyCosts` stream (`EnergyCostRng`) and the same `CostForCombat`
+    /// landing spot as <see cref="ConfuseCostOnDraw"/>, applied once to the whole hand
+    /// instead of to one card as it is drawn.
+    /// </summary>
+    internal static void RerollHandCostsForCombat(CombatState state, Random rng)
+    {
+        for (int i = 0; i < state.Hand.Count; i++)
+        {
+            var def = GeneratedData.Cards.Get(state.Hand[i].DefId);
+            if (def.Cost < 0 || def.HasEnergyCostX)
+            {
+                continue;
+            }
+
+            state.Hand[i] = state.Hand[i] with
+            {
+                CostForCombat = (state.EnergyCostRng as Random ?? rng).Next(4),
+            };
+        }
+    }
+
+    /// <summary>
     /// Hello World's: that many DISTINCT COMMON cards from the character's own pool, into
     /// hand, off `CombatCardGeneration`.
     /// </summary>
@@ -3919,7 +3943,7 @@ public static class CardEffects
     /// only offers part of a pile (Secret Weapon's Attacks) keeps its filter in the
     /// candidate list rather than in the resolution.
     /// </summary>
-    private static void OpenCardSelection(
+    internal static void OpenCardSelection(
         CombatState state,
         CardSelectionKind kind,
         List<int> candidates,
@@ -9174,7 +9198,7 @@ public static class CardEffects
     }
 
     /// <summary>`PlayerCombatState.AllCards`: every pile a card of the player's can be in.</summary>
-    private static IEnumerable<List<CardInstance>> AllCardPiles(CombatState state)
+    internal static IEnumerable<List<CardInstance>> AllCardPiles(CombatState state)
     {
         yield return state.Hand;
         yield return state.DrawPile;
@@ -9832,7 +9856,7 @@ public static class CardEffects
     }
 
     /// <summary>The same, at every living enemy -- `PowerCmd.Apply(enemies, ...)`.</summary>
-    private static void ApplyTemporaryStrengthDownToAll(CombatState state, int amount)
+    internal static void ApplyTemporaryStrengthDownToAll(CombatState state, int amount)
     {
         foreach (var enemy in state.Enemies.Where(e => e.Hp > 0).ToArray())
         {
@@ -10419,7 +10443,7 @@ public static class CardEffects
     }
 
     /// <summary>Shuffle the filtered pool, take `count` -- the distinct-generation shape.</summary>
-    private static List<int> DistinctPoolCards(
+    internal static List<int> DistinctPoolCards(
         CombatState state,
         CardType type,
         int count,

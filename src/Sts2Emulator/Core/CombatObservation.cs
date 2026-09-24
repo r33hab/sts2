@@ -250,6 +250,7 @@ public static class CombatObservation
                 {
                     CardSelectionKind.DiscardToDrawPileTop => s.DiscardPile,
                     CardSelectionKind.DiscardToHand => s.DiscardPile,
+                    CardSelectionKind.DiscardToHandFree => s.DiscardPile,
                     CardSelectionKind.DrawPileToHand => s.DrawPile,
                     _ => s.Hand,
                 };

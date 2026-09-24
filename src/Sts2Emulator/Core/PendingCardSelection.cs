@@ -199,6 +199,22 @@ public enum CardSelectionKind
     /// whatever happened to be first.
     /// </summary>
     DualWield = 25,
+
+    /// <summary>
+    /// Liquid Memories: a card CHOSEN from the discard pile goes to hand, made free for
+    /// the turn. Hologram's <see cref="DiscardToHand"/> is the same pile and the same
+    /// question, but does not grant Free -- this potion's whole point is that the
+    /// recovered card is playable again for nothing, so it gets its own kind rather than
+    /// bending that one's resolution for a single caller.
+    /// </summary>
+    DiscardToHandFree = 26,
+
+    /// <summary>
+    /// Touch of Insanity: a card CHOSEN from hand, filtered to ones that currently cost
+    /// energy or stars, becomes free for the REST OF COMBAT in place. The third selection
+    /// that does not move the card it picks, after Nightmare's and Heirloom Hammer's.
+    /// </summary>
+    FreeCardForCombat = 27,
 }
 
 /// <summary>

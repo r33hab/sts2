@@ -734,6 +734,17 @@ public static class CombatEngine
             Effects.CardEffects.GainBlock(state, plating, rng);
         }
 
+        // Ritual (Mazaleth's Gift): gain N Strength at end of player turn.
+        // `RitualPower.AfterApplied` only ever latches its skip-the-turn-it-was-applied
+        // flag when the power's OWNER `IsEnemy` -- Cultists' Incantation reads that way on
+        // the enemy side (EnemyAI.cs) -- so a player-held Ritual has no such skip and pays
+        // out the very turn it is granted, unlike its enemy mirror.
+        int ritual = BuffSystem.Get(state.PlayerBuffs, BuffId.Ritual);
+        if (ritual > 0)
+        {
+            Effects.RelicEffects.GainPlayerStrength(state, ritual);
+        }
+
         int hailstorm = BuffSystem.Get(state.PlayerBuffs, BuffId.Hailstorm);
         if (hailstorm > 0 && state.Orbs.Any(o => o.Type == OrbType.Frost))
         {
@@ -2385,9 +2396,10 @@ public static class CombatEngine
 
         actions.Add(state.Hand.Count); // end turn always valid
 
-        for (int s = 0; s < state.PotionSlots.Length; s++)
+        int potionSlots = Math.Min(state.PotionSlots.Length, state.MaxPotionSlots);
+        for (int s = 0; s < potionSlots; s++)
         {
-            if (state.PotionSlots[s] != 0)
+            if (state.PotionSlots[s] != 0 && Effects.PotionEffects.IsModelled(state.PotionSlots[s]))
             {
                 actions.Add(state.Hand.Count + 1 + s);
             }
@@ -2636,6 +2648,29 @@ public static class CombatEngine
                         selection.Amount - 1,
                         selection.Skippable
                     );
+                }
+
+                break;
+
+            case CardSelectionKind.DiscardToHandFree:
+                // Liquid Memories: the same recovery as DiscardToHand, plus Free this turn
+                // -- the reason it is its own kind rather than a flag on that one.
+                if (index < state.DiscardPile.Count)
+                {
+                    var recoveredFree = state.DiscardPile[index] with { FreeThisTurn = true };
+                    state.DiscardPile.RemoveAt(index);
+                    state.Hand.Add(recoveredFree);
+                }
+
+                break;
+
+            case CardSelectionKind.FreeCardForCombat:
+                // Touch of Insanity: the chosen hand card is not moved, only made free for
+                // the rest of combat in place -- `CostForCombat = 0`, the same encoding
+                // `AddDistinctPoolCardsToDrawPile` already uses for a whole-combat grant.
+                if (index < state.Hand.Count)
+                {
+                    state.Hand[index] = state.Hand[index] with { CostForCombat = 0 };
                 }
 
                 break;
