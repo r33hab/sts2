@@ -23,6 +23,7 @@ import unittest
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
@@ -961,43 +962,52 @@ class WarningTests(unittest.TestCase):
 
 # ── Potions ──────────────────────────────────────────────────────────────────
 
-# PotionEffects.Apply's cases at 37e4264 (PotionEffects.cs:25-57): Block Potion, Clarity,
-# Duplicator, Gigantification, Powdered Demise, Radiant Tincture, Regen Potion, Shackling
-# Potion. More arrive from the potions branch, so this is a floor, not the whole set.
-MODELLED_AT_BASE = frozenset({5, 9, 17, 32, 47, 49, 50, 51})
+# `PotionEffects.IsModelled` as the emulator declares it (PotionEffects.cs:42).
+IS_MODELLED = (
+    "public static bool IsModelled(int potionId) => !Unsupported.Contains(potionId);"
+)
 
 
 class PotionTests(unittest.TestCase):
-    """A potion the emulator cannot use is known content it does not model."""
+    """A potion the emulator cannot use is known content it does not model.
 
-    def test_the_modelled_set_is_read_off_the_emulator(self) -> None:
-        modelled = potions.modelled_potion_ids()
-        # Fairy in a Bottle is found by name, outside PotionEffects (CombatEngine.cs:1891-1893).
-        self.assertLessEqual(MODELLED_AT_BASE | {FAIRY_IN_A_BOTTLE}, modelled)
-        self.assertLessEqual(modelled, set(ids.id_map_family("potions").values()))
+    Which potions those are is `PotionEffects.IsModelled`'s answer, "not in
+    `PotionEffects.Unsupported`" (PotionEffects.cs:39-42), read off the emulator's source.
+    Every one of the 63 potions has an effect now and the set is empty, so the warning is
+    exercised with an id the test declares unsupported, as the C# suite does.
+    """
+
+    def test_the_unsupported_set_is_read_off_the_emulator(self) -> None:
+        unsupported = potions.unsupported_potion_ids()
+        every_potion = set(ids.id_map_family("potions").values())
+        self.assertLessEqual(unsupported, every_potion)
+        for potion_id in every_potion:
+            with self.subTest(potion=potion_id):
+                self.assertEqual(
+                    potions.is_modelled(potion_id),
+                    potion_id not in unsupported,
+                )
 
     def test_modelled_potions_raise_no_warning(self) -> None:
         doc = load("player")
         doc["player"]["potions"] = [
             {"slot": 0, "id": "BLOCK_POTION"},
             {"slot": 1, "id": "FAIRY_IN_A_BOTTLE"},
-            {"slot": 2, "id": None},
+            {"slot": 2, "id": "FIRE_POTION"},
         ]
         result = convert.convert(doc)
         self.assertEqual(result.warnings, [])
         self.assertTrue(result.reliable)
 
     def test_an_unmodelled_potion_warns_and_is_unreliable(self) -> None:
-        # Fire Potion has no case, so UsePotion spends it doing nothing
-        # (CombatEngine.cs:1870-1885).
-        self.assertNotIn(
-            FIRE_POTION,
-            potions.modelled_potion_ids(),
-            "Fire Potion is modelled now: use a potion that still has no case",
-        )
         doc = load("player")
         doc["player"]["potions"][1]["id"] = "FIRE_POTION"
-        result = convert.convert(doc)
+        with mock.patch.object(
+            potions,
+            "unsupported_potion_ids",
+            return_value=frozenset({FIRE_POTION}),
+        ):
+            result = convert.convert(doc)
         self.assertEqual(
             result.doc["potions"]["slots"][:3],
             [REGEN_POTION, FIRE_POTION, BLOCK_POTION],
@@ -1007,79 +1017,71 @@ class PotionTests(unittest.TestCase):
         self.assertIn("FIRE_POTION", result.warnings[0])
         self.assertFalse(result.reliable)
 
-    def test_only_the_switchs_own_cases_count(self) -> None:
-        source = """
-        public static class PotionEffects
-        {
-            private const int Rock = 45;
-            public static void Apply(int potionId, CombatState state)
-            {
-                // case 99: is only a comment
-                switch (potionId)
-                {
-                    case 5:
-                    case 9: // stacked labels share a body
-                        break;
-                    case Rock:
-                        switch (state.Turn) { case 7: break; }
-                        break;
-                    case 17 or 18:
-                    {
-                        break;
-                    }
-                    default:
-                        break;
-                }
-            }
-        }
-        """
-        self.assertEqual(potions.parse_modelled(source), {5, 9, 17, 18, 45})
-
-    def test_an_unsupported_declaration_is_subtracted(self) -> None:
-        body = """
-            public static void Apply(int potionId, CombatState state)
-            {
-                switch (potionId) { case 5: case 9: case 23: case 45: break; }
-            }
-        """
-        for declaration, left in (
-            ("public static readonly int[] Unsupported = [9, 23];", {5, 45}),
+    def test_the_declaration_is_read_in_any_usual_spelling(self) -> None:
+        for declaration, expected in (
+            ("internal static readonly HashSet<int> Unsupported = [];", set()),
+            ("internal static readonly HashSet<int> Unsupported = [9, 23];", {9, 23}),
+            ("static readonly HashSet<int> Unsupported = new() { 23 };", {23}),
             (
-                "static readonly HashSet<int> UnsupportedPotions = new() { 23 };",
-                {5, 9, 45},
+                (
+                    "const int Rock = 45; static readonly HashSet<int> Unsupported = "
+                    "new HashSet<int> { Rock, 5 };"
+                ),
+                {5, 45},
             ),
             (
-                "const int Rock = 45; static int[] Unsupported => new[] { Rock };",
-                {5, 9, 23},
+                (
+                    "static readonly HashSet<int> Unsupported = "
+                    '[GeneratedData.Potions.FindId("FirePotion")];'
+                ),
+                {FIRE_POTION},
             ),
-            ('static int[] Unsupported = [Potions.FindId("FirePotion")!.Value];', None),
-            (
-                'static int[] Unsupported = [GeneratedData.Potions.FindId("FirePotion")];',
-                {5, 9, 45},
-            ),
-            ("static int[] Unsupported = [];", {5, 9, 23, 45}),
         ):
             with self.subTest(declaration):
-                source = "class PotionEffects {\n" + declaration + body + "}"
-                if left is None:
-                    with self.assertRaises(RuntimeError):
-                        potions.parse_modelled(source)
-                else:
-                    self.assertEqual(potions.parse_modelled(source), left)
+                source = f"class PotionEffects {{ {declaration} {IS_MODELLED} }}"
+                self.assertEqual(potions.parse_unsupported(source), expected)
 
-    def test_a_label_it_cannot_read_raises(self) -> None:
-        source = """
-            public static void Apply(int potionId, CombatState state)
-            {
-                switch (potionId) { case 5 when state.Turn > 1: break; }
-            }
+    def test_only_potion_effects_own_unsupported_counts(self) -> None:
+        # The old reading took every `Unsupported*` declaration in the file; IsModelled
+        # reads exactly one.
+        source = f"""
+        public static class PotionEffects
+        {{
+            // internal static readonly HashSet<int> Unsupported = [5];
+            private static readonly int[] UnsupportedPotions = [9];
+            internal static readonly HashSet<int> Unsupported = [23];
+            {IS_MODELLED}
+        }}
         """
-        with self.assertRaises(RuntimeError):
-            potions.parse_modelled(source)
+        self.assertEqual(potions.parse_unsupported(source), {23})
 
-    def test_a_missing_switch_raises(self) -> None:
-        with self.assertRaises(RuntimeError):
-            potions.parse_modelled("public static void Apply(int id) { }")
+    def test_a_declaration_it_cannot_read_raises(self) -> None:
+        declaration = "static readonly HashSet<int> Unsupported"
+        for body in (
+            # None at all, or two.
+            "",
+            f"{declaration} = [1]; {declaration} = [2];",
+            # An entry that is not a literal, a const of the file or a plain FindId.
+            f'{declaration} = [Potions.FindId("FirePotion")!.Value];',
+            f"{declaration} = [Rock];",
+        ):
+            source = f"class PotionEffects {{ {body} {IS_MODELLED} }}"
+            with self.subTest(body), self.assertRaises(RuntimeError):
+                potions.parse_unsupported(source)
+
+    def test_an_is_modelled_that_reads_more_than_the_set_raises(self) -> None:
+        # Following IsModelled means following all of it: a second condition there would
+        # make a set-only reading quietly wrong.
+        for rule in (
+            "",
+            IS_MODELLED.replace(";", " && potionId != 7;"),
+        ):
+            source = (
+                "class PotionEffects { static readonly HashSet<int> Unsupported = []; "
+                f"{rule} }}"
+            )
+            with self.subTest(rule), self.assertRaises(RuntimeError):
+                potions.parse_unsupported(source)
 
 
 # ── CombatState-held power state ─────────────────────────────────────────────

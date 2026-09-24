@@ -260,11 +260,11 @@ def _potions(player: dict[str, Any], warnings: list[str]) -> dict[str, Any]:
         if entry is None:
             continue
         slots[slot] = ids.potion_id(entry, path=f"{where}.id")
-        if slots[slot] not in potions.modelled_potion_ids():
+        if not potions.is_modelled(slots[slot]):
             warnings.append(
-                f"{where}: potion {entry} has no emulator effect (no case in "
-                "PotionEffects.Apply); using it there spends it for nothing "
-                "(CombatEngine.cs:1870-1885)",
+                f"{where}: potion {entry} has no faithful emulator effect "
+                "(PotionEffects.Unsupported), so the emulator never offers it "
+                "(CombatEngine.cs:2434)",
             )
     return {"max_slots": capacity, "slots": slots}
 
