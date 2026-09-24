@@ -1,18 +1,27 @@
 """`rl/live_search.py` on real encounters, reached by playing them rather than by editing state."""
 
 import ctypes
+import dataclasses
+import itertools
 import math
+import os
+import pickle  # noqa: S403 -- how a result crosses from a worker process
 import re
+import statistics
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
+
+import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "rl"))
 sys.path.insert(0, str(ROOT / "src"))
 
 import live_search  # noqa: E402
-from live_search import search_live  # noqa: E402
+from live_search import merge_stats, search_live  # noqa: E402
 
 from sts2_gym import names, native  # noqa: E402
 from sts2_gym.env import ENCOUNTER_IDS  # noqa: E402
@@ -23,17 +32,52 @@ BASH = 30
 TRUE_GRIT = 517
 WOUND = 10011
 BLOCK_POTION = 5
+BLUDGEON = 47
+POMMEL_STRIKE = 358
+SECRET_WEAPON = 416  # put an Attack from the draw pile into your hand
 SLITHER = next(e for e, name in names.enchantments().items() if name == "Slither")
 GAMBLING_CHIP = next(r for r, name in names.relics().items() if name == "GamblingChip")
 
 NIBBITS_WEAK = ENCOUNTER_IDS["nibbits-weak"]  # one Nibbit, 44-46 HP, opens on a 12
 TOADPOLES = ENCOUNTER_IDS["toadpoles"]  # two Toadpoles
 FOGMOG = ENCOUNTER_IDS["fogmog"]  # summons an Eye With Teeth that revives
+# A Punch Construct (60 HP) in front of two Cubex Constructs identical in every field.
+CONSTRUCT_MENAGERIE = ENCOUNTER_IDS["construct-menagerie"]
 
 # The grading rule's interval (spec 7.5): the lower bound of a 90% interval.
 Z90 = 1.645
 
 DECOMPILED_POTIONS = ROOT / "decompiled" / "MegaCrit.Sts2.Core.Models.Potions"
+
+# The position the process-pool tests search: the Toadpoles opening, as `Fight` builds it.
+POOL_DECK = [STRIKE] * 5 + [DEFEND] * 4 + [BASH]
+POOL_SPEC = {"seed": 0, "deck": POOL_DECK, "reset": {"encounter_id": TOADPOLES}}
+
+LOADER_MISSING = "load_combat_snapshot unavailable: merge the loader branch"
+
+
+def fail_once_then_search(root, load_seed, lane, lanes, params):
+    """Run the real worker, except that the first worker to claim the spec's marker fails.
+
+    The marker is created with O_EXCL, so exactly one worker fails however many run, and
+    a restarted worker finds it taken and searches normally.
+
+    Raises:
+        RuntimeError: For the worker that claims the marker, in "raise" mode.
+
+    """
+    spec = root[1]
+    marker = spec.get("fail_marker")
+    if marker is not None:
+        try:
+            os.close(os.open(marker, os.O_CREAT | os.O_EXCL))
+        except FileExistsError:
+            pass
+        else:
+            if spec["fail_mode"] == "exit":
+                os._exit(3)
+            raise RuntimeError("injected worker failure")
+    return live_search._search_worker(root, load_seed, lane, lanes, params)
 
 
 class Fight:
@@ -202,6 +246,90 @@ def children_of(
     return [child for child in result.children if child.card_def_id == card]
 
 
+def secret_weapon_choice() -> Fight:
+    """Reach an open Secret Weapon choice: Bludgeon or a Strike, out of the draw pile.
+
+    The hand is five Wounds, so the energy has no other use and Bludgeon is plainly the
+    better pick. The draw pile is Bludgeon, three Strikes and a Defend, so the choice's
+    candidates are four of its five indices, and a resample reshuffles the pile under them:
+    some imagined worlds no longer show Bludgeon among the candidates. The player has the
+    HP to outlast the Nibbit either way, so no playout ends in a death.
+
+    Raises:
+        AssertionError: If no seed deals the five Wounds.
+
+    """
+    deck = [WOUND] * 5 + [BLUDGEON] + [STRIKE] * 3 + [DEFEND]
+    for seed in range(3000):
+        fight = Fight(seed, NIBBITS_WEAK, deck, hp=200, max_hp=200)
+        if fight.hand() == [WOUND] * 5:
+            native.debug_add_card_to_hand(fight.handle, SECRET_WEAPON, fight.obs)
+            fight.play(SECRET_WEAPON)
+            return fight
+        fight.close()
+    raise AssertionError("no seed dealt five Wounds")
+
+
+def pommel_strike_opening() -> Fight:
+    """Reach a hand of Pommel Strike and five Wounds, with one Defend left to draw.
+
+    Raises:
+        AssertionError: If no seed deals the five Wounds.
+
+    """
+    for seed in range(60):
+        fight = Fight(seed, NIBBITS_WEAK, [WOUND] * 5 + [DEFEND])
+        if fight.hand() == [WOUND] * 5:
+            native.debug_add_card_to_hand(fight.handle, POMMEL_STRIKE, fight.obs)
+            return fight
+        fight.close()
+    raise AssertionError("no seed dealt five Wounds")
+
+
+def unpaired_stderr(first: list, second: list) -> float:
+    """Return the standard error of mean(first) - mean(second) for independent samples."""
+    return math.sqrt(
+        statistics.variance(first) / len(first)
+        + statistics.variance(second) / len(second),
+    )
+
+
+def totals(action, values, died=None, target=-1) -> live_search.ChildStat:
+    """Build the statistics a search reports for a card move whose playouts scored `values`."""
+    died = died or [False] * len(values)
+    return live_search._base_stat(
+        action,
+        target,
+        "card",
+        STRIKE,
+        [],
+        visits=len(values),
+        value_sum=math.fsum(values),
+        value_sq_sum=math.fsum(value * value for value in values),
+        deaths=sum(died),
+        win_hp_sum=int(sum(value for value, dead in zip(values, died) if not dead)),
+    )
+
+
+def made_result(stats, values, deaths, *, warnings=()) -> live_search.SearchResult:
+    """Assemble a one-search result by hand, with the most visited move as the best."""
+    best = max(stats, key=lambda stat: stat.visits)
+    return live_search.SearchResult(
+        best=best,
+        children=sorted(stats, key=lambda stat: -stat.visits),
+        line=[(best.action, best.target, best.kind), (9, -1, "end_turn")],
+        sims=sum(stat.visits for stat in stats),
+        elapsed_s=0.25,
+        budget_exhausted=False,
+        truncated_rollouts=0,
+        warnings=list(warnings),
+        sweep_values=values,
+        sweep_deaths=deaths,
+        sweep_segments=[len(next(iter(values.values())))],
+        uct_sims=1,
+    )
+
+
 class SearchLiveTests(unittest.TestCase):
     def test_a_single_legal_action_returns_at_once(self):
         # Five Wounds: nothing is playable, so End Turn is the only legal action.
@@ -243,6 +371,7 @@ class SearchLiveTests(unittest.TestCase):
             [(kind, target) for _, target, kind in result.line],
             [("card", 0)] * 2,
         )
+        self.assertFalse(result.line_truncated_at_draw)
         self.assertTrue(
             wins,
             f"the expected line {result.line} does not kill the Nibbit",
@@ -301,7 +430,10 @@ class SearchLiveTests(unittest.TestCase):
     def test_identical_strikes_collapse_into_one_move_per_target(self):
         fight = Fight(0, TOADPOLES, [STRIKE, STRIKE, STRIKE, DEFEND, DEFEND])
         try:
-            first_strike = fight.hand().index(STRIKE)
+            hand = fight.hand()
+            first_strike = hand.index(STRIKE)
+            other_strikes = [i for i, card in enumerate(hand) if card == STRIKE][1:]
+            other_defends = [i for i, card in enumerate(hand) if card == DEFEND][1:]
             result = search_live(
                 fight.handle,
                 time_budget_s=60.0,
@@ -314,7 +446,11 @@ class SearchLiveTests(unittest.TestCase):
         strikes = children_of(result, STRIKE)
         self.assertEqual(sorted(child.target for child in strikes), [0, 1])
         self.assertEqual({child.action for child in strikes}, {first_strike})
-        self.assertEqual(len(children_of(result, DEFEND)), 1)
+        # Each Strike move names the copies it stands for, so a played copy can be found.
+        for strike in strikes:
+            self.assertEqual(strike.merged_actions, other_strikes)
+        [defend] = children_of(result, DEFEND)
+        self.assertEqual(defend.merged_actions, other_defends)
         self.assertEqual(len(result.children), 4)  # Strike x2 targets, Defend, End Turn
 
     def test_visibly_identical_strikes_stay_apart_when_their_copies_differ(self):
@@ -428,10 +564,10 @@ class SearchLiveTests(unittest.TestCase):
         self.assertLess(result.sims, len(result.children) * 200)
         self.assertLess(result.elapsed_s, 1.0)
 
-    def test_duplicate_potions_grade_as_the_same_move(self):
+    def test_identical_potions_collapse_into_one_move(self):
         # 10 HP against a Nibbit swinging 12 with the energy spent: ending the turn dies,
-        # either Block Potion saves it. The two potions do exactly the same thing, so
-        # their paired difference must be tight and must not exclude zero.
+        # either Block Potion saves it. The two potions do exactly the same thing, so they
+        # are one move, which names the second slot for the grader.
         fight = Fight(
             0,
             NIBBITS_WEAK,
@@ -448,6 +584,7 @@ class SearchLiveTests(unittest.TestCase):
                 10,
                 "expected a lethal attack incoming",
             )
+            potion_actions = [a for a in fight.legal() if a > len(fight.hand())]
             result = search_live(
                 fight.handle,
                 time_budget_s=60.0,
@@ -457,19 +594,22 @@ class SearchLiveTests(unittest.TestCase):
         finally:
             fight.close()
 
-        self.assertEqual(result.best.kind, "potion")
-        [other] = [
-            c for c in result.children if c.kind == "potion" and c is not result.best
-        ]
-        self.assertIsNotNone(other.paired_diff_vs_best)
-        diff, stderr = other.paired_diff_vs_best, other.paired_diff_stderr
-        self.assertLessEqual(stderr, 0.5)
-        self.assertLessEqual(stderr, other.value_stderr)
-        self.assertLessEqual(diff - Z90 * stderr, 0.0)
-        self.assertGreaterEqual(diff + Z90 * stderr, 0.0)
+        self.assertEqual(len(potion_actions), 2)
+        [potion] = [child for child in result.children if child.kind == "potion"]
+        self.assertIs(result.best, potion)
+        self.assertEqual(potion.action, potion_actions[0])
+        self.assertEqual(potion.merged_actions, potion_actions[1:])
         end_turn = next(child for child in result.children if child.kind == "end_turn")
         self.assertEqual(end_turn.p_death, 1.0)
         self.assertEqual(end_turn.value_mean, live_search.DEATH_VALUE)
+        # Ending the turn dies in every round; drinking dies only where the rollout loses
+        # the fight later. The death risk ending the turn adds, which the Blunder rule
+        # reads, is past the rule's 10 points even at the bottom of its interval.
+        self.assertEqual(end_turn.paired_n, 50)
+        risk = end_turn.paired_death_diff_vs_best
+        self.assertGreater(risk - Z90 * end_turn.paired_death_diff_stderr, 0.10)
+        self.assertLessEqual(risk, 1.0)
+        self.assertEqual(potion.paired_death_diff_vs_best, 0.0)
 
     def test_the_value_is_end_hp_plus_the_potions_still_held(self):
         # A Nibbit at Strike range and one potion held: every Strike simulation wins on the
@@ -563,6 +703,670 @@ class SearchLiveTests(unittest.TestCase):
         }
         known = set(names.potions().values())
         self.assertEqual(set(live_search.ENEMY_TARGETED_POTIONS), aimed & known)
+
+    def test_the_line_stops_after_a_move_that_draws(self):
+        # Pommel Strike draws the Defend: past that, every imagined world holds a
+        # different hand, so the expected line cannot say what comes next.
+        fight = pommel_strike_opening()
+        try:
+            pommel = fight.hand().index(POMMEL_STRIKE)
+            result = search_live(
+                fight.handle,
+                time_budget_s=60.0,
+                min_child_sims=20,
+                max_sims=100,
+            )
+        finally:
+            fight.close()
+
+        self.assertEqual(result.best.card_def_id, POMMEL_STRIKE)
+        self.assertEqual(result.line, [(pommel, 0, "card")])
+        self.assertTrue(result.line_truncated_at_draw)
+
+    def test_the_reviving_check_turns_away_an_enemy_that_has_hp(self):
+        # The emulator never shows a reviving enemy above 0 HP: the revive removes Reviving
+        # before it heals, so the HP check turns the enemy away before the Reviving check is
+        # reached. A snapshot of the live game could carry both. So this takes the real
+        # observation of the Fogmog's reviving eye and raises only its HP, to reach the
+        # Reviving check itself.
+        fight = Fight(1, FOGMOG, [STRIKE] * 10, hp=80)
+        try:
+            fight.end_turn()
+            fight.play(STRIKE, target=0)
+            obs = list(fight.obs)
+        finally:
+            fight.close()
+
+        eye = native.OBS_ENEMY_OFFSET  # slot 0, in front of the Fogmog
+        reviving = next(b for b, name in names.buffs().items() if name == "Reviving")
+        slot = next(
+            eye + 5 + 2 * i
+            for i in range(native.OBS_MAX_ENEMY_BUFFS)
+            if obs[eye + 5 + 2 * i] == reviving
+        )
+        self.assertEqual(obs[eye], 0)
+        self.assertGreater(obs[slot + 1], 0)
+        self.assertEqual(live_search._living_targets(obs), [1])
+        obs[eye] = obs[eye + 1]  # back at full HP, still reviving
+        self.assertEqual(live_search._living_targets(obs), [1])
+        obs[slot + 1] = 0  # the revive is over
+        self.assertEqual(live_search._living_targets(obs), [0, 1])
+
+
+class ConfirmationTests(unittest.TestCase):
+    def test_twin_targets_grade_alike_and_pairing_tightens_the_interval(self):
+        # Two full-HP Cubex Constructs, identical in every field, behind a Punch Construct:
+        # hitting either one is the same move, so the gap between the two must not be told
+        # apart from zero, and pairing must make that interval tighter than two
+        # independent estimates would. Two Toadpoles are not twins: they open at different
+        # HP and on different moves, and the search measures a real gap of about 2 HP.
+        fight = Fight(
+            0,
+            CONSTRUCT_MENAGERIE,
+            [STRIKE] * 6 + [BLUDGEON] * 4,
+            hp=400,
+            max_hp=400,
+        )
+        try:
+            size = native.OBS_ENEMY_SLOT_SIZE
+            starts = [native.OBS_ENEMY_OFFSET + index * size for index in (1, 2)]
+            twins = [tuple(fight.obs[start : start + size]) for start in starts]
+            result = search_live(
+                fight.handle,
+                time_budget_s=60.0,
+                min_child_sims=40,
+                max_sims=400,
+                confirm_pairs=60,
+            )
+        finally:
+            fight.close()
+
+        self.assertEqual(twins[0], twins[1])
+        self.assertEqual(twins[0][:2], (70, 70))  # at full HP
+        moves = {(child.card_def_id, child.target): child for child in result.children}
+        for card in (STRIKE, BLUDGEON):
+            first, second = moves[card, 1], moves[card, 2]
+            one = result.sweep_values[first.action, first.target]
+            other = result.sweep_values[second.action, second.target]
+            gap, stderr, pairs = live_search._paired(one, other)
+            self.assertEqual(pairs, 60)
+            self.assertLessEqual(gap - Z90 * stderr, 0.0)
+            self.assertGreaterEqual(gap + Z90 * stderr, 0.0)
+            self.assertLess(stderr, unpaired_stderr(one, other))
+
+    def test_the_confirmation_plays_every_move_on_seeds_nothing_else_used(self):
+        searched, confirming = [], []
+        simulate, playout = live_search._simulate, live_search._playout
+
+        def spy_simulate(root, child, subtree, seed, policy):
+            searched.append(seed)
+            return simulate(root, child, subtree, seed, policy)
+
+        def spy_playout(root, child, seed, potion_value):
+            confirming.append((seed, child.node.action, child.node.target))
+            return playout(root, child, seed, potion_value)
+
+        fight = Fight(0, TOADPOLES, POOL_DECK)
+        try:
+            with (
+                mock.patch.object(live_search, "_simulate", spy_simulate),
+                mock.patch.object(live_search, "_playout", spy_playout),
+            ):
+                result = search_live(
+                    fight.handle,
+                    time_budget_s=60.0,
+                    min_child_sims=10,
+                    max_sims=200,
+                    confirm_pairs=6,
+                )
+        finally:
+            fight.close()
+
+        moves = len(result.children)
+        self.assertEqual(len(confirming), 6 * moves)
+        rounds = [confirming[i : i + moves] for i in range(0, len(confirming), moves)]
+        seeds = [round_[0][0] for round_ in rounds]
+        self.assertEqual(len(set(seeds)), 6)
+        self.assertFalse(set(searched) & set(seeds))
+        best = (result.best.action, result.best.target)
+        for round_ in rounds:
+            # One world per round, the best move first, and every move once.
+            self.assertEqual({seed for seed, *_ in round_}, {round_[0][0]})
+            self.assertEqual(round_[0][1:], best)
+            self.assertEqual(len({move[1:] for move in round_}), moves)
+        # UCT ran first, and the confirmation stays out of the tree and its totals.
+        self.assertGreater(result.uct_sims, 0)
+        self.assertEqual(result.sims, 200)
+        self.assertEqual(sum(child.visits for child in result.children), 200)
+        self.assertEqual(result.sweep_segments, [6])
+        for child in result.children:
+            self.assertEqual(child.paired_n, 6)
+            self.assertEqual(len(result.sweep_values[child.action, child.target]), 6)
+
+    def test_a_confirmation_cut_by_the_clock_reports_the_pairs_it_got(self):
+        fight = Fight(0, TOADPOLES, POOL_DECK)
+        try:
+            result = search_live(
+                fight.handle,
+                time_budget_s=0.3,
+                confirm_pairs=100_000,
+            )
+        finally:
+            fight.close()
+
+        self.assertTrue(result.budget_exhausted)
+        [rounds] = result.sweep_segments
+        self.assertGreater(rounds, 0)
+        self.assertLess(rounds, 100_000)
+        for child in result.children:
+            played = result.sweep_values[child.action, child.target]
+            self.assertEqual(len(played), rounds)
+            self.assertEqual(
+                sum(value is not None for value in played),
+                sum(
+                    dead is not None
+                    for dead in result.sweep_deaths[child.action, child.target]
+                ),
+            )
+            if child is not result.best:
+                self.assertLessEqual(child.paired_n, rounds)
+                self.assertGreater(child.paired_n, 0)
+        self.assertLess(result.elapsed_s, 1.0)
+
+
+class DrawPileChoiceTests(unittest.TestCase):
+    def test_a_draw_pile_choice_is_found_again_by_its_card(self):
+        # The candidates are draw-pile indices and every imagined world reshuffles the pile,
+        # so each choice is looked up by its card. Bludgeon is 32 damage for the energy
+        # left, a Strike 6: with the lookup the two choices come apart clearly (by index,
+        # each would take whatever card the reshuffle put there), and the worlds whose
+        # candidates lost the card are counted rather than played.
+        fight = secret_weapon_choice()
+        try:
+            result = search_live(
+                fight.handle,
+                time_budget_s=60.0,
+                min_child_sims=30,
+                max_sims=300,
+            )
+        finally:
+            fight.close()
+
+        self.assertEqual({child.kind for child in result.children}, {"select"})
+        self.assertEqual(result.best.card_def_id, BLUDGEON)
+        [strike] = children_of(result, STRIKE)
+        self.assertGreater(
+            strike.paired_diff_vs_best - Z90 * strike.paired_diff_stderr,
+            0.0,
+        )
+        self.assertGreater(result.select_mapping_failures, 0)
+
+    def test_a_draw_pile_candidate_is_looked_up_by_card_in_each_world(self):
+        fight = secret_weapon_choice()
+        root = live_search.Combat(fight.handle)
+        try:
+            view = root.fork(None)
+            try:
+                count = view.obs[native.OBS_SELECTION_COUNT_OFFSET]
+                shown = [
+                    live_search._card_at(
+                        view.obs,
+                        native.OBS_SELECTION_OFFSET + i * native.OBS_CARD_SLOT_SIZE,
+                    )
+                    for i in range(count)
+                ]
+            finally:
+                view.close()
+            bludgeon = next(i for i, card in enumerate(shown) if card[0] == BLUDGEON)
+            key = ("select", shown[bludgeon])
+            outcomes = []
+            for seed in range(30):
+                world = root.fork(seed)
+                try:
+                    found = live_search._action_in(world, key, bludgeon)
+                    if found is not None:
+                        card = live_search._card_at(
+                            world.obs,
+                            native.OBS_SELECTION_OFFSET
+                            + found * native.OBS_CARD_SLOT_SIZE,
+                        )
+                        self.assertEqual(card, shown[bludgeon])
+                    outcomes.append(found is not None)
+                finally:
+                    world.close()
+        finally:
+            fight.close()
+
+        self.assertEqual(set(outcomes), {True, False})
+
+
+class RolloutTests(unittest.TestCase):
+    def test_rollout_weights_read_card_types_only_for_card_plays(self):
+        # Ten cards and a potion: End Turn is action 10 and the potion 11, both past the
+        # hand block that combat_mcts's weights read a card id from.
+        fight = Fight(0, NIBBITS_WEAK, [STRIKE] * 5, potions=(BLOCK_POTION,))
+        try:
+            while len(fight.hand()) < 10:
+                native.debug_add_card_to_hand(fight.handle, DEFEND, fight.obs)
+            hand = fight.hand()
+            world = live_search.Combat(fight.handle).fork(None)
+            try:
+                legal = world.legal()
+                weights = live_search.live_rollout_weights(world, legal)
+            finally:
+                world.close()
+        finally:
+            fight.close()
+
+        self.assertEqual(legal, list(range(12)))
+        self.assertAlmostEqual(float(weights.sum()), 1.0)
+        weight = dict(zip(legal, weights))
+        strike, defend = hand.index(STRIKE), hand.index(DEFEND)
+        # The Nibbit opens on a 12 against no block, so a Skill is block that is needed.
+        self.assertAlmostEqual(
+            weight[defend] / weight[strike],
+            live_search.W_SKILL_NEEDED / live_search.W_ATTACK,
+        )
+        self.assertAlmostEqual(
+            weight[10] / weight[strike],
+            live_search.W_END_TURN / live_search.W_ATTACK,
+        )
+        self.assertAlmostEqual(
+            weight[11] / weight[strike],
+            live_search.W_POTION / live_search.W_ATTACK,
+        )
+
+    def test_rollout_weights_treat_selection_candidates_alike(self):
+        fight = Fight(0, NIBBITS_WEAK, [-TRUE_GRIT, STRIKE, STRIKE, DEFEND, BASH])
+        try:
+            fight.play(TRUE_GRIT)
+            world = live_search.Combat(fight.handle).fork(None)
+            try:
+                legal = world.legal()
+                weights = live_search.live_rollout_weights(world, legal)
+            finally:
+                world.close()
+        finally:
+            fight.close()
+
+        self.assertEqual(len(legal), 4)
+        np.testing.assert_allclose(weights, np.full(4, 0.25))
+
+    def test_the_search_rolls_out_with_the_corrected_weights(self):
+        fight = Fight(0, NIBBITS_WEAK, [STRIKE] * 5, potions=(BLOCK_POTION,))
+        try:
+            with mock.patch.object(
+                live_search,
+                "live_rollout_weights",
+                wraps=live_search.live_rollout_weights,
+            ) as weights:
+                search_live(
+                    fight.handle,
+                    time_budget_s=60.0,
+                    min_child_sims=2,
+                    max_sims=10,
+                    confirm_pairs=1,
+                )
+        finally:
+            fight.close()
+
+        self.assertTrue(weights.called)
+
+    def test_rollouts_aim_at_the_enemy_closest_to_dying(self):
+        fight = Fight(0, CONSTRUCT_MENAGERIE, [STRIKE] * 10)
+        try:
+            obs = list(fight.obs)
+            strike = fight.hand().index(STRIKE)
+            end_turn = len(fight.hand())
+        finally:
+            fight.close()
+
+        second_cubex = native.OBS_ENEMY_OFFSET + 2 * native.OBS_ENEMY_SLOT_SIZE
+        self.assertEqual(live_search._rollout_target(obs, strike), 0)  # 60 HP, to 70s
+        obs[second_cubex] = 50
+        self.assertEqual(live_search._rollout_target(obs, strike), 2)
+        obs[second_cubex + 2] = 15  # its block: 65 in all, behind the Punch's 60
+        self.assertEqual(live_search._rollout_target(obs, strike), 0)
+        self.assertEqual(live_search._rollout_target(obs, end_turn), -1)
+
+
+class PriorTests(unittest.TestCase):
+    def test_a_uniform_prior_switches_the_tree_to_puct_and_stays_valid(self):
+        calls = []
+
+        def uniform(handle, legal):
+            calls.append(list(legal))
+            return np.ones(len(legal))
+
+        fight = Fight(0, TOADPOLES, POOL_DECK)
+        try:
+            legal = fight.legal()
+            plain = search_live(
+                fight.handle,
+                time_budget_s=60.0,
+                min_child_sims=10,
+                max_sims=300,
+            )
+            result = search_live(
+                fight.handle,
+                time_budget_s=60.0,
+                min_child_sims=10,
+                max_sims=300,
+                prior_fn=uniform,
+            )
+        finally:
+            fight.close()
+
+        self.assertIn(legal, calls)  # asked once at the root, over the root's actions
+        self.assertGreater(len(calls), 1)  # and again at nodes below it
+        self.assertIn(result.best, result.children)
+        self.assertIn(result.best.action, legal)
+        visits = [child.visits for child in result.children]
+        self.assertEqual(sum(visits), result.sims)
+        self.assertEqual(result.sims, 300)
+        self.assertFalse(result.budget_exhausted)
+        self.assertEqual(result.best.paired_diff_vs_best, 0.0)
+        self.assertTrue(all(child.paired_n == 50 for child in result.children))
+        # The same seeds without the prior spread the visits differently: PUCT ran.
+        self.assertNotEqual(visits, [child.visits for child in plain.children])
+
+    def test_a_prior_with_the_wrong_shape_is_refused(self):
+        fight = Fight(0, TOADPOLES, POOL_DECK)
+        try:
+            with self.assertRaisesRegex(ValueError, "prior_fn"):
+                search_live(
+                    fight.handle,
+                    time_budget_s=60.0,
+                    min_child_sims=2,
+                    max_sims=20,
+                    prior_fn=lambda _handle, legal: np.ones(len(legal) + 1),
+                )
+        finally:
+            fight.close()
+
+
+class MergeStatsTests(unittest.TestCase):
+    def test_merging_one_result_gives_it_back_even_with_a_move_never_played(self):
+        # Gambling Chip's skip cannot be taken by any clone, so it comes back with no
+        # simulations: NaN statistics, which must still compare equal to themselves.
+        fight = Fight(
+            0,
+            NIBBITS_WEAK,
+            [STRIKE] * 5 + [DEFEND] * 5,
+            relics=(GAMBLING_CHIP,),
+        )
+        try:
+            result = search_live(
+                fight.handle,
+                time_budget_s=60.0,
+                min_child_sims=5,
+                max_sims=40,
+            )
+        finally:
+            fight.close()
+
+        [declined] = [child for child in result.children if child.kind == "skip"]
+        if declined.visits == 0:
+            self.assertTrue(math.isnan(declined.value_mean))
+        self.assertEqual(merge_stats([result]), result)
+        # A result that crossed a process boundary holds NaNs that are other objects,
+        # which is where plain equality would fail.
+        crossed = pickle.loads(pickle.dumps(result))  # noqa: S301 -- our own bytes
+        self.assertEqual(merge_stats([result]), crossed)
+
+    def test_merging_is_order_independent_and_adds_the_searches_up(self):
+        fight = Fight(0, TOADPOLES, POOL_DECK)
+        try:
+            results = [
+                search_live(
+                    fight.handle,
+                    time_budget_s=60.0,
+                    min_child_sims=10,
+                    max_sims=150,
+                    confirm_pairs=8,
+                    seed=seed,
+                )
+                for seed in range(3)
+            ]
+        finally:
+            fight.close()
+
+        merged = merge_stats(results)
+        for order in itertools.permutations(results):
+            self.assertEqual(merge_stats(list(order)), merged)
+        self.assertEqual(merged.sims, 450)
+        self.assertEqual(sorted(merged.sweep_segments), [8, 8, 8])
+        for child in merged.children:
+            key = (child.action, child.target)
+            parts = [
+                next(c for c in result.children if (c.action, c.target) == key)
+                for result in results
+            ]
+            self.assertEqual(child.visits, sum(part.visits for part in parts))
+            self.assertEqual(len(merged.sweep_values[key]), 24)
+
+    def test_the_merge_pairs_against_the_merged_best_and_never_across_searches(self):
+        # A's best is X, B's is Y, and Y has the most visits overall, so every paired gap
+        # is taken again against Y. Pairs only form inside one search: A's third round,
+        # where Y was not played, pairs with nothing, and Z, which B never enumerated,
+        # pairs only inside A.
+        a = made_result(
+            [
+                totals(0, [10.0, 20.0, 30.0] * 2),
+                totals(1, [12.0, 20.0]),
+                totals(2, [7.0]),
+            ],
+            {
+                (0, -1): [10.0, 20.0, 30.0],
+                (1, -1): [12.0, 20.0, None],
+                (2, -1): [7.0] * 3,
+            },
+            {(0, -1): [False] * 3, (1, -1): [False, False, None], (2, -1): [False] * 3},
+            warnings=["from a"],
+        )
+        b = made_result(
+            [totals(0, [-100.0], died=[True]), totals(1, [9.0] * 9)],
+            {(0, -1): [-100.0, 5.0], (1, -1): [9.0, 9.0]},
+            {(0, -1): [True, False], (1, -1): [False, False]},
+        )
+        merged = merge_stats([a, b])
+        self.assertEqual(merge_stats([b, a]), merged)
+
+        x, y, z = (next(c for c in merged.children if c.action == i) for i in range(3))
+        self.assertIs(merged.best, y)
+        self.assertEqual(merged.line, b.line)
+        self.assertEqual((x.visits, y.visits, z.visits), (7, 11, 1))
+        self.assertEqual(x.value_mean, 20.0 / 7)
+        self.assertEqual(x.p_death, 1 / 7)
+        self.assertEqual(x.mean_end_hp_if_win, 20.0)
+        self.assertEqual(merged.sims, 19)
+        self.assertEqual(sorted(merged.sweep_segments), [2, 3])
+        self.assertEqual(merged.sweep_values[2, -1].count(None), 2)
+        self.assertEqual(merged.warnings, ["from a"])
+
+        gaps = [2.0, 0.0, 109.0, 4.0]  # Y - X, round by round, A then B
+        self.assertEqual(x.paired_n, 4)
+        self.assertEqual(x.paired_diff_vs_best, statistics.fmean(gaps))
+        self.assertAlmostEqual(x.paired_diff_stderr, statistics.stdev(gaps) / 2)
+        self.assertEqual(x.paired_death_diff_vs_best, 0.25)
+        self.assertAlmostEqual(x.paired_death_diff_stderr, 0.25)
+        self.assertEqual(z.paired_n, 2)
+        self.assertEqual(z.paired_diff_vs_best, 9.0)  # (12 - 7 + 20 - 7) / 2
+        self.assertAlmostEqual(z.paired_diff_stderr, 4.0)
+        self.assertEqual((y.paired_n, y.paired_diff_vs_best), (4, 0.0))
+
+    def test_statistics_with_nothing_behind_them_compare_equal(self):
+        empty = live_search._base_stat(
+            6,
+            -1,
+            "skip",
+            None,
+            [],
+            visits=0,
+            value_sum=0.0,
+            value_sq_sum=0.0,
+            deaths=0,
+            win_hp_sum=0,
+        )
+        self.assertTrue(math.isnan(empty.value_mean))
+        self.assertTrue(math.isnan(empty.p_death))
+        # Fresh NaN objects, so equality cannot pass on identity alone.
+        again = dataclasses.replace(
+            empty,
+            value_mean=float("nan"),
+            p_death=float("nan"),
+            mean_end_hp_if_win=float("nan"),
+        )
+        self.assertEqual(empty, again)
+        self.assertNotEqual(empty, dataclasses.replace(empty, value_mean=0.0))
+        self.assertNotEqual(empty, dataclasses.replace(empty, merged_actions=[7]))
+
+    def test_pairs_stop_where_the_shorter_sweep_was_cut(self):
+        # The clock ran out mid-round: the first list got a fourth value, the second did
+        # not. A round missing from either side (None) pairs with nothing either.
+        mean, stderr, pairs = live_search._paired(
+            [10.0, 12.0, 9.0, 11.0],
+            [8.0, 12.0, 10.0],
+        )
+        gaps = [2.0, 0.0, -1.0]
+        self.assertEqual(pairs, 3)
+        self.assertEqual(mean, statistics.fmean(gaps))
+        self.assertAlmostEqual(stderr, statistics.stdev(gaps) / math.sqrt(3))
+
+        mean, stderr, pairs = live_search._paired([10.0, None, 9.0], [8.0, 12.0])
+        self.assertEqual((mean, stderr, pairs), (2.0, math.inf, 1))
+        self.assertEqual(live_search._paired([], [1.0]), (None, None, 0))
+
+
+class ParallelSearcherTests(unittest.TestCase):
+    searcher: live_search.ParallelSearcher
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.searcher = live_search.ParallelSearcher(workers=2, nice=10)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.searcher.close()
+
+    def test_workers_start_once_are_reused_and_run_niced(self):
+        pids = [worker.process.pid for worker in self.searcher._workers]
+        # Ten above this process, as far as the system allows: 19 is the lowest priority
+        # everywhere (macOS goes to 20).
+        niced = min(19, os.getpriority(os.PRIO_PROCESS, 0) + 10)
+        for pid in pids:
+            self.assertGreaterEqual(os.getpriority(os.PRIO_PROCESS, pid), niced)
+        for _ in range(2):
+            result = self.searcher._search_arena(
+                POOL_SPEC,
+                time_budget_s=60.0,
+                min_child_sims=5,
+                max_sims=40,
+                confirm_pairs=5,
+            )
+            self.assertEqual(result.warnings, [])
+            self.assertEqual(result.sims, 80)
+            self.assertEqual(result.sweep_segments, [5, 5])
+        self.assertEqual(
+            [worker.process.pid for worker in self.searcher._workers],
+            pids,
+        )
+
+    def test_a_parallel_search_beats_one_worker_in_the_same_budget(self):
+        fight = Fight(0, TOADPOLES, POOL_DECK)
+        try:
+            legal = fight.legal()
+            single = search_live(fight.handle, time_budget_s=0.5)
+        finally:
+            fight.close()
+
+        result = self.searcher._search_arena(POOL_SPEC, time_budget_s=0.5)
+        self.assertEqual(result.warnings, [])
+        self.assertIn(result.best, result.children)
+        self.assertIn(result.best.action, legal)
+        self.assertEqual(len(result.sweep_segments), 2)
+        self.assertGreater(result.sims, single.sims)
+
+    def test_search_needs_the_snapshot_loader(self):
+        saved = native.__dict__.pop("load_combat_snapshot", None)
+        try:
+            with self.assertRaisesRegex(RuntimeError, f"^{LOADER_MISSING}$"):
+                self.searcher.search({})
+        finally:
+            if saved is not None:
+                native.__dict__["load_combat_snapshot"] = saved
+
+    def test_unknown_search_settings_are_refused_before_any_worker_runs(self):
+        with self.assertRaisesRegex(TypeError, "min_child_sim"):
+            self.searcher._search_arena(POOL_SPEC, min_child_sim=5)
+
+    @unittest.skipUnless(
+        getattr(native, "load_combat_snapshot", None) is not None
+        and getattr(native, "get_state_json", None) is not None,
+        LOADER_MISSING,
+    )
+    def test_a_parallel_search_on_a_loaded_snapshot_beats_one_worker(self):
+        export = native.__dict__["get_state_json"]
+        fight = Fight(0, TOADPOLES, POOL_DECK)
+        try:
+            legal = fight.legal()
+            doc = export(fight.handle)
+            single = search_live(fight.handle, time_budget_s=0.5)
+        finally:
+            fight.close()
+
+        result = self.searcher.search(doc, time_budget_s=0.5)
+        self.assertEqual(result.warnings, [])
+        self.assertIn(result.best, result.children)
+        self.assertIn(result.best.action, legal)
+        self.assertGreater(result.sims, single.sims)
+
+
+class WorkerRecoveryTests(unittest.TestCase):
+    def test_a_failed_worker_is_restarted_and_the_survivors_are_merged(self):
+        searcher = live_search.ParallelSearcher(
+            workers=2,
+            nice=0,
+            _worker_fn=fail_once_then_search,
+        )
+        self.addCleanup(searcher.close)
+        markers = tempfile.TemporaryDirectory()
+        self.addCleanup(markers.cleanup)
+        budget = {
+            "time_budget_s": 60.0,
+            "min_child_sims": 5,
+            "max_sims": 60,
+            "confirm_pairs": 5,
+        }
+        failures = {
+            "raise": "failed (RuntimeError: injected worker failure)",
+            "exit": "died (exit code 3)",
+        }
+        for mode, reason in failures.items():
+            with self.subTest(mode=mode):
+                pids = [worker.process.pid for worker in searcher._workers]
+                spec = dict(
+                    POOL_SPEC,
+                    fail_marker=str(Path(markers.name) / mode),
+                    fail_mode=mode,
+                )
+                result = searcher._search_arena(spec, **budget)
+                [warning] = result.warnings
+                self.assertRegex(
+                    warning,
+                    rf"^search worker [01] {re.escape(reason)}; restarted$",
+                )
+                # The survivor's search alone: its simulations and its one segment.
+                self.assertEqual(result.sims, 60)
+                self.assertEqual(result.sweep_segments, [5])
+                self.assertTrue(searcher._wait_until_ready(60.0))
+                after = [worker.process.pid for worker in searcher._workers]
+                self.assertEqual(len(set(pids) & set(after)), 1)
+
+        result = searcher._search_arena(POOL_SPEC, **budget)
+        self.assertEqual(result.warnings, [])
+        self.assertEqual(result.sims, 120)
+        self.assertEqual(result.sweep_segments, [5, 5])
 
 
 if __name__ == "__main__":
