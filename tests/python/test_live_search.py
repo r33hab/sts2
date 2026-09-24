@@ -10,6 +10,7 @@ import re
 import statistics
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -20,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "rl"))
 sys.path.insert(0, str(ROOT / "src"))
 
+import combat_mcts  # noqa: E402
 import live_search  # noqa: E402
 from live_search import merge_stats, search_live  # noqa: E402
 
@@ -56,17 +58,23 @@ POOL_SPEC = {"seed": 0, "deck": POOL_DECK, "reset": {"encounter_id": TOADPOLES}}
 LOADER_MISSING = "load_combat_snapshot unavailable: merge the loader branch"
 
 
-def fail_once_then_search(root, load_seed, lane, lanes, params):
-    """Run the real worker, except that the first worker to claim the spec's marker fails.
+def misbehave_then_search(job):
+    """Run the real worker, after misbehaving the way the job's spec asks.
 
-    The marker is created with O_EXCL, so exactly one worker fails however many run, and
-    a restarted worker finds it taken and searches normally.
+    "load_delay_s" sleeps before the search, as a slow load would. "fail_mode" names the
+    misbehaviour: "always-exit" dies on every call, and "raise", "exit" and "hang" (sleep
+    far past any deadline) happen once, in the first worker to create "fail_marker". The
+    marker is created with O_EXCL, so exactly one worker misbehaves however many run, and
+    every later call finds it taken and searches normally.
 
     Raises:
         RuntimeError: For the worker that claims the marker, in "raise" mode.
 
     """
-    spec = root[1]
+    spec = job.root[1]
+    mode = spec.get("fail_mode")
+    if mode == "always-exit":
+        os._exit(4)
     marker = spec.get("fail_marker")
     if marker is not None:
         try:
@@ -74,10 +82,23 @@ def fail_once_then_search(root, load_seed, lane, lanes, params):
         except FileExistsError:
             pass
         else:
-            if spec["fail_mode"] == "exit":
+            if mode == "exit":
                 os._exit(3)
+            if mode == "hang":
+                time.sleep(3600)
             raise RuntimeError("injected worker failure")
-    return live_search._search_worker(root, load_seed, lane, lanes, params)
+    time.sleep(spec.get("load_delay_s", 0.0))
+    return live_search._search_worker(job)
+
+
+def bad_prior(_handle, legal):
+    """Give one weight too many, which search_live refuses with ValueError."""
+    return np.ones(len(legal) + 1)
+
+
+def sleep_instead_of_serving(conn, nice, worker_fn):
+    """Stand in for a restarted worker that never finishes starting."""
+    time.sleep(3600)
 
 
 class Fight:
@@ -312,17 +333,24 @@ def totals(action, values, died=None, target=-1) -> live_search.ChildStat:
 
 
 def made_result(stats, values, deaths, *, warnings=()) -> live_search.SearchResult:
-    """Assemble a one-search result by hand, with the most visited move as the best."""
-    best = max(stats, key=lambda stat: stat.visits)
+    """Assemble one search's result by hand, the way a search assembles its own.
+
+    The most visited move is best, every paired field is filled in against it, and the
+    children are in the search's order, so the result is exactly what a merge of it gives.
+    """
+    stats = sorted(stats, key=lambda stat: (stat.action, stat.target))
+    best = live_search._choose_best(stats, by_visits=True)
+    children = live_search._with_pairs(stats, best, values, deaths)
+    best = children[stats.index(best)]
     return live_search.SearchResult(
         best=best,
-        children=sorted(stats, key=lambda stat: -stat.visits),
+        children=live_search._ordered(children),
         line=[(best.action, best.target, best.kind), (9, -1, "end_turn")],
         sims=sum(stat.visits for stat in stats),
         elapsed_s=0.25,
         budget_exhausted=False,
         truncated_rollouts=0,
-        warnings=list(warnings),
+        warnings=sorted(warnings),
         sweep_values=values,
         sweep_deaths=deaths,
         sweep_segments=[len(next(iter(values.values())))],
@@ -844,16 +872,20 @@ class ConfirmationTests(unittest.TestCase):
             self.assertEqual(len(result.sweep_values[child.action, child.target]), 6)
 
     def test_a_confirmation_cut_by_the_clock_reports_the_pairs_it_got(self):
+        # Far more rounds than the budget holds: the confirmation's reserve is capped, so
+        # the search still gets its share first, and the rounds are then cut by the clock.
         fight = Fight(0, TOADPOLES, POOL_DECK)
         try:
             result = search_live(
                 fight.handle,
-                time_budget_s=0.3,
+                time_budget_s=0.5,
+                min_child_sims=20,
                 confirm_pairs=100_000,
             )
         finally:
             fight.close()
 
+        self.assertGreater(result.uct_sims, 0)  # the sweep finished and UCT ran
         self.assertTrue(result.budget_exhausted)
         [rounds] = result.sweep_segments
         self.assertGreater(rounds, 0)
@@ -872,6 +904,34 @@ class ConfirmationTests(unittest.TestCase):
                 self.assertLessEqual(child.paired_n, rounds)
                 self.assertGreater(child.paired_n, 0)
         self.assertLess(result.elapsed_s, 1.0)
+
+    def test_a_slow_first_playout_does_not_end_the_search(self):
+        # A cold cache, a pause or a preemption at low priority can make one playout take
+        # milliseconds. The first one used to size the confirmation's reserve on its own:
+        # 20 ms of it reserved more than the whole budget, and the search stopped after a
+        # single simulation.
+        simulate = live_search._simulate
+        calls = []
+
+        def slow_first(*args: object):
+            calls.append(None)
+            if len(calls) == 1:
+                time.sleep(0.02)
+            return simulate(*args)
+
+        fight = Fight(0, TOADPOLES, POOL_DECK)
+        try:
+            with mock.patch.object(live_search, "_simulate", slow_first):
+                # Every default: 1.5 s, 200 simulations a move, 50 confirmation pairs.
+                result = search_live(fight.handle)
+        finally:
+            fight.close()
+
+        moves = len(result.children)
+        self.assertFalse(result.budget_exhausted)
+        self.assertGreater(result.sims, 200 * moves)  # the whole sweep, then UCT
+        self.assertGreater(result.uct_sims, 0)
+        self.assertEqual({child.paired_n for child in result.children}, {50})
 
 
 class DrawPileChoiceTests(unittest.TestCase):
@@ -965,16 +1025,32 @@ class RolloutTests(unittest.TestCase):
         # The Nibbit opens on a 12 against no block, so a Skill is block that is needed.
         self.assertAlmostEqual(
             weight[defend] / weight[strike],
-            live_search.W_SKILL_NEEDED / live_search.W_ATTACK,
+            combat_mcts.W_SKILL_NEEDED / combat_mcts.W_ATTACK,
         )
-        self.assertAlmostEqual(
-            weight[10] / weight[strike],
-            live_search.W_END_TURN / live_search.W_ATTACK,
-        )
-        self.assertAlmostEqual(
-            weight[11] / weight[strike],
-            live_search.W_POTION / live_search.W_ATTACK,
-        )
+        # End Turn and the potion at the weight every measurement gave them.
+        for action in (10, 11):
+            self.assertAlmostEqual(
+                weight[action] / weight[strike],
+                combat_mcts.W_OTHER / combat_mcts.W_ATTACK,
+            )
+
+    def test_rollout_weights_are_combat_mcts_where_it_reads_them_right(self):
+        # Five cards and a potion: End Turn is action 5 and the potion 6, both inside the
+        # hand block, where combat_mcts's read finds an empty slot and gives W_OTHER.
+        fight = Fight(0, NIBBITS_WEAK, POOL_DECK, potions=(BLOCK_POTION,))
+        try:
+            world = live_search.Combat(fight.handle).fork(None)
+            try:
+                legal = world.legal()
+                ours = live_search.live_rollout_weights(world, legal)
+                theirs = combat_mcts.rollout_weights(world, legal)
+            finally:
+                world.close()
+        finally:
+            fight.close()
+
+        self.assertEqual(legal, list(range(7)))
+        np.testing.assert_array_equal(ours, theirs)
 
     def test_rollout_weights_treat_selection_candidates_alike(self):
         fight = Fight(0, NIBBITS_WEAK, [-TRUE_GRIT, STRIKE, STRIKE, DEFEND, BASH])
@@ -1114,6 +1190,54 @@ class MergeStatsTests(unittest.TestCase):
         crossed = pickle.loads(pickle.dumps(result))  # noqa: S301 -- our own bytes
         self.assertEqual(merge_stats([result]), crossed)
 
+    def test_a_move_never_played_survives_a_merge_of_its_result(self):
+        # The same property without depending on the emulator: Gambling Chip's skip gets
+        # simulations once the clone keeps `Skippable`, and then the test above has no
+        # NaN left to check.
+        never = live_search._base_stat(
+            6,
+            -1,
+            "skip",
+            None,
+            [],
+            visits=0,
+            value_sum=0.0,
+            value_sq_sum=0.0,
+            deaths=0,
+            win_hp_sum=0,
+        )
+        result = made_result(
+            [totals(0, [10.0, 12.0, 14.0]), totals(1, [8.0, 9.0]), never],
+            {(0, -1): [10.0, 12.0], (1, -1): [8.0, 9.0]},
+            {(0, -1): [False, False], (1, -1): [False, False]},
+        )
+        [skip] = [child for child in result.children if child.kind == "skip"]
+        self.assertTrue(math.isnan(skip.value_mean))
+        self.assertTrue(math.isnan(skip.p_death))
+        self.assertIsNone(skip.paired_diff_vs_best)
+        self.assertEqual(merge_stats([result]), result)
+        crossed = pickle.loads(pickle.dumps(result))  # noqa: S301 -- our own bytes
+        self.assertEqual(merge_stats([crossed]), result)
+
+    def test_results_of_different_positions_are_not_merged(self):
+        values = {(0, -1): [10.0], (1, -1): [8.0]}
+        deaths = {(0, -1): [False], (1, -1): [False]}
+        base = made_result([totals(0, [10.0, 11.0]), totals(1, [8.0])], values, deaths)
+        other_moves = made_result(
+            [totals(0, [10.0, 11.0]), totals(2, [8.0])],
+            {(0, -1): [10.0], (2, -1): [8.0]},
+            {(0, -1): [False], (2, -1): [False]},
+        )
+        stat = totals(1, [8.0])
+        other_copies = made_result(
+            [totals(0, [10.0, 11.0]), dataclasses.replace(stat, merged_actions=[3])],
+            values,
+            deaths,
+        )
+        for other in (other_moves, other_copies):
+            with self.assertRaisesRegex(ValueError, "one position"):
+                merge_stats([base, other])
+
     def test_merging_is_order_independent_and_adds_the_searches_up(self):
         fight = Fight(0, TOADPOLES, POOL_DECK)
         try:
@@ -1148,7 +1272,7 @@ class MergeStatsTests(unittest.TestCase):
     def test_the_merge_pairs_against_the_merged_best_and_never_across_searches(self):
         # A's best is X, B's is Y, and Y has the most visits overall, so every paired gap
         # is taken again against Y. Pairs only form inside one search: A's third round,
-        # where Y was not played, pairs with nothing, and Z, which B never enumerated,
+        # where Y was not played, pairs with nothing, and Z, which B never confirmed,
         # pairs only inside A.
         a = made_result(
             [
@@ -1165,7 +1289,7 @@ class MergeStatsTests(unittest.TestCase):
             warnings=["from a"],
         )
         b = made_result(
-            [totals(0, [-100.0], died=[True]), totals(1, [9.0] * 9)],
+            [totals(0, [-100.0], died=[True]), totals(1, [9.0] * 9), totals(2, [8.0])],
             {(0, -1): [-100.0, 5.0], (1, -1): [9.0, 9.0]},
             {(0, -1): [True, False], (1, -1): [False, False]},
         )
@@ -1175,11 +1299,11 @@ class MergeStatsTests(unittest.TestCase):
         x, y, z = (next(c for c in merged.children if c.action == i) for i in range(3))
         self.assertIs(merged.best, y)
         self.assertEqual(merged.line, b.line)
-        self.assertEqual((x.visits, y.visits, z.visits), (7, 11, 1))
+        self.assertEqual((x.visits, y.visits, z.visits), (7, 11, 2))
         self.assertEqual(x.value_mean, 20.0 / 7)
         self.assertEqual(x.p_death, 1 / 7)
         self.assertEqual(x.mean_end_hp_if_win, 20.0)
-        self.assertEqual(merged.sims, 19)
+        self.assertEqual(merged.sims, 20)
         self.assertEqual(sorted(merged.sweep_segments), [2, 3])
         self.assertEqual(merged.sweep_values[2, -1].count(None), 2)
         self.assertEqual(merged.warnings, ["from a"])
@@ -1238,6 +1362,19 @@ class MergeStatsTests(unittest.TestCase):
         self.assertEqual(live_search._paired([], [1.0]), (None, None, 0))
 
 
+LOADER_PRESENT = (
+    getattr(native, "load_combat_snapshot", None) is not None
+    and getattr(native, "get_state_json", None) is not None
+)
+
+# A pooled call may overrun its budget by this much: dispatch, the result's transfer, the
+# merge.
+POOL_OVERHEAD_S = 0.25
+
+# Small, deterministic calls for the pool tests that are not about the clock.
+QUICK = {"time_budget_s": 60.0, "min_child_sims": 5, "max_sims": 60, "confirm_pairs": 5}
+
+
 class ParallelSearcherTests(unittest.TestCase):
     searcher: live_search.ParallelSearcher
 
@@ -1249,8 +1386,11 @@ class ParallelSearcherTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls.searcher.close()
 
+    def pids(self):
+        return [worker.process.pid for worker in self.searcher._workers]
+
     def test_workers_start_once_are_reused_and_run_niced(self):
-        pids = [worker.process.pid for worker in self.searcher._workers]
+        pids = self.pids()
         # Ten above this process, as far as the system allows: 19 is the lowest priority
         # everywhere (macOS goes to 20).
         niced = min(19, os.getpriority(os.PRIO_PROCESS, 0) + 10)
@@ -1267,12 +1407,10 @@ class ParallelSearcherTests(unittest.TestCase):
             self.assertEqual(result.warnings, [])
             self.assertEqual(result.sims, 80)
             self.assertEqual(result.sweep_segments, [5, 5])
-        self.assertEqual(
-            [worker.process.pid for worker in self.searcher._workers],
-            pids,
-        )
+        self.assertEqual(self.pids(), pids)
 
     def test_a_parallel_search_beats_one_worker_in_the_same_budget(self):
+        self.searcher._search_arena(POOL_SPEC, **QUICK)  # warm both workers first
         fight = Fight(0, TOADPOLES, POOL_DECK)
         try:
             legal = fight.legal()
@@ -1287,6 +1425,15 @@ class ParallelSearcherTests(unittest.TestCase):
         self.assertEqual(len(result.sweep_segments), 2)
         self.assertGreater(result.sims, single.sims)
 
+    def test_a_pooled_call_takes_its_budget(self):
+        started = time.perf_counter()
+        result = self.searcher._search_arena(POOL_SPEC, time_budget_s=0.5)
+        wall = time.perf_counter() - started
+
+        self.assertLessEqual(wall, 0.5 + POOL_OVERHEAD_S)
+        self.assertLessEqual(result.elapsed_s, wall)
+        self.assertGreater(result.uct_sims, 0)
+
     def test_search_needs_the_snapshot_loader(self):
         saved = native.__dict__.pop("load_combat_snapshot", None)
         try:
@@ -1300,17 +1447,63 @@ class ParallelSearcherTests(unittest.TestCase):
         with self.assertRaisesRegex(TypeError, "min_child_sim"):
             self.searcher._search_arena(POOL_SPEC, min_child_sim=5)
 
-    @unittest.skipUnless(
-        getattr(native, "load_combat_snapshot", None) is not None
-        and getattr(native, "get_state_json", None) is not None,
-        LOADER_MISSING,
-    )
+    def test_a_bad_prior_raises_its_own_error_and_restarts_nothing(self):
+        pids = self.pids()
+        with (
+            self.assertLogs("live_search", level="ERROR") as logs,
+            self.assertRaisesRegex(ValueError, "prior_fn must return"),
+        ):
+            self.searcher._search_arena(POOL_SPEC, prior_fn=bad_prior, **QUICK)
+
+        self.assertEqual(self.pids(), pids)
+        self.assertEqual(len(logs.records), 2)  # one full traceback per worker
+        self.assertIn("Traceback", logs.output[0])
+        self.assertIn("ValueError: prior_fn must return", logs.output[0])
+        result = self.searcher._search_arena(POOL_SPEC, **QUICK)
+        self.assertEqual(result.warnings, [])
+        self.assertEqual(result.sweep_segments, [5, 5])
+
+    def test_a_position_that_cannot_be_built_raises_its_own_error(self):
+        # The loader's `SnapshotError` for a document it refuses takes the same road: the
+        # worker never gets a combat, answers with the error, and goes on serving.
+        pids = self.pids()
+        spec = dict(POOL_SPEC, reset={"encounter_id": TOADPOLES, "no_such_setting": 1})
+        with (
+            self.assertLogs("live_search", level="ERROR"),
+            self.assertRaisesRegex(TypeError, "no_such_setting"),
+        ):
+            self.searcher._search_arena(spec, **QUICK)
+
+        self.assertEqual(self.pids(), pids)
+        self.assertEqual(self.searcher._search_arena(POOL_SPEC, **QUICK).warnings, [])
+
+    @unittest.skipUnless(LOADER_PRESENT, LOADER_MISSING)
+    def test_a_snapshot_the_loader_refuses_raises_its_own_error(self):
+        export = native.__dict__["get_state_json"]
+        refused = native.__dict__["SnapshotError"]
+        fight = Fight(0, TOADPOLES, POOL_DECK)
+        try:
+            doc = export(fight.handle)
+        finally:
+            fight.close()
+        doc["piles"]["hand"][0]["def_id"] = 999_999
+
+        pids = self.pids()
+        with (
+            self.assertLogs("live_search", level="ERROR"),
+            self.assertRaisesRegex(refused, r"piles\.hand\[0\]"),
+        ):
+            self.searcher.search(doc, **QUICK)
+        self.assertEqual(self.pids(), pids)
+
+    @unittest.skipUnless(LOADER_PRESENT, LOADER_MISSING)
     def test_a_parallel_search_on_a_loaded_snapshot_beats_one_worker(self):
         export = native.__dict__["get_state_json"]
         fight = Fight(0, TOADPOLES, POOL_DECK)
         try:
             legal = fight.legal()
             doc = export(fight.handle)
+            self.searcher.search(doc, **QUICK)  # warm both workers first
             single = search_live(fight.handle, time_budget_s=0.5)
         finally:
             fight.close()
@@ -1323,50 +1516,133 @@ class ParallelSearcherTests(unittest.TestCase):
 
 
 class WorkerRecoveryTests(unittest.TestCase):
-    def test_a_failed_worker_is_restarted_and_the_survivors_are_merged(self):
+    def searcher(self) -> live_search.ParallelSearcher:
         searcher = live_search.ParallelSearcher(
             workers=2,
             nice=0,
-            _worker_fn=fail_once_then_search,
+            _worker_fn=misbehave_then_search,
         )
         self.addCleanup(searcher.close)
+        return searcher
+
+    def marker(self, name: str) -> str:
         markers = tempfile.TemporaryDirectory()
         self.addCleanup(markers.cleanup)
-        budget = {
-            "time_budget_s": 60.0,
-            "min_child_sims": 5,
-            "max_sims": 60,
-            "confirm_pairs": 5,
-        }
+        return str(Path(markers.name) / name)
+
+    def test_a_worker_that_fails_is_kept_or_restarted_and_the_rest_merged(self):
+        searcher = self.searcher()
         failures = {
-            "raise": "failed (RuntimeError: injected worker failure)",
-            "exit": "died (exit code 3)",
+            # Raised with nothing left open: the worker answers, and goes on serving.
+            "raise": ("failed (RuntimeError: injected worker failure)", 2),
+            # Gone: the worker is restarted.
+            "exit": ("died (exit code 3); restarted", 1),
         }
-        for mode, reason in failures.items():
+        for mode, (reason, kept) in failures.items():
             with self.subTest(mode=mode):
                 pids = [worker.process.pid for worker in searcher._workers]
-                spec = dict(
-                    POOL_SPEC,
-                    fail_marker=str(Path(markers.name) / mode),
-                    fail_mode=mode,
-                )
-                result = searcher._search_arena(spec, **budget)
+                spec = dict(POOL_SPEC, fail_marker=self.marker(mode), fail_mode=mode)
+                with self.assertLogs("live_search", level="ERROR") as logs:
+                    result = searcher._search_arena(spec, **QUICK)
                 [warning] = result.warnings
-                self.assertRegex(
-                    warning,
-                    rf"^search worker [01] {re.escape(reason)}; restarted$",
-                )
+                self.assertRegex(warning, rf"^search worker [01] {re.escape(reason)}$")
+                if mode == "raise":
+                    self.assertIn(
+                        "RuntimeError: injected worker failure",
+                        logs.output[0],
+                    )
                 # The survivor's search alone: its simulations and its one segment.
                 self.assertEqual(result.sims, 60)
                 self.assertEqual(result.sweep_segments, [5])
                 self.assertTrue(searcher._wait_until_ready(60.0))
                 after = [worker.process.pid for worker in searcher._workers]
-                self.assertEqual(len(set(pids) & set(after)), 1)
+                self.assertEqual(len(set(pids) & set(after)), kept)
 
-        result = searcher._search_arena(POOL_SPEC, **budget)
+        result = searcher._search_arena(POOL_SPEC, **QUICK)
         self.assertEqual(result.warnings, [])
         self.assertEqual(result.sims, 120)
         self.assertEqual(result.sweep_segments, [5, 5])
+
+    def test_a_hung_worker_is_restarted(self):
+        searcher = self.searcher()
+        pids = [worker.process.pid for worker in searcher._workers]
+        spec = dict(POOL_SPEC, fail_marker=self.marker("hang"), fail_mode="hang")
+        with (
+            mock.patch.object(live_search, "_ANSWER_GRACE_S", 0.3),
+            self.assertLogs("live_search", level="ERROR"),
+        ):
+            result = searcher._search_arena(spec, **dict(QUICK, time_budget_s=0.5))
+
+        [warning] = result.warnings
+        self.assertRegex(
+            warning,
+            r"^search worker [01] did not answer in time; restarted$",
+        )
+        self.assertEqual(result.sims, 60)
+        self.assertTrue(searcher._wait_until_ready(60.0))
+        after = [worker.process.pid for worker in searcher._workers]
+        self.assertEqual(len(set(pids) & set(after)), 1)
+
+    def test_a_call_that_every_worker_fails_says_so(self):
+        searcher = self.searcher()
+        spec = dict(POOL_SPEC, fail_mode="always-exit")
+        with (
+            self.assertLogs("live_search", level="ERROR"),
+            self.assertRaisesRegex(
+                RuntimeError,
+                r"^every search worker failed: search worker 0 died \(exit code 4\); "
+                r"restarted; search worker 1 died \(exit code 4\); restarted$",
+            ),
+        ):
+            searcher._search_arena(spec, **QUICK)
+
+        self.assertTrue(searcher._wait_until_ready(60.0))
+        self.assertEqual(searcher._search_arena(POOL_SPEC, **QUICK).sims, 120)
+
+    def test_a_worker_still_restarting_sits_the_call_out(self):
+        # The stand-in never reads its pipe, so closing the searcher ends up killing it,
+        # after a wait kept short here. Started first, the patch outlasts that close.
+        patcher = mock.patch.object(live_search, "_CLOSE_TIMEOUT_S", 0.2)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        searcher = self.searcher()
+        spec = dict(POOL_SPEC, fail_marker=self.marker("exit"), fail_mode="exit")
+        # The worker that dies is replaced by one that never finishes starting.
+        with (
+            mock.patch.object(live_search, "_serve", sleep_instead_of_serving),
+            self.assertLogs("live_search", level="ERROR"),
+        ):
+            searcher._search_arena(spec, **QUICK)
+
+        result = searcher._search_arena(POOL_SPEC, **QUICK)
+        self.assertEqual(
+            result.warnings,
+            ["1 of 2 search workers were still restarting"],
+        )
+        self.assertEqual(result.sims, 60)
+        self.assertEqual(result.sweep_segments, [5])
+
+    def test_a_slow_load_still_answers_within_the_budget(self):
+        searcher = self.searcher()
+        spec = dict(POOL_SPEC, load_delay_s=0.3)
+        started = time.perf_counter()
+        result = searcher._search_arena(spec, time_budget_s=0.5)
+        wall = time.perf_counter() - started
+
+        self.assertLessEqual(wall, 0.5 + POOL_OVERHEAD_S)
+        self.assertEqual(result.warnings, [])
+        self.assertGreater(result.sims, 0)
+
+    def test_close_leaves_no_process_running(self):
+        searcher = live_search.ParallelSearcher(workers=2, nice=0)
+        processes = [worker.process for worker in searcher._workers]
+        searcher.close()
+
+        self.assertFalse(any(process.is_alive() for process in processes))
+        self.assertEqual([process.exitcode for process in processes], [0, 0])
+        searcher.close()  # a second close does nothing
+        with self.assertRaisesRegex(RuntimeError, "closed"):
+            searcher._search_arena(POOL_SPEC, **QUICK)
 
 
 if __name__ == "__main__":

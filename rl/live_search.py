@@ -8,8 +8,12 @@ per process on the same position, and `merge_stats` adds the searches up.
 
 It is built on `combat_mcts` and keeps the settings measured there (FINDINGS.md):
 exploration constant 0.1, the tempo-weighted rollout, common random numbers at the root,
-and the final choice by visit count. The forkable `Combat`, the tempo weights and the step
-cap are imported unchanged. What is new:
+and the final choice by visit count. The forkable `Combat`, the step cap and the values
+of the tempo weights are imported unchanged. The rollout that uses them differs from
+`combat_mcts.rollout` in three ways, each where that one was wrong: it reads a card's type
+only for a card play (see `live_rollout_weights`), it weights an open selection's
+candidates alike, and it aims at the enemy closest to dying (see `targets` below). End
+Turn and potions keep the weight every measurement gave them, `W_OTHER`. What is new:
 
   value     In HP (spec 7.2). A win is worth its end HP plus `potion_value` for each
             potion still held; a death is worth -100. A playout that reaches the step cap
@@ -55,7 +59,8 @@ cap are imported unchanged. What is new:
             better after a 200-simulation one. The rollout after the root move is the same
             policy for every move and every round, so the rounds are independent and the
             interval is honest: the same twins come out at exactly 0. The sweep and UCT
-            stop early enough to leave the confirmation its share of the clock.
+            stop early enough to leave the confirmation its rounds' worth of the clock,
+            at the playout cost they measured, but never more than 35% of the budget.
 
   keys      Below the root a move is keyed by what is played (a card's visible identity
             and its target, a potion's id), not by its index. After a draw, different
@@ -88,10 +93,13 @@ from __future__ import annotations
 import contextlib
 import ctypes
 import inspect
+import logging
 import math
 import multiprocessing
 import os
+import pickle  # noqa: S403 -- only our own objects, to see an exception can travel
 import signal
+import statistics
 import sys
 import time
 import traceback
@@ -113,7 +121,6 @@ from combat_mcts import (
     MAX_ACTIONS,
     STEP_CAP,
     W_ATTACK,
-    W_END_TURN,
     W_OTHER,
     W_POWER,
     W_SKILL_IDLE,
@@ -128,8 +135,7 @@ from sts2_gym import names, native
 DEATH_VALUE = -100.0
 LINE_DEPTH = 12
 
-# A potion's weight in a rollout. See `live_rollout_weights`.
-W_POTION = 1.0
+_LOG = logging.getLogger(__name__)
 
 # The determinization the per-copy check plays copies in. Fixed rather than drawn from the
 # search seed, so the root's moves depend on the position alone and searches run with
@@ -139,13 +145,20 @@ _PROBE_SEED = 1
 # Every seed a simulation plays is drawn from [0, 2**31 - 1), the range a clone seed takes.
 _SEED_SPACE = 2**31 - 1
 
-# The share of the clock the sweep and UCT leave to the confirmation, as a multiple of
-# what its playouts cost at the rate the minimum sweep measured, so that it usually
-# finishes inside the budget rather than being cut. See `_Search._search_spent`.
+# The clock the sweep and UCT leave to the confirmation: what its playouts cost, times this
+# margin so that it usually finishes inside the budget rather than being cut. See
+# `_Search._reserve`, which also caps it and says where the cost of a playout comes from.
 _CONFIRM_TIME_MARGIN = 1.25
+# The most of the budget reserved, however many rounds the confirmation asks for.
+_CONFIRM_MAX_SHARE = 0.35
+_RESERVE_MIN_PLAYOUTS = 16  # timed before the reserve applies, and a full sweep round
+_RESERVE_WINDOW = 512  # the latest playouts the median cost is taken over
+_RESERVE_REFRESH = 16  # new playouts between two readings of that median
 
-# How long a worker may take past the budget before it is taken for hung: building the
-# position before the search, and handing the result back after it.
+# A pooled call's workers stop searching this long before the call's deadline, to hand
+# their results back and have them merged in time.
+_RETURN_MARGIN_S = 0.02
+# How long past its deadline a worker may take before it is taken for hung.
 _ANSWER_GRACE_S = 2.0
 _STARTUP_TIMEOUT_S = 120.0
 _CLOSE_TIMEOUT_S = 5.0
@@ -529,15 +542,20 @@ def _action_in(world: Combat, key: tuple, action: int) -> int | None:
 def live_rollout_weights(sim: Combat, legal: list[int]) -> np.ndarray:
     """Weight a rollout's legal actions by what each one plays, so that tempo has a price.
 
-    These are the tempo weights of `combat_mcts.rollout_weights`, read correctly. That
-    function reads a card id at the hand slot of every legal action, so with nine or more
-    cards in hand End Turn and the potions read potion and buff ids as cards, and under an
-    open selection each candidate is weighted by whichever hand card shares its index.
+    These are the tempo weights of `combat_mcts.rollout_weights`, with its misread taken
+    out. That function reads a card id at the hand slot of every legal action. For End
+    Turn and a potion, that slot is empty while the action's index is below ten, the
+    observation's hand size, so they get `W_OTHER`: what every measurement used, since its
+    `W_END_TURN` is never reached. From index ten on the read lands in the potion and buff
+    ids, and the action is weighted as whatever card those ids happen to name: End Turn
+    with ten cards in hand, a potion whenever the hand and its slot reach ten. Under an
+    open selection, each candidate is weighted by whichever hand card shares its index.
     `combat_mcts` keeps its version, which its benchmarks were measured with.
 
-    Here a card id is read for card plays only. End Turn gets the fixed `W_END_TURN`,
-    which `combat_mcts` defines and never reaches, a potion gets `W_POTION`, and the
-    candidates of an open selection are weighted alike. Returns probabilities.
+    Here a card id is read for card plays only, End Turn and the potions get `W_OTHER` at
+    any index, and the candidates of an open selection are weighted alike. With no
+    selection open and no legal action at index ten or above, the weights are exactly
+    `combat_mcts`'s. Returns probabilities.
     """
     obs = sim.obs
     weights = np.ones(len(legal), dtype=np.float64)
@@ -549,10 +567,8 @@ def live_rollout_weights(sim: Combat, legal: list[int]) -> np.ndarray:
             if action < hand:
                 card_type = types.get(obs[_HAND + action * _CARD], "")
                 weights[i] = _tempo_weight(card_type, needed=needed)
-            elif action == hand:
-                weights[i] = W_END_TURN
             else:
-                weights[i] = W_POTION
+                weights[i] = W_OTHER  # End Turn, or a potion
     return weights / weights.sum()
 
 
@@ -1152,6 +1168,7 @@ class _Search:
         lane: tuple[int, int],
     ):
         self.started = time.perf_counter()
+        self.budget_s = time_budget_s
         self.deadline = self.started + time_budget_s
         self.min_child_sims = min_child_sims
         self.max_sims = max_sims
@@ -1168,25 +1185,23 @@ class _Search:
         self.tree = _Node(-1, -1, "root")
         self.sims = self.uct_sims = self.attempts = 0
         self.failures = self.truncated = self.rounds = 0
-        self.confirm_moves = 0
+        self.confirm_moves = self.playable_count = 0
         self.exhausted = False
-        self.search_started = self.started
-        # What a playout cost in the minimum sweep, once it is over. See `_search_spent`.
-        self.sweep_playout_s: float | None = None
+        # What playouts cost, for the confirmation's reserve. See `_reserve`.
+        self.playout_times: list[float] = []
+        self.playout_cost: float | None = None
+        self.cost_read_at = 0  # how many playouts `playout_cost` was read over
 
     def run(self) -> SearchResult:
         if len(self.children) == 1:
             return self._result()
         playable = [child for child in self.children if child.simulable]
         confirmed = playable if len(playable) > 1 and self.confirm_pairs > 0 else []
+        self.playable_count = len(playable)
         self.confirm_moves = len(confirmed)
         if self.policy.prior_fn is not None:
             _root_priors(self.root, self.children, self.policy.prior_fn)
-        self.search_started = time.perf_counter()
         self._sweep(playable)
-        if self.attempts:
-            elapsed = time.perf_counter() - self.search_started
-            self.sweep_playout_s = elapsed / self.attempts
         if not self.exhausted:
             self._uct(playable)
         self._confirm(confirmed)
@@ -1204,29 +1219,55 @@ class _Search:
     def _search_spent(self) -> bool:
         """Whether the sweep and UCT must stop: `max_sims`, or the clock less the reserve.
 
-        The reserve is what the confirmation's rounds cost, with a margin, so that the
-        confirmation usually runs to the end. The cost of a playout comes from the minimum
-        sweep, which, like the confirmation, plays every move alike. UCT's playouts are no
-        measure of it: they crowd under the best move, whose fights can run shorter.
+        Asked before every playout, against the reserve as it stands then, so a reserve
+        that shrinks as its estimate settles gives the time back.
         """
         if self.max_sims is not None and self.attempts >= self.max_sims:
             return True
-        now = time.perf_counter()
-        reserve = 0.0
-        if self.confirm_moves and self.attempts:
-            playout = self.sweep_playout_s
-            if playout is None:
-                playout = (now - self.search_started) / self.attempts
-            reserve = self.confirm_pairs * self.confirm_moves * playout
-        return now >= self.deadline - reserve * _CONFIRM_TIME_MARGIN
+        return time.perf_counter() >= self.deadline - self._reserve()
+
+    def _reserve(self) -> float:
+        """Return the clock to leave the confirmation: its rounds at the playout cost.
+
+        Nothing is reserved until the cost is known well enough (see `_note_playout`), and
+        never more than `_CONFIRM_MAX_SHARE` of the budget: one slow playout, or a
+        confirmation asked for more rounds than the budget holds, cannot starve the search.
+        """
+        if not self.confirm_moves or self.playout_cost is None:
+            return 0.0
+        rounds = self.confirm_pairs * self.confirm_moves * self.playout_cost
+        return min(rounds * _CONFIRM_TIME_MARGIN, _CONFIRM_MAX_SHARE * self.budget_s)
+
+    def _note_playout(self, seconds: float, *, uct: bool) -> None:
+        """Time one playout toward the cost the reserve is sized by.
+
+        The cost is the median of the latest playouts, so a slow one (a cold cache, a
+        pause, a preemption at low priority) does not move it, and it is only read once a
+        full sweep round and `_RESERVE_MIN_PLAYOUTS` playouts are in. The sweep's playouts
+        are the measure, since like the confirmation's they play every move alike; UCT's
+        crowd under the best move, whose fights can run shorter, and are only used when
+        the sweep was too short to give enough.
+        """
+        enough = max(self.playable_count, _RESERVE_MIN_PLAYOUTS)
+        if uct and len(self.playout_times) >= enough:
+            return
+        self.playout_times.append(seconds)
+        count = len(self.playout_times)
+        if count < enough:
+            return
+        if self.playout_cost is None or count - self.cost_read_at >= _RESERVE_REFRESH:
+            self.playout_cost = statistics.median(self.playout_times[-_RESERVE_WINDOW:])
+            self.cost_read_at = count
 
     def _attempt(self, child: _RootMove, seed: int, *, uct: bool) -> None:
+        started = time.perf_counter()
         outcome = _simulate(self.root, child, child.node, seed, self.policy)
         self.attempts += 1
         if outcome is None:
             child.unmapped += 1
             self.failures += 1
             return
+        self._note_playout(time.perf_counter() - started, uct=uct)
         child.record(outcome)
         self.tree.visits += 1
         self.tree.value += outcome.value
@@ -1401,11 +1442,20 @@ def merge_stats(results: list[SearchResult]) -> SearchResult:
     that chose it. When none chose it, the line is that move alone, with a warning.
 
     Raises:
-        ValueError: If `results` is empty.
+        ValueError: If `results` is empty, or its searches did not all have the same root
+            moves, which is the sign of searches of different positions.
 
     """
     if not results:
         raise ValueError("merge_stats needs at least one result")
+    moves = _root_moves_of(results[0])
+    for result in results[1:]:
+        if (other := _root_moves_of(result)) != moves:
+            differ = sorted(moves ^ other, key=repr)
+            raise ValueError(
+                "merge_stats needs searches of one position; these differ in their root "
+                f"moves (action, target, kind, card, merged actions): {differ}",
+            )
     grouped: dict[tuple[int, int], list[ChildStat]] = {}
     for result in results:
         for stat in result.children:
@@ -1448,14 +1498,22 @@ def merge_stats(results: list[SearchResult]) -> SearchResult:
     )
 
 
+def _root_moves_of(result: SearchResult) -> frozenset[tuple]:
+    """Name a search's root moves: what two searches of one position share exactly."""
+    return frozenset(
+        (stat.action, stat.target, stat.kind, stat.card_def_id, (*stat.merged_actions,))
+        for stat in result.children
+    )
+
+
 def _merged_stat(group: list[ChildStat]) -> ChildStat:
-    first = group[0]
+    first = group[0]  # the searches agree on the move itself; see `_root_moves_of`
     return _base_stat(
         first.action,
         first.target,
         first.kind,
         first.card_def_id,
-        sorted({action for stat in group for action in stat.merged_actions}),
+        first.merged_actions,
         visits=sum(stat.visits for stat in group),
         value_sum=math.fsum(stat.value_sum for stat in group),
         value_sq_sum=math.fsum(stat.value_sq_sum for stat in group),
@@ -1513,11 +1571,37 @@ def _segment_order(segment: tuple[int, dict, dict]) -> tuple:
     )
 
 
+class _Job(NamedTuple):
+    """One call, as one worker is to run it."""
+
+    call: int
+    root: tuple[str, Any]  # ("snapshot", document) or ("arena", spec)
+    load_seed: int
+    lane: int
+    lanes: int
+    params: dict[str, Any]  # search_live's settings, time_budget_s among them
+    # When the call has to be answered, on `time.monotonic()`: one clock for every
+    # process on the machine (CLOCK_MONOTONIC, mach_absolute_time, QueryPerformanceCounter).
+    deadline: float
+
+
+class _Failure(NamedTuple):
+    """What a worker sends back instead of a result when its call raised."""
+
+    error: Exception | None  # the exception itself, or None if it cannot travel
+    summary: str  # its type and message, on one line
+    report: str  # the full traceback
+    clean: bool  # the worker holds no combat afterwards, so it goes on serving
+
+
 def _serve(conn, nice: int, worker_fn: Callable) -> None:
     """Be a search worker: lower this process's priority, report in, search until stopped.
 
-    A call that raises is reported, and the worker exits so the parent can start a clean
-    one: a failed search may have left the emulator in any state.
+    A call that raises is answered with the exception, and the worker goes on serving if
+    it holds no combat afterwards. That is the only state a failed call can leave behind:
+    a native call always finishes before Python sees an exception, and every call builds
+    its own search. So a bad document, a position with no move or a broken prior does not
+    cost a restart. A worker that leaked a combat exits instead, to be started afresh.
     """
     os.nice(nice)
     # Ctrl-C is the parent's to handle, and the parent stops the workers itself.
@@ -1525,32 +1609,63 @@ def _serve(conn, nice: int, worker_fn: Callable) -> None:
     conn.send("ready")
     while True:
         try:
-            request = conn.recv()
+            job = conn.recv()
         except EOFError:
             return  # the parent has gone
-        if request is None:
+        if job is None:
             return
-        call, root, load_seed, lane, lanes, params = request
         try:
-            result = worker_fn(root, load_seed, lane, lanes, params)
-        except Exception as error:  # noqa: BLE001 -- reported; the parent restarts us
-            reason = "".join(traceback.format_exception_only(error)).strip()
-            conn.send((call, "error", reason))
-            return
-        conn.send((call, "ok", result))
+            result = worker_fn(job)
+        except Exception as error:  # noqa: BLE001 -- the parent re-raises it
+            failure = _failure(error)
+            conn.send((job.call, "error", failure))
+            if not failure.clean:
+                return
+            continue
+        conn.send((job.call, "ok", result))
 
 
-def _search_worker(
-    root: tuple[str, Any],
-    load_seed: int,
-    lane: int,
-    lanes: int,
-    params: dict[str, Any],
-) -> SearchResult:
-    """Run one call in a worker: build the position, search it in this lane, free it."""
-    handle = _load_root(root, load_seed)
+def _failure(error: Exception) -> _Failure:
+    """Describe a failed call for the parent, with the exception if it survives pickling."""
     try:
-        return search_live(handle, _lane=(lane, lanes), **params)
+        pickle.loads(pickle.dumps(error))  # noqa: S301 -- our own bytes, just made
+    except Exception:  # noqa: BLE001 -- whatever the reason, it stays here
+        travelling = None
+    else:
+        travelling = error
+    return _Failure(
+        error=travelling,
+        summary="".join(traceback.format_exception_only(error)).strip(),
+        report="".join(traceback.format_exception(error)),
+        clean=_holds_no_combat(),
+    )
+
+
+def _holds_no_combat() -> bool:
+    """Whether this process's emulator holds no combat, as a worker does between calls.
+
+    `Sts2_Create` takes the lowest free slot, so a new combat lands in slot 0 exactly when
+    every slot is free.
+    """
+    handle = native.create(0)
+    if handle >= 0:
+        native.destroy(handle)
+    return handle == 0
+
+
+def _search_worker(job: _Job) -> SearchResult:
+    """Run one call in a worker: build the position, search it in this lane, free it.
+
+    The search gets what is left of the call's budget once the position is built, less a
+    margin to hand the result back, so a pooled call takes its budget and not the load
+    and the transfer on top of it.
+    """
+    handle = _load_root(job.root, job.load_seed)
+    try:
+        left = job.deadline - time.monotonic() - _RETURN_MARGIN_S
+        budget = max(0.0, min(job.params["time_budget_s"], left))
+        params: dict[str, Any] = {**job.params, "time_budget_s": budget}
+        return search_live(handle, _lane=(job.lane, job.lanes), **params)
     finally:
         native.destroy(handle)
 
@@ -1580,15 +1695,37 @@ def _arena_root(spec: dict[str, Any]) -> int:
     The snapshot loader is on another branch. Until it lands, a spec names a position the
     way the tests reach one: a handle seed, a deck, `reset_arena`'s other arguments under
     "reset", and the (action, target) steps played after it under "actions". Every worker
-    uses the same handle seed, so all of them rebuild the same position.
+    uses the same handle seed, so all of them rebuild the same position. A spec that fails
+    frees its handle, the way a snapshot the loader refuses never gets one.
     """
     handle = native.create(spec["seed"])
-    obs = (ctypes.c_int * native.OBS_SIZE)()
-    reward = (ctypes.c_float * 1)()
-    native.reset_arena(handle, list(spec["deck"]), obs, **spec.get("reset", {}))
-    for action, target in spec.get("actions", ()):
-        native.step(handle, action, obs, reward, target)
-    return handle
+    built = False
+    try:
+        obs = (ctypes.c_int * native.OBS_SIZE)()
+        reward = (ctypes.c_float * 1)()
+        native.reset_arena(handle, list(spec["deck"]), obs, **spec.get("reset", {}))
+        for action, target in spec.get("actions", ()):
+            native.step(handle, action, obs, reward, target)
+        built = True
+        return handle
+    finally:
+        if not built:
+            native.destroy(handle)
+
+
+def _unanswered(errors: list[Exception | None], warnings: list[str]) -> Exception:
+    """Say why no worker returned a result: their own exception, if they all raised one.
+
+    A deterministic error, the same in every worker, is the caller's to handle, so it is
+    raised as itself (the loader's `SnapshotError`, a `ValueError` for no move or a bad
+    prior) rather than hidden in a generic failure.
+    """
+    raised = [error for error in errors if error is not None]
+    if raised and len(raised) == len(errors) and len({type(e) for e in raised}) == 1:
+        error = raised[0]
+        error.add_note(f"raised by all {len(raised)} search workers")
+        return error
+    return RuntimeError(f"every search worker failed: {'; '.join(sorted(warnings))}")
 
 
 class _Worker:
@@ -1608,9 +1745,15 @@ class ParallelSearcher:
 
     The worker processes start once, in the constructor, and serve every call after it,
     so a call never waits for Python and the emulator to load. Each worker runs at
-    `nice` with its own emulator, which is not thread-safe. A worker that fails during a
-    call is restarted in the background, and that call returns what the others found,
-    with a warning.
+    `nice` with its own emulator, which is not thread-safe. Every worker searches until
+    the call's own deadline, the budget from when the call was made, so a call takes its
+    budget and not the load and the transfer on top of it.
+
+    A worker that raises goes on serving (see `_serve`); one that dies, hangs or leaks a
+    combat is restarted in the background. Either way the call returns what the other
+    workers found, with a warning, and the traceback is logged. When every worker raises
+    the same kind of exception, as they do for a document the loader refuses, a position
+    with no move or a broken prior, the call raises that exception itself.
 
     The workers are spawned, not forked: the emulator is a native library, and a forked
     copy of it is not safe. So a script that builds one must keep its own top level
@@ -1667,6 +1810,9 @@ class ParallelSearcher:
         function), since it travels to the workers. A setting `search_live` does not take
         raises TypeError before any worker runs.
 
+        When every worker raises the same kind of exception, such as the loader's
+        `native.SnapshotError` for a document it refuses, the call raises it.
+
         Raises:
             RuntimeError: If this build has no snapshot loader.
 
@@ -1695,8 +1841,10 @@ class ParallelSearcher:
         for worker in workers:
             with contextlib.suppress(*_PIPE_GONE):
                 worker.conn.send(None)
+        # One wait for all of them, then whoever has not stopped is killed.
+        deadline = time.monotonic() + _CLOSE_TIMEOUT_S
         for worker in workers:
-            worker.process.join(_CLOSE_TIMEOUT_S)
+            worker.process.join(max(0.0, deadline - time.monotonic()))
             self._stop(worker)
 
     def _search(
@@ -1707,8 +1855,12 @@ class ParallelSearcher:
     ) -> SearchResult:
         """Send one call to every worker that can take it, and merge what comes back.
 
+        With no result back, this raises what `_unanswered` makes of the failures: the
+        workers' own exception if they all raised the same kind, else RuntimeError. Results
+        that describe different positions make `merge_stats` raise ValueError.
+
         Raises:
-            RuntimeError: If the searcher is closed, or no worker came back with a result.
+            RuntimeError: If the searcher is closed.
             TypeError: If `kw` holds a setting `search_live` does not take.
 
         """
@@ -1722,6 +1874,7 @@ class ParallelSearcher:
         self._poll_ready(warnings)
         workers = [worker for worker in self._workers if worker.ready]
         if not workers:
+            # Every worker is restarting: this call waits for them, then gets its budget.
             if not self._wait_until_ready(_STARTUP_TIMEOUT_S):
                 raise RuntimeError("no search worker is running")
             workers = list(self._workers)
@@ -1730,6 +1883,7 @@ class ParallelSearcher:
                 f"{len(self._workers) - len(workers)} of {len(self._workers)} "
                 "search workers were still restarting",
             )
+        deadline = time.monotonic() + time_budget_s
         self._calls += 1
         base_seed = kw.pop("seed", 0)
         lanes = len(self._workers)
@@ -1740,17 +1894,25 @@ class ParallelSearcher:
                 time_budget_s=time_budget_s,
                 seed=base_seed + worker.index,
             )
-            request = (self._calls, root, base_seed, worker.index, lanes, params)
+            job = _Job(
+                self._calls,
+                root,
+                base_seed,
+                worker.index,
+                lanes,
+                params,
+                deadline,
+            )
             try:
-                worker.conn.send(request)
+                worker.conn.send(job)
             except _PIPE_GONE:
                 self._replace(worker, self._death(worker), warnings)
                 continue
             sent.append(worker)
-        deadline = started + time_budget_s + _ANSWER_GRACE_S
-        results = self._gather(sent, deadline, warnings)
+        results, errors = self._gather(sent, deadline + _ANSWER_GRACE_S, warnings)
         if not results:
-            raise RuntimeError(f"every search worker failed: {'; '.join(warnings)}")
+            failure = _unanswered(errors, warnings)
+            raise failure
         merged = merge_stats(results)
         merged.warnings = sorted([*merged.warnings, *warnings])
         merged.elapsed_s = time.perf_counter() - started
@@ -1761,14 +1923,20 @@ class ParallelSearcher:
         workers: list[_Worker],
         deadline: float,
         warnings: list[str],
-    ) -> list[SearchResult]:
-        """Collect this call's results; restart any worker that fails, dies or hangs."""
+    ) -> tuple[list[SearchResult], list[Exception | None]]:
+        """Collect this call's answers, handling every worker that does not give a result.
+
+        Returns the results, and for each worker that failed the exception it raised, or
+        None when it died, hung, or raised something that could not travel.
+        """
         pending = {worker.conn: worker for worker in workers}
         results: list[SearchResult] = []
+        errors: list[Exception | None] = []
         while pending:
-            remaining = deadline - time.perf_counter()
+            remaining = deadline - time.monotonic()
             if remaining <= 0:
                 for worker in pending.values():
+                    errors.append(None)
                     self._replace(worker, "did not answer in time", warnings)
                 break
             for ready in connection.wait(list(pending), remaining):
@@ -1777,6 +1945,7 @@ class ParallelSearcher:
                 try:
                     call, status, payload = worker.conn.recv()
                 except _PIPE_GONE:
+                    errors.append(None)
                     self._replace(worker, self._death(worker), warnings)
                     continue
                 if call != self._calls:
@@ -1784,8 +1953,18 @@ class ParallelSearcher:
                 elif status == "ok":
                     results.append(payload)
                 else:
-                    self._replace(worker, f"failed ({payload})", warnings)
-        return results
+                    errors.append(payload.error)
+                    self._failed(worker, payload, warnings)
+        return results, errors
+
+    def _failed(self, worker: _Worker, failure: _Failure, warnings: list[str]) -> None:
+        """Log a worker's traceback, and restart it if the failure left a combat open."""
+        _LOG.error("search worker %d failed:\n%s", worker.index, failure.report)
+        if failure.clean:
+            warnings.append(f"search worker {worker.index} failed ({failure.summary})")
+        else:
+            reason = f"failed ({failure.summary}) and left a combat open"
+            self._replace(worker, reason, warnings)
 
     def _spawn(self, index: int) -> _Worker:
         parent_end, child_end = self._context.Pipe()
@@ -1808,9 +1987,9 @@ class ParallelSearcher:
             RuntimeError: If a worker dies before it has started.
 
         """
-        deadline = time.perf_counter() + timeout
+        deadline = time.monotonic() + timeout
         while starting := [worker for worker in self._workers if not worker.ready]:
-            remaining = deadline - time.perf_counter()
+            remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return False
             conns = [worker.conn for worker in starting]
@@ -1846,6 +2025,7 @@ class ParallelSearcher:
         return f"died (exit code {worker.process.exitcode})"
 
     def _replace(self, worker: _Worker, reason: str, warnings: list[str]) -> None:
+        _LOG.error("search worker %d %s; restarting it", worker.index, reason)
         warnings.append(f"search worker {worker.index} {reason}; restarted")
         self._stop(worker)
         self._workers[worker.index] = self._spawn(worker.index)
