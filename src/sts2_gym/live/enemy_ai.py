@@ -1541,10 +1541,13 @@ _MODELS: tuple[Monster, ...] = (
         ),
         # remove when the emulator models the death explosion
         gap=(
-            "the emulator does not play the Waterfall Giant's death: killed, it is forced "
-            "onto ABOUT_TO_BLOW and then EXPLODEs for its Steam Eruption damage (decompiled "
-            "WaterfallGiant.cs:200-204, :291-301), where the emulator just drops it from the "
-            "enemy phase, so any line that kills it plays out wrong"
+            "the emulator does not play the Waterfall Giant's death: killed while it holds "
+            "Steam Eruption, it stays in combat and is forced onto ABOUT_TO_BLOW "
+            "(SteamEruptionPower.AfterDeath calls TriggerAboutToBlowState: decompiled "
+            "SteamEruptionPower.cs:19, WaterfallGiant.cs:301-313), then EXPLODEs for that "
+            "Steam Eruption (the states declared at WaterfallGiant.cs:200-204, their moves "
+            "at :283-299), where the emulator just drops it from the enemy phase, so any "
+            "line that kills it plays out wrong"
         ),
     ),
 )

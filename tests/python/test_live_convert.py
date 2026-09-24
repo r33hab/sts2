@@ -1979,8 +1979,9 @@ class EnemyWarningTests(unittest.TestCase):
         self.assertFalse(result.reliable)
 
     def test_a_waterfall_giant_makes_the_position_unreliable(self) -> None:
-        # The emulator does not play its forced death explosion (decompiled
-        # WaterfallGiant.cs:200-204, :291-301).
+        # The emulator does not play its forced death explosion: SteamEruptionPower.
+        # AfterDeath forces ABOUT_TO_BLOW (decompiled SteamEruptionPower.cs:19), one of the
+        # states WaterfallGiant.cs:200-204 declares.
         doc = load("enemy")
         doc["enemies"] = [
             {
@@ -2050,6 +2051,72 @@ class PoweredHitsTests(unittest.TestCase):
         self.assertFalse(
             any("BEAT_INTO_SHAPE" in w for w in convert.convert(doc).warnings),
         )
+
+    def test_the_card_in_any_pile_warns(self) -> None:
+        # The check reads the converted piles, so the draw pile's placed cards count too.
+        placements = {
+            "draw_pile": ("draw_pile",),
+            "discard_pile": ("discard_pile",),
+            "exhaust_pile": ("exhaust_pile",),
+            # A known top card is one of draw_pile's own, given a place.
+            "known_draw_top": ("draw_pile", "known_draw_top"),
+            "known_draw_bottom": ("draw_pile", "known_draw_bottom"),
+        }
+        for pile, keys in placements.items():
+            with self.subTest(pile=pile):
+                doc = load("player")
+                for key in keys:
+                    doc[key].append(card("BEAT_INTO_SHAPE"))
+                doc["history"] = {
+                    "cards_played_this_turn": 1,
+                    "attacks_played_this_turn": 1,
+                }
+                warnings = convert.convert(doc).warnings
+                self.assertEqual(
+                    len([w for w in warnings if "PoweredHitsThisTurn" in w]),
+                    1,
+                    warnings,
+                )
+
+
+class MalformedPileTests(Refusals):
+    """A malformed pile or card is refused at its path before anything reads it.
+
+    The Beat Into Shape check once read the raw piles ahead of their validation, so these
+    raised a bare KeyError or TypeError instead of a ConversionError.
+    """
+
+    PILES = ("hand", "draw_pile", "discard_pile", "exhaust_pile")
+
+    def test_a_hand_card_missing_its_id(self) -> None:
+        doc = load("player")
+        del doc["hand"][0]["id"]
+        self.assert_refused(doc, "hand[0].id")
+
+    def test_a_card_missing_its_id_in_any_pile(self) -> None:
+        for key in self.PILES:
+            with self.subTest(pile=key):
+                doc = load("player")
+                nameless = card("STRIKE_IRONCLAD")
+                del nameless["id"]
+                doc[key].append(nameless)
+                self.assert_refused(doc, f"{key}[{len(doc[key]) - 1}].id")
+
+    def test_a_pile_that_is_not_a_list(self) -> None:
+        for key in self.PILES:
+            for value in ({"id": "BEAT_INTO_SHAPE"}, "BEAT_INTO_SHAPE", None, 3):
+                with self.subTest(pile=key, value=value):
+                    doc = load("player")
+                    doc[key] = value
+                    self.assert_refused(doc, key)
+
+    def test_a_card_that_is_not_an_object(self) -> None:
+        for key in self.PILES:
+            for value in ("BEAT_INTO_SHAPE", ["BEAT_INTO_SHAPE"], None, 3):
+                with self.subTest(pile=key, value=value):
+                    doc = load("player")
+                    doc[key] = [value]
+                    self.assert_refused(doc, f"{key}[0]")
 
 
 if __name__ == "__main__":

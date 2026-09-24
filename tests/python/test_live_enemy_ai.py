@@ -1179,8 +1179,9 @@ class ToAiTests(unittest.TestCase):
         self,
     ) -> None:
         # The emulator drops a dead giant from the enemy phase instead of playing its
-        # forced ABOUT_TO_BLOW and EXPLODE (decompiled WaterfallGiant.cs:200-204,
-        # :291-301), so any position holding one is unreliable.
+        # forced ABOUT_TO_BLOW and EXPLODE, so any position holding one is unreliable. The
+        # trigger is SteamEruptionPower.AfterDeath (decompiled SteamEruptionPower.cs:19);
+        # WaterfallGiant.cs:200-204 declares the two states.
         live = enemy(
             "WATERFALL_GIANT",
             ["PRESSURIZE_MOVE"],
@@ -1192,6 +1193,8 @@ class ToAiTests(unittest.TestCase):
         self.assertEqual(len(warnings), 1)
         self.assertIn("Waterfall Giant's death", warnings[0])
         self.assertIn("EXPLODE", warnings[0])
+        self.assertIn("SteamEruptionPower.cs:19", warnings[0])
+        self.assertIn("WaterfallGiant.cs:200-204", warnings[0])
 
     def test_ascension_and_buffs_must_be_given(self) -> None:
         # Both change the result (magnitudes, companions), so neither has a default.

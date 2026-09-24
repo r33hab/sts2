@@ -494,7 +494,7 @@ def _enemies(
     return out
 
 
-def _powered_hits(live: dict[str, Any], history: dict[str, int]) -> list[str]:
+def _powered_hits(piles: dict[str, Any], history: dict[str, int]) -> list[str]:
     """Warn when Beat Into Shape could read a powered-hit count the snapshot drops.
 
     Beat Into Shape forges from the powered hits its target has taken this turn
@@ -502,9 +502,21 @@ def _powered_hits(live: dict[str, Any], history: dict[str, int]) -> list[str]:
     carries and which convert leaves at 0. That is only wrong once attacks have been played
     this turn: history's count of them, or -- when it has none -- a turn with any card
     played.
+
+    `piles` is the converted `piles` block, so every card in it has already been
+    validated and translated; the raw live piles are never read here.
     """
-    piles = ("hand", "draw_pile", "discard_pile", "exhaust_pile")
-    if not any(card["id"] == _BEAT_INTO_SHAPE for key in piles for card in live[key]):
+    draw = piles["draw"]
+    held = (
+        *piles["hand"],
+        *piles["discard"],
+        *piles["exhaust"],
+        *draw["known_top"],
+        *draw["known_bottom"],
+        *draw["unordered"],
+    )
+    beat_into_shape = ids.card_id(_BEAT_INTO_SHAPE)
+    if not any(card["def_id"] == beat_into_shape for card in held):
         return []
     attacks = history.get("attack_cards_played_this_turn")
     if attacks == 0 or (attacks is None and history.get("cards_played_this_turn") == 0):
@@ -637,7 +649,6 @@ def convert(live: dict[str, Any]) -> ConversionResult:
     warnings.extend(relic_state.warnings)
 
     history = _history(top["history"])
-    warnings.extend(_powered_hits(top, history))
     warnings.extend(relics.reads_warnings(live_relics, history, path="player.relics"))
     power_counters, power_warnings = powers.combat_counters(
         player_powers,
@@ -687,5 +698,7 @@ def convert(live: dict[str, Any]) -> ConversionResult:
         "counters": {**history, **power_counters, **relic_state.counters, **_ALWAYS},
         "pending_selection": None,
     }
+    # Only once the piles are validated and converted (hand, discard, exhaust, draw above).
+    warnings.extend(_powered_hits(doc["piles"], history))
     _pending_selection(top["pending_selection"], warnings)
     return ConversionResult(doc=doc, warnings=warnings, reliable=not warnings)
