@@ -12,7 +12,7 @@ _LIB_NAMES = {
     "darwin": "Sts2Emulator.dylib",
 }
 _ALLOW_STALE_ENV = "STS2_ALLOW_STALE_NATIVE"
-_REQUIRED_NATIVE_API_VERSION = 29
+_REQUIRED_NATIVE_API_VERSION = 30
 _REQUIRED_RUN_NATIVE_API_VERSION = 19
 
 
@@ -937,9 +937,7 @@ def get_enemies(handle: int) -> list[tuple[int, int, int]]:
         buf = (ctypes.c_int * (capacity * 3))()
         count = _lib.Sts2_GetEnemies(handle, buf, capacity)
         if count <= capacity:
-            return [
-                (buf[i * 3], buf[i * 3 + 1], buf[i * 3 + 2]) for i in range(count)
-            ]
+            return [(buf[i * 3], buf[i * 3 + 1], buf[i * 3 + 2]) for i in range(count)]
         capacity = count
 
 
