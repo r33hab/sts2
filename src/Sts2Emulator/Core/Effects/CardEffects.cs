@@ -2499,9 +2499,10 @@ public static class CardEffects
     }
 
     /// <summary>Fills the first empty potion slot, if any, with a uniformly random potion
-    /// id. Also Entropic Brew's loop over every empty slot: the game's own
-    /// `PotionFactory.CreateRandomPotionInCombat` rolls rarity-weighted odds this does not
-    /// model, so both callers get the same approximation rather than two different ones.</summary>
+    /// id -- Alchemize's approximation. The game's own
+    /// `PotionFactory.CreateRandomPotionInCombat` rolls rarity-weighted odds over the
+    /// character and shared pools this does not model (Entropic Brew's out-of-combat roll
+    /// is modelled, in `PotionEffects`).</summary>
     internal static void ProcureRandomPotion(CombatState state, Random rng)
     {
         for (int i = 0; i < state.MaxPotionSlots; i++)

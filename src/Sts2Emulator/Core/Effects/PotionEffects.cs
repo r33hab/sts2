@@ -211,15 +211,20 @@ public static class PotionEffects
             case 18: // Energy Potion: EnergyPotion.cs -- EnergyVar(2).
                 CardEffects.GainEnergy(state, 2);
                 break;
-            case 19: // Entropic Brew: EntropicBrew.cs -- `while (HasOpenPotionSlots)
-                // CreateRandomPotionOutOfCombat`. `CardEffects.ProcureRandomPotion` is the
-                // same uniform-random approximation an existing card already uses for
-                // "gain a random potion" (the real PotionFactory rolls rarity-weighted
-                // odds this emulator does not model); looping it fills every empty slot
-                // rather than only the first.
-                for (int slot = 0; slot < state.MaxPotionSlots; slot++)
+            case 19: // Entropic Brew: EntropicBrew.cs -- `while (Owner.HasOpenPotionSlots)`,
+                // roll `PotionFactory.CreateRandomPotionOutOfCombat(Owner,
+                // Rng.CombatPotionGeneration)` and `PotionCmd.TryToProcure` it, BREAKING when
+                // the procure fails. The brew's own slot is open by now
+                // (`CombatEngine.UsePotion` empties it first, as `RemoveBeforeUse` does).
                 {
-                    CardEffects.ProcureRandomPotion(state, rng!);
+                    var stream = state.PotionGenerationRng ?? rng!;
+                    while (HasOpenPotionSlot(state))
+                    {
+                        if (!TryToProcure(state, RollPotionOutOfCombat(stream)))
+                        {
+                            break;
+                        }
+                    }
                 }
 
                 break;
@@ -610,5 +615,73 @@ public static class PotionEffects
             default:
                 break;
         }
+    }
+
+    /// <summary>
+    /// `PotionFactory.CreateRandomPotion(GetPotionOptions(player), 1, rng)`, the roll
+    /// behind `CreateRandomPotionOutOfCombat`: `NextFloat()` picks the rarity -- Rare at or
+    /// under 0.1, Uncommon at or under 0.35, Common above -- then `NextItem` picks among
+    /// the options of that rarity. Two draws, in that order.
+    /// </summary>
+    /// <remarks>
+    /// The options are the character's pool followed by the shared one, the order
+    /// `NextItem` indexes into, which is `RunRewardGenerator.PotionRewardPool`. There is
+    /// no `CanBeGeneratedInCombat` filter: that belongs to `CreateRandomPotionInCombat`,
+    /// so the out-of-combat roll can hand over a healing potion mid-fight.
+    /// </remarks>
+    private static int RollPotionOutOfCombat(Random stream)
+    {
+        // `Rng.NextFloat()` is `(float)(NextDouble() * (1 - 0) + 0)`, compared against
+        // float thresholds.
+        float roll = (float)stream.NextDouble();
+        var rarity =
+            roll <= 0.1f ? PotionRarity.Rare
+            : roll <= 0.35f ? PotionRarity.Uncommon
+            : PotionRarity.Common;
+        var options = Run
+            .RunRewardGenerator.PotionRewardPool.ToArray()
+            .Where(potionId => GeneratedData.Potions.Get(potionId).Rarity == rarity)
+            .ToArray();
+        return options[stream.Next(options.Length)];
+    }
+
+    /// <summary>`Player.HasOpenPotionSlots`, over the slots the belt actually has.</summary>
+    private static bool HasOpenPotionSlot(CombatState state)
+    {
+        int usable = Math.Min(state.MaxPotionSlots, state.PotionSlots.Length);
+        for (int i = 0; i < usable; i++)
+        {
+            if (state.PotionSlots[i] == 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// `PotionCmd.TryToProcure`: refused outright while the owner holds Sozu
+    /// (`Sozu.ShouldProcurePotion` is false for its owner), otherwise into the first open
+    /// slot (`Player.AddPotionInternal`, `_potionSlots.IndexOf(null)`).
+    /// </summary>
+    private static bool TryToProcure(CombatState state, int potionId)
+    {
+        if (RelicEffects.Has(state.Relics, RelicEffects.Sozu))
+        {
+            return false;
+        }
+
+        int usable = Math.Min(state.MaxPotionSlots, state.PotionSlots.Length);
+        for (int i = 0; i < usable; i++)
+        {
+            if (state.PotionSlots[i] == 0)
+            {
+                state.PotionSlots[i] = potionId;
+                return true;
+            }
+        }
+
+        return false;
     }
 }

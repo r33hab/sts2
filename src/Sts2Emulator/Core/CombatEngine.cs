@@ -1918,8 +1918,11 @@ public static class CombatEngine
             return StepResult.Invalid;
         }
 
-        Effects.PotionEffects.Apply(state.PotionSlots[slot], state, rng);
+        // `PotionModel.OnUseWrapper` calls `RemoveBeforeUse()` before `OnUse`, so the
+        // potion's own slot is already free while its effect runs -- Entropic Brew fills it.
+        int potionId = state.PotionSlots[slot];
         state.PotionSlots[slot] = 0;
+        Effects.PotionEffects.Apply(potionId, state, rng);
         // `ReptileTrinket.AfterPotionUsed`, and it is AFTER: a potion that grants Strength
         // of its own has already landed, so the two stack rather than one replacing it.
         Effects.RelicEffects.ApplyAfterPotionUsed(state);
