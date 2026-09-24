@@ -510,6 +510,13 @@ public sealed class RunState
     public bool LavaRockTriggered;
 
     /// <summary>
+    /// Silver Crucible's `TreasureRoomsEntered`: treasure rooms walked into while the relic
+    /// is held. Its `ShouldGenerateTreasure` answers <c>TreasureRoomsEntered &gt; 1</c>, so
+    /// the first chest after the pickup is empty and every later one is an ordinary chest.
+    /// </summary>
+    public int SilverCrucibleTreasureRoomsEntered;
+
+    /// <summary>
     /// Relic rewards still owed, each already rolled. The screen carries one at a time,
     /// the way it carries one potion at a time, so anything past the first waits here.
     /// </summary>

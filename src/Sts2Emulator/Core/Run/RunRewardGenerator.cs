@@ -994,18 +994,65 @@ public static class RunRewardGenerator
         state.RelicReward = NextRelic(state);
     }
 
+    /// <summary>
+    /// A treasure room: the chest's relic, offered on <see cref="RunState.RelicReward" />,
+    /// and its gold, paid as it opens.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// `TreasureRoom.EnterInternal` fires `Hook.AfterRoomEntered` -- Silver Crucible counts
+    /// the room there -- and then `TreasureRoomRelicSynchronizer.BeginRelicPicking`, which
+    /// for a player whose `Hook.ShouldGenerateTreasure` holds rolls
+    /// `RelicFactory.RollRarity(Rng.TreasureRoomRelics)` and takes
+    /// `SharedRelicGrabBag.PullFromFront(rarity)`, or `RelicFactory.FallbackRelic`. The
+    /// SHARED bag, not the player's: a chest never hands over a character relic, and the pull
+    /// does not strike the relic from the player's bag -- `RelicCmd.Obtain` does that, when
+    /// the relic is taken.
+    /// </para>
+    /// <para>
+    /// `OneOffSynchronizer.DoTreasureRoomRewards` pays the gold behind the same hook, so a
+    /// chest Silver Crucible empties has neither. Nothing else in the game hooks a chest:
+    /// `ShouldGenerateTreasure` has one override, and no `TryModifyRewards` answers a
+    /// treasure room, so `DoExtraRewardsIfNeeded` adds nothing.
+    /// </para>
+    /// <para>
+    /// The chest used to pay its gold and never offer the relic, so every run was a relic
+    /// short -- and it stayed empty for as long as Silver Crucible was held, not just once.
+    /// </para>
+    /// </remarks>
     public static void EnterTreasureRoom(RunState state)
     {
         ClearRewardScreen(state);
-        if (state.Relics.Any(relic => relic.DefId == RunConstants.RelicSilverCrucible))
+        state.Phase = RunPhase.Treasure;
+        bool holdsSilverCrucible = HasRelic(state, RunConstants.RelicSilverCrucible);
+        if (holdsSilverCrucible)
         {
-            state.Phase = RunPhase.Treasure;
-            return;
+            state.SilverCrucibleTreasureRoomsEntered++;
+            if (state.SilverCrucibleTreasureRoomsEntered <= 1)
+            {
+                return;
+            }
         }
 
+        state.RelicReward = NextChestRelic(state);
         int gold = state.PlayerRng.Rewards.NextInt(42, 53);
         RunNonCombatEffects.GainGold(state, (int)(gold * 0.75));
-        state.Phase = RunPhase.Treasure;
+    }
+
+    /// <summary>
+    /// `BeginRelicPicking`'s pull: a rarity off the chest's own stream, then the front of
+    /// that rarity in the shared bag. It is left in the player's bag, which only
+    /// `RelicCmd.Obtain` touches.
+    /// </summary>
+    private static int NextChestRelic(RunState state)
+    {
+        var rarity = RelicGrabBag.RollRarity(state.Rng.TreasureRoomRelics);
+        int? relicId = state.SharedRelicBag.Pull(
+            rarity,
+            fromFront: true,
+            RelicGrabBag.AllowedInSoloRun(state.Floor)
+        );
+        return relicId ?? FallbackRelic;
     }
 
     public static void EnterShop(RunState state)

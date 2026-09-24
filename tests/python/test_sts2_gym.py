@@ -13,6 +13,7 @@ replay_full_run_trace = importlib.import_module("replay_full_run_trace")
 compare_traces = importlib.import_module("compare_traces")
 sts2_gym = importlib.import_module("sts2_gym")
 native = importlib.import_module("sts2_gym.native")
+run_constants = importlib.import_module("sts2_gym.run_constants")
 run_env = importlib.import_module("sts2_gym.run_env")
 
 Sts2CombatEnv = sts2_gym.Sts2CombatEnv
@@ -484,6 +485,35 @@ class Sts2GymTests(unittest.TestCase):
                 {"action": "claim_reward", "index": 0},
                 obs,
                 {"phase": PHASE_CARD_REWARD},
+            ),
+        )
+
+    def test_the_chest_relic_is_taken_and_proceeding_leaves_it(self):
+        # `take_chest_relic` is the chest's own pick, not the room's proceed: it used to
+        # translate to the leave action, which is what a live proceed with the relic still
+        # in the chest does -- `SkipRelicLocally`.
+        obs = np.zeros(1, dtype=np.int32)
+        treasure = {"phase": run_env.PHASE_TREASURE}
+
+        self.assertEqual(
+            replay_full_run_trace.translate_action(
+                {"action": "take_chest_relic"},
+                obs,
+                treasure,
+            ),
+            run_constants.TREASURE_TAKE_RELIC_ACTION,
+        )
+        self.assertEqual(
+            replay_full_run_trace.translate_action(
+                {"action": "proceed"}, obs, treasure
+            ),
+            run_env.REWARD_SKIP_ACTION,
+        )
+        self.assertIsNone(
+            replay_full_run_trace.translate_action(
+                {"action": "take_chest_relic"},
+                obs,
+                {"phase": PHASE_MAP},
             ),
         )
 

@@ -5,6 +5,9 @@ from __future__ import annotations
 from . import native
 
 REWARD_SKIP_ACTION = 3
+# A treasure room's chest relic, taken. Leaving the room is REWARD_SKIP_ACTION, which with
+# the relic still in the chest leaves it there -- the game's proceed button does the same.
+TREASURE_TAKE_RELIC_ACTION = 0
 SHOP_REMOVE_ACTION = 13
 SHOP_SKIP_ACTION = 14
 EVENT_SKIP_ACTION = 3

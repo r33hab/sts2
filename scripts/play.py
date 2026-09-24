@@ -973,9 +973,23 @@ def build_screen(env: Sts2RunEnv, obs, info, legal: set[int]) -> Screen:
         # "no screen written", which reads as a missing renderer rather than a finished run.
         return Screen(title="RUN OVER")
     if phase == rc.PHASE_TREASURE:
+        # The chest is already open: its gold is paid on the way in, and its relic waits
+        # to be taken or left behind.
         screen = Screen(title="TREASURE")
+        if rc.TREASURE_TAKE_RELIC_ACTION in legal:
+            screen.offer(
+                rc.TREASURE_TAKE_RELIC_ACTION,
+                f"take relic: {names.relic_name(info['relic_reward'])}",
+            )
         if rc.REWARD_SKIP_ACTION in legal:
-            screen.offer(rc.REWARD_SKIP_ACTION, "open the chest")
+            screen.offer(
+                rc.REWARD_SKIP_ACTION,
+                (
+                    "leave (the relic stays in the chest)"
+                    if rc.TREASURE_TAKE_RELIC_ACTION in legal
+                    else "leave"
+                ),
+            )
         return screen
 
     # A phase with no renderer still has a mask, and a bare list of legal numbers is

@@ -64,6 +64,7 @@ public sealed class RunEngine
         State.FurCoatRooms.Clear();
         State.FurCoatAct = -1;
         State.GoldenPathAct = -1;
+        State.SilverCrucibleTreasureRoomsEntered = 0;
         State.ParasolSweepPending = false;
         State.UnknownMapPointsVisited = 0;
         State.UnknownMapPointMonsterOdds = 0.1;
@@ -834,6 +835,12 @@ public sealed class RunEngine
                 break;
 
             case RunPhase.Treasure:
+                // The chest's relic while it is still in the chest; leaving is always there.
+                if (State.RelicReward != 0)
+                {
+                    SetMask(mask, RunConstants.TreasureTakeRelicAction);
+                }
+
                 SetMask(mask, RunConstants.RewardSkipAction);
                 break;
 
@@ -1409,13 +1416,7 @@ public sealed class RunEngine
 
         if (State.Phase == RunPhase.Treasure)
         {
-            if (action != RunConstants.RewardSkipAction)
-            {
-                return -1;
-            }
-
-            int status = AdvanceAfterNode(out terminal);
-            return status;
+            return StepTreasure(action, out terminal);
         }
 
         if (State.Phase == RunPhase.Complete)
@@ -1915,6 +1916,37 @@ public sealed class RunEngine
             RunRewardGenerator.EnterRelicReward(State);
             return 0;
         }
+        return AdvanceAfterNode(out terminal);
+    }
+
+    /// <summary>
+    /// The open chest. Taking the relic is `PickRelicLocally` and the award is
+    /// `RelicCmd.Obtain`, so its pickup effect runs; the room then waits for its Proceed,
+    /// as the game's does. Proceeding with the relic still in the chest is
+    /// `SkipRelicLocally` and hands over nothing.
+    /// </summary>
+    /// <remarks>
+    /// The pickup's follow-up is not routed anywhere, the same as a relic claimed off an
+    /// elite's reward screen: a chest holds a Common, Uncommon or Rare, and none of those
+    /// opens a screen of its own on pickup -- every relic that does is Ancient or Shop.
+    /// </remarks>
+    private int StepTreasure(int action, out bool terminal)
+    {
+        terminal = false;
+        if (action == RunConstants.TreasureTakeRelicAction && State.RelicReward != 0)
+        {
+            int claimed = State.RelicReward;
+            State.RelicReward = 0;
+            RunNonCombatEffects.ApplyRelicPickup(State, claimed);
+            return 0;
+        }
+
+        if (action != RunConstants.RewardSkipAction)
+        {
+            return -1;
+        }
+
+        State.RelicReward = 0;
         return AdvanceAfterNode(out terminal);
     }
 
