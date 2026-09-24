@@ -26,7 +26,7 @@
       {"id": "BREAD", "counter": null, "fields": {}}
     ],
     "potions": [
-      {"slot": 0, "id": "FIRE_POTION"},
+      {"slot": 0, "id": "REGEN_POTION"},
       {"slot": 1, "id": null},
       {"slot": 2, "id": "BLOCK_POTION"}
     ],

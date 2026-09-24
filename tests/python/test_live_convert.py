@@ -33,6 +33,7 @@ ids = importlib.import_module("sts2_gym.live.ids")
 powers = importlib.import_module("sts2_gym.live.powers")
 relics = importlib.import_module("sts2_gym.live.relics")
 cards = importlib.import_module("sts2_gym.live.cards")
+potions = importlib.import_module("sts2_gym.live.potions")
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "live"
 DECOMPILED = ROOT / "decompiled"
@@ -43,7 +44,7 @@ STRIKE, DEFEND, BASH, POMMEL_STRIKE, SHRUG_IT_OFF = 472, 131, 30, 358, 433
 ANGER, IRON_WAVE, TRUE_GRIT, HAVOC, EXPECT_A_FIGHT = 13, 268, 517, 238, 175
 ASCENDERS_BANE, WHIRLWIND = 10001, 538
 BURNING_BLOOD, BREAD = 36, 32
-FIRE_POTION, BLOCK_POTION = 23, 5
+FIRE_POTION, BLOCK_POTION, REGEN_POTION, FAIRY_IN_A_BOTTLE = 23, 5, 50, 22
 CORPSE_SLUG, TWO_TAILED_RAT, GREMLIN_MERC, FAT_GREMLIN = 17, 101, 37, 28
 
 
@@ -311,7 +312,7 @@ class PlayerFixtureTests(unittest.TestCase):
     def test_potions_are_six_wide_with_zero_for_empty(self) -> None:
         self.assertEqual(
             self.doc["potions"],
-            {"max_slots": 3, "slots": [FIRE_POTION, 0, BLOCK_POTION, 0, 0, 0]},
+            {"max_slots": 3, "slots": [REGEN_POTION, 0, BLOCK_POTION, 0, 0, 0]},
         )
 
     def test_relics_keep_live_order_with_emulator_counters(self) -> None:
@@ -917,6 +918,215 @@ class WarningTests(unittest.TestCase):
         self.assertIn("_hasSingleTurnRetain", result.warnings[0])
 
 
+# ── Potions ──────────────────────────────────────────────────────────────────
+
+# PotionEffects.Apply's cases at 37e4264 (PotionEffects.cs:25-57): Block Potion, Clarity,
+# Duplicator, Gigantification, Powdered Demise, Radiant Tincture, Regen Potion, Shackling
+# Potion. More arrive from the potions branch, so this is a floor, not the whole set.
+MODELLED_AT_BASE = frozenset({5, 9, 17, 32, 47, 49, 50, 51})
+
+
+class PotionTests(unittest.TestCase):
+    """A potion the emulator cannot use is known content it does not model."""
+
+    def test_the_modelled_set_is_read_off_the_emulator(self) -> None:
+        modelled = potions.modelled_potion_ids()
+        # Fairy in a Bottle is found by name, outside PotionEffects (CombatEngine.cs:1891-1893).
+        self.assertLessEqual(MODELLED_AT_BASE | {FAIRY_IN_A_BOTTLE}, modelled)
+        self.assertLessEqual(modelled, set(ids.id_map_family("potions").values()))
+
+    def test_modelled_potions_raise_no_warning(self) -> None:
+        doc = load("player")
+        doc["player"]["potions"] = [
+            {"slot": 0, "id": "BLOCK_POTION"},
+            {"slot": 1, "id": "FAIRY_IN_A_BOTTLE"},
+            {"slot": 2, "id": None},
+        ]
+        result = convert.convert(doc)
+        self.assertEqual(result.warnings, [])
+        self.assertTrue(result.reliable)
+
+    def test_an_unmodelled_potion_warns_and_is_unreliable(self) -> None:
+        # Fire Potion has no case, so UsePotion spends it doing nothing
+        # (CombatEngine.cs:1870-1885).
+        self.assertNotIn(
+            FIRE_POTION,
+            potions.modelled_potion_ids(),
+            "Fire Potion is modelled now: use a potion that still has no case",
+        )
+        doc = load("player")
+        doc["player"]["potions"][1]["id"] = "FIRE_POTION"
+        result = convert.convert(doc)
+        self.assertEqual(
+            result.doc["potions"]["slots"][:3],
+            [REGEN_POTION, FIRE_POTION, BLOCK_POTION],
+        )
+        self.assertEqual(len(result.warnings), 1)
+        self.assertIn("player.potions[1]", result.warnings[0])
+        self.assertIn("FIRE_POTION", result.warnings[0])
+        self.assertFalse(result.reliable)
+
+    def test_only_the_switchs_own_cases_count(self) -> None:
+        source = """
+        public static class PotionEffects
+        {
+            private const int Rock = 45;
+            public static void Apply(int potionId, CombatState state)
+            {
+                // case 99: is only a comment
+                switch (potionId)
+                {
+                    case 5:
+                    case 9: // stacked labels share a body
+                        break;
+                    case Rock:
+                        switch (state.Turn) { case 7: break; }
+                        break;
+                    case 17 or 18:
+                    {
+                        break;
+                    }
+                    default:
+                        break;
+                }
+            }
+        }
+        """
+        self.assertEqual(potions.parse_modelled(source), {5, 9, 17, 18, 45})
+
+    def test_an_unsupported_declaration_is_subtracted(self) -> None:
+        body = """
+            public static void Apply(int potionId, CombatState state)
+            {
+                switch (potionId) { case 5: case 9: case 23: case 45: break; }
+            }
+        """
+        for declaration, left in (
+            ("public static readonly int[] Unsupported = [9, 23];", {5, 45}),
+            (
+                "static readonly HashSet<int> UnsupportedPotions = new() { 23 };",
+                {5, 9, 45},
+            ),
+            (
+                "const int Rock = 45; static int[] Unsupported => new[] { Rock };",
+                {5, 9, 23},
+            ),
+            ('static int[] Unsupported = [Potions.FindId("FirePotion")!.Value];', None),
+            (
+                'static int[] Unsupported = [GeneratedData.Potions.FindId("FirePotion")];',
+                {5, 9, 45},
+            ),
+            ("static int[] Unsupported = [];", {5, 9, 23, 45}),
+        ):
+            with self.subTest(declaration):
+                source = "class PotionEffects {\n" + declaration + body + "}"
+                if left is None:
+                    with self.assertRaises(RuntimeError):
+                        potions.parse_modelled(source)
+                else:
+                    self.assertEqual(potions.parse_modelled(source), left)
+
+    def test_a_label_it_cannot_read_raises(self) -> None:
+        source = """
+            public static void Apply(int potionId, CombatState state)
+            {
+                switch (potionId) { case 5 when state.Turn > 1: break; }
+            }
+        """
+        with self.assertRaises(RuntimeError):
+            potions.parse_modelled(source)
+
+    def test_a_missing_switch_raises(self) -> None:
+        with self.assertRaises(RuntimeError):
+            potions.parse_modelled("public static void Apply(int id) { }")
+
+
+# ── CombatState-held power state ─────────────────────────────────────────────
+
+
+class CombatStateCounterTests(unittest.TestCase):
+    """Power state the emulator keeps on CombatState: derived from history, or flagged."""
+
+    @staticmethod
+    def with_powers(*entries: str, history: dict[str, int]) -> dict[str, Any]:
+        doc = load("player")
+        doc["player"]["powers"] += [{"id": entry, "amount": 1} for entry in entries]
+        doc["history"] = history
+        return doc
+
+    def test_smoggy_after_a_skill_this_turn(self) -> None:
+        # CombatState.SkillPlayedWhileSmoggy is set by a Skill played under Smoggy
+        # (CombatEngine.cs:152-155) and bars the next (:2247-2251).
+        result = convert.convert(
+            self.with_powers("SMOGGY_POWER", history={"skills_played_this_turn": 1}),
+        )
+        self.assertIs(result.doc["counters"]["skill_played_while_smoggy"], True)
+        self.assertEqual(result.warnings, [])
+
+    def test_smoggy_before_any_skill(self) -> None:
+        result = convert.convert(
+            self.with_powers("SMOGGY_POWER", history={"skills_played_this_turn": 0}),
+        )
+        self.assertIs(result.doc["counters"]["skill_played_while_smoggy"], False)
+        self.assertEqual(result.warnings, [])
+
+    def test_smoggy_without_the_skill_count_warns(self) -> None:
+        result = convert.convert(self.with_powers("SMOGGY_POWER", history={}))
+        self.assertNotIn("skill_played_while_smoggy", result.doc["counters"])
+        self.assertEqual(len(result.warnings), 1)
+        self.assertIn("SMOGGY_POWER", result.warnings[0])
+        self.assertIn("skill_cards_played_this_turn", result.warnings[0])
+        self.assertFalse(result.reliable)
+
+    def test_nostalgias_count_is_attacks_plus_skills(self) -> None:
+        # AttackOrSkillCardsPlayedThisTurn (CombatEngine.cs:4297-4311, :4638-4641).
+        result = convert.convert(
+            self.with_powers(
+                "NOSTALGIA_POWER",
+                history={"attacks_played_this_turn": 1, "skills_played_this_turn": 2},
+            ),
+        )
+        self.assertEqual(
+            result.doc["counters"]["attack_or_skill_cards_played_this_turn"],
+            3,
+        )
+        self.assertEqual(result.warnings, [])
+
+    def test_nostalgia_without_both_counts_warns(self) -> None:
+        for history in (
+            {"attacks_played_this_turn": 1},
+            {"skills_played_this_turn": 1},
+            {},
+        ):
+            with self.subTest(history=history):
+                result = convert.convert(
+                    self.with_powers("NOSTALGIA_POWER", history=history),
+                )
+                self.assertNotIn(
+                    "attack_or_skill_cards_played_this_turn",
+                    result.doc["counters"],
+                )
+                self.assertEqual(len(result.warnings), 1)
+                self.assertIn("NOSTALGIA_POWER", result.warnings[0])
+
+    def test_other_powers_reading_turn_counts(self) -> None:
+        # Each hook reads a count only `history` can supply (see powers.HISTORY_READS for
+        # the emulator lines), so an absent count is flagged and a present one is not.
+        for entry, key in (
+            ("JUGGLING_POWER", "attacks_played_this_turn"),
+            ("LETHALITY_POWER", "attacks_played_this_turn"),
+            ("ECHO_FORM_POWER", "cards_played_this_turn"),
+            ("RINGING_POWER", "cards_played_this_turn"),
+            ("SLOTH_POWER", "cards_played_this_turn"),
+        ):
+            with self.subTest(entry):
+                missing = convert.convert(self.with_powers(entry, history={}))
+                self.assertEqual(len(missing.warnings), 1)
+                self.assertIn(entry, missing.warnings[0])
+                supplied = convert.convert(self.with_powers(entry, history={key: 1}))
+                self.assertEqual(supplied.warnings, [])
+
+
 # ── Powers, directly ─────────────────────────────────────────────────────────
 
 
@@ -993,7 +1203,6 @@ class PowerTranslationTests(unittest.TestCase):
             ("MONOLOGUE_POWER", "Monologue"),
             ("ORBIT_POWER", "Orbit"),
             ("AUTOMATION_POWER", "AutomationPower"),
-            ("PANACHE_POWER", "PanachePower"),
             ("TENDER_POWER", "Tender"),
         ):
             out, warnings = self.to_buffs([{"id": entry, "amount": 4}], "player")
@@ -1002,6 +1211,87 @@ class PowerTranslationTests(unittest.TestCase):
             self.assertEqual(out, [buff(stored, 4)], entry)
             self.assertEqual(len(warnings), 1, entry)
             self.assertIn(entry, warnings[0])
+
+    def test_a_held_panache_is_armed(self) -> None:
+        # `PanachePower.alreadyApplied` (CombatEngine.cs:4168-4180): the play that applied
+        # the power has resolved by any decision point, so the next play counts. Its
+        # progress towards the burst is still not carried.
+        out, warnings = self.to_buffs([{"id": "PANACHE_POWER", "amount": 10}], "player")
+        self.assertEqual(out, [buff("PanachePower", 10), buff("PanacheArmed", 1)])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("CardsPlayedSincePanacheProc", warnings[0])
+
+    def test_toric_toughness_block_is_flagged(self) -> None:
+        # Its amount is the TURNS left; the block rides CombatState.ToricToughnessBlock
+        # (CombatEngine.cs:1389-1396), which no live field carries.
+        out, warnings = self.to_buffs(
+            [{"id": "TORIC_TOUGHNESS_POWER", "amount": 2}],
+            "player",
+        )
+        self.assertEqual(out, [buff("ToricToughness", 2)])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("TORIC_TOUGHNESS_POWER", warnings[0])
+        self.assertIn("ToricToughnessBlock", warnings[0])
+
+    def test_void_form_count_is_flagged(self) -> None:
+        # CombatState.VoidFormCardsPlayedThisTurn (CombatEngine.cs:2241-2245).
+        out, warnings = self.to_buffs(
+            [{"id": "VOID_FORM_POWER", "amount": 2}],
+            "player",
+        )
+        self.assertEqual(out, [buff("VoidForm", 2)])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("VoidFormCardsPlayedThisTurn", warnings[0])
+
+    def test_other_combat_state_halves_are_flagged(self) -> None:
+        # Powers whose emulator hook reads state the live snapshot has no field for.
+        for entry, stored, owner, emulator_state in (
+            ("UNMOVABLE_POWER", "UnmovablePower", "player", "BlockGainsThisTurn"),
+            (
+                "CHAINS_OF_BINDING_POWER",
+                "ChainsOfBinding",
+                "player",
+                "BoundCardsThisTurn",
+            ),
+            ("PALE_BLUE_DOT_POWER", "PaleBlueDot", "player", "CardPlaysLastTurn"),
+            ("PHANTOM_BLADES_POWER", "PhantomBlades", "player", "ShivsPlayedThisTurn"),
+            ("ITERATION_POWER", "Iteration", "player", "StatusCardsDrawnThisTurn"),
+            ("NIGHTMARE_POWER", "Nightmare", "player", "CopiesToHandBeforeDraw"),
+            ("THE_BOMB_POWER", "TheBombPower", "player", "TheBombDamage"),
+            ("SKITTISH_POWER", "Skittish", "enemy", "SkittishSpent"),
+        ):
+            with self.subTest(entry):
+                out, warnings = self.to_buffs([{"id": entry, "amount": 3}], owner)
+                self.assertEqual(out, [buff(stored, 3)])
+                self.assertEqual(len(warnings), 1)
+                self.assertIn(entry, warnings[0])
+                self.assertIn(emulator_state, warnings[0])
+
+    def test_inferno_self_damage_is_derived_from_its_plays(self) -> None:
+        # InfernoPower is 6 a play, 9 upgraded, and its SelfDamage var goes up by one a
+        # play (decompiled Inferno.cs, InfernoPower.cs `IncrementSelfDamage`); the
+        # emulator keeps that in InfernoSelfDamage (CardEffects.cs:1022-1025). 15 is one
+        # plain play and one upgraded -- two plays, nothing else adds to 15.
+        out, warnings = self.to_buffs([{"id": "INFERNO_POWER", "amount": 15}], "player")
+        self.assertEqual(out, [buff("Inferno", 15), buff("InfernoSelfDamage", 2)])
+        self.assertEqual(warnings, [])
+
+    def test_an_ambiguous_inferno_warns(self) -> None:
+        # 18 is three plain plays or two upgraded ones.
+        out, warnings = self.to_buffs([{"id": "INFERNO_POWER", "amount": 18}], "player")
+        self.assertEqual(out[0], buff("Inferno", 18))
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("INFERNO_POWER", warnings[0])
+
+    def test_every_table_entry_is_a_game_power(self) -> None:
+        tables = (
+            set(powers._UNCARRIED_HALF)
+            | set(powers.HISTORY_READS)
+            | set(powers._PER_PLAY_SELF_DAMAGE)
+            | {powers._PANACHE_ARMED[0]}
+        )
+        for entry in tables:
+            self.assertIsNotNone(powers.buff_id(entry), entry)
 
     def test_surrounded_facing_is_not_in_the_snapshot(self) -> None:
         out, warnings = self.to_buffs(
@@ -1307,6 +1597,8 @@ class EmulatorNameTests(unittest.TestCase):
         written = set(convert.counter_names())
         self.assertIn("whispering_earring_spent", written)
         self.assertIn("belt_buckle_applied", written)
+        self.assertIn("skill_played_while_smoggy", written)
+        self.assertIn("attack_or_skill_cards_played_this_turn", written)
         self.assertLessEqual(written, fields, sorted(written - fields))
 
 

@@ -19,6 +19,7 @@ entirely -- `to_buffs` translates, or says in a warning what it could not carry.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -260,12 +261,93 @@ _UNCARRIED_HALF = {
     ),
     "POSSESS_SPEED_POWER": "the Dexterity stolen so far, which the emulator keeps as the magnitude",
     "POSSESS_STRENGTH_POWER": "the Strength stolen so far, which the emulator keeps as the magnitude",
+    # State the emulator keeps on CombatState, which no live field carries.
+    "TORIC_TOUGHNESS_POWER": (
+        "the block it hands back each turn (CombatState.ToricToughnessBlock): its amount "
+        "is the TURNS left (CombatEngine.cs:1389-1396)"
+    ),
+    "VOID_FORM_POWER": (
+        "the cards it has already made free this turn "
+        "(CombatState.VoidFormCardsPlayedThisTurn, CombatEngine.cs:2241-2245)"
+    ),
+    "UNMOVABLE_POWER": (
+        "the block gains it has already doubled this turn "
+        "(CombatState.BlockGainsThisTurn, CardEffects.cs:4863-4868)"
+    ),
+    "CHAINS_OF_BINDING_POWER": (
+        "which cards it bound this turn (CardInstance.Bound), how many "
+        "(CombatState.BoundCardsThisTurn) and whether one was played "
+        "(CombatState.BoundCardPlayedThisTurn) (CardEffects.cs:3014-3024, "
+        "CombatEngine.cs:1981-1982)"
+    ),
+    "PALE_BLUE_DOT_POWER": (
+        "last turn's card plays (CombatState.CardPlaysLastTurn), its threshold "
+        "(CombatEngine.cs:1768-1773)"
+    ),
+    "PHANTOM_BLADES_POWER": (
+        "the Shivs played this turn (CombatState.ShivsPlayedThisTurn), which decide "
+        "whether the next is the turn's first (CardEffects.cs:2685-2694)"
+    ),
+    "ITERATION_POWER": (
+        "the Status cards drawn this turn (CombatState.StatusCardsDrawnThisTurn), which "
+        "decide whether the next is the first (CardEffects.cs:2702-2715)"
+    ),
+    "NIGHTMARE_POWER": (
+        "the card it will copy into hand (CombatState.CopiesToHandBeforeDraw, the "
+        "snapshot's incoming.copies_to_hand; CardEffects.cs:10291-10302)"
+    ),
+    # The same, held in a companion BuffId the live power has no field for.
+    "THE_BOMB_POWER": (
+        "the damage it will deal (BuffId.TheBombDamage): its amount is the TURNS left, "
+        "and each Instanced bomb keeps its own (decompiled TheBombPower.cs `SetDamage`)"
+    ),
+    "SKITTISH_POWER": (
+        "whether it has already flinched this turn (BuffId.SkittishSpent, "
+        "CardEffects.cs:4768-4779)"
+    ),
 }
 
+# The CombatState counters `combat_counters` can derive.
+COMBAT_COUNTER_NAMES = frozenset({"skill_played_while_smoggy"})
+
+# Player powers whose emulator hook reads a per-turn counter that only the live `history`
+# can supply, by the counter's snapshot name. `combat_counters` warns when a held power
+# reads one history did not report, since the emulator would read 0.
+HISTORY_READS: dict[str, tuple[str, ...]] = {
+    # CombatState.SkillPlayedWhileSmoggy: one Skill a turn (CombatEngine.cs:152-155, :2247-2251).
+    "SMOGGY_POWER": ("skill_cards_played_this_turn",),
+    # AttackOrSkillCardsPlayedThisTurn (CombatEngine.cs:4297-4311).
+    "NOSTALGIA_POWER": (
+        "attack_cards_played_this_turn",
+        "skill_cards_played_this_turn",
+    ),
+    # The third Attack of the turn is copied (CombatEngine.cs:366-374).
+    "JUGGLING_POWER": ("attack_cards_played_this_turn",),
+    # Only the turn's first Attack pays (CombatEngine.cs:207-211, CardEffects.cs:4594-4598).
+    "LETHALITY_POWER": ("attack_cards_played_this_turn",),
+    # The first N plays each turn are doubled (CombatEngine.cs:232-241).
+    "ECHO_FORM_POWER": ("card_plays_this_turn",),
+    # One card a turn (CombatEngine.cs:1978-1979).
+    "RINGING_POWER": ("card_plays_this_turn",),
+    # At most N cards a turn (CombatEngine.cs:1984-1988).
+    "SLOTH_POWER": ("cards_played_this_turn",),
+}
+
+# Powers whose card adds a fixed amount per play AND bumps a `SelfDamage` var once per
+# play, which the emulator keeps in a companion buff: (companion, per play, upgraded).
 # `CrimsonMantle` applies 8 block, 10 upgraded (decompiled CrimsonMantle.cs PowerVar 8,
-# `UpgradeValueBy(2m)`; CardEffects.cs:986-987), and bumps `SelfDamage` once per play.
-_MANTLE_BLOCK = 8
-_MANTLE_UPGRADED_BLOCK = 10
+# `UpgradeValueBy(2m)`; CardEffects.cs:986-987); `Inferno` 6, 9 upgraded (decompiled
+# Inferno.cs PowerVar 6, `UpgradeValueBy(3m)`; CardEffects.cs:1022-1025). The number of
+# plays is recovered from the amount when only one count of plays can make it.
+_PER_PLAY_SELF_DAMAGE = {
+    "CRIMSON_MANTLE_POWER": ("CrimsonMantleSelfDamage", 8, 10),
+    "INFERNO_POWER": ("InfernoSelfDamage", 6, 9),
+}
+
+# `PanachePower`'s `alreadyApplied` (CombatEngine.cs:4168-4180): the play that applied the
+# power does not count towards its five. At any settled decision point that play has
+# resolved, so a held Panache is armed.
+_PANACHE_ARMED = ("PANACHE_POWER", "PanacheArmed")
 
 
 @cache
@@ -292,13 +374,14 @@ def buff_id(entry: str) -> int | None:
     return _ordinal_by_live().get(entry)
 
 
-def _mantle_plays(block: int) -> list[int]:
-    """How many Crimson Mantle plays can add up to `block`: 8n + 2k with 0 <= k <= n."""
+def _plays(amount: int, base: int, upgraded: int) -> list[int]:
+    """List how many plays can add up to `amount`: base*n + (upgraded-base)*k, 0 <= k <= n."""
+    step = upgraded - base
     return [
         plays
-        for plays in range(1, block // _MANTLE_BLOCK + 1)
-        if _MANTLE_BLOCK * plays <= block <= _MANTLE_UPGRADED_BLOCK * plays
-        and (block - _MANTLE_BLOCK * plays) % 2 == 0
+        for plays in range(1, amount // base + 1)
+        if base * plays <= amount <= upgraded * plays
+        and (amount - base * plays) % step == 0
     ]
 
 
@@ -362,14 +445,17 @@ def to_buffs(
             magnitude = sign * amount if owner == "player" else -sign * amount
         _add(totals, ordinal, magnitude)
 
-        if entry == "CRIMSON_MANTLE_POWER":
-            plays = _mantle_plays(amount)
+        if (per_play := _PER_PLAY_SELF_DAMAGE.get(entry)) is not None:
+            companion, base, upgraded = per_play
+            plays = _plays(amount, base, upgraded)
             if len(plays) != 1:
                 sink.append(
-                    f"{where}: {entry}: {amount} block does not say how many plays made it "
+                    f"{where}: {entry}: {amount} does not say how many plays made it "
                     f"(candidates {plays}), so its self-damage is a guess",
                 )
-            _add(totals, _ORDINAL_OF["CrimsonMantleSelfDamage"], min(plays, default=0))
+            _add(totals, _ORDINAL_OF[companion], min(plays, default=0))
+        if entry == _PANACHE_ARMED[0]:
+            totals[_ORDINAL_OF[_PANACHE_ARMED[1]]] = 1
         if (half := _UNCARRIED_HALF.get(entry)) is not None:
             sink.append(f"{where}: {entry}: {half} is not in the live snapshot")
     return [
@@ -384,3 +470,34 @@ def to_ai_fields(live_powers: list[dict[str, Any]]) -> dict[str, int]:
         for power in live_powers
         if power.get("id") in AI_FIELD_POWERS
     }
+
+
+def combat_counters(
+    live_powers: list[dict[str, Any]],
+    history: Mapping[str, int],
+    *,
+    path: str = "player.powers",
+) -> tuple[dict[str, int | bool], list[str]]:
+    """Derive the CombatState counters the player's powers depend on, and flag the rest.
+
+    `history` holds the snapshot counters the live `history` supplied. A held power that
+    reads a counter history did not supply is warned about (`HISTORY_READS`). Smoggy's
+    flag is derived: `SkillPlayedWhileSmoggy` is set by a Skill played while Smoggy is up
+    (CombatEngine.cs:152-155), and Smoggy stands all fight once applied
+    (CombatEngine.cs:1585-1596), so it is exactly "a Skill was played this turn".
+    """
+    counters: dict[str, int | bool] = {}
+    warnings: list[str] = []
+    for index, power in enumerate(live_powers):
+        entry = power["id"]
+        missing = [name for name in HISTORY_READS.get(entry, ()) if name not in history]
+        if missing:
+            warnings.append(
+                f"{path}[{index}]: {entry} reads {', '.join(missing)}, which the live "
+                "history does not report; the emulator assumes 0",
+            )
+        elif entry == "SMOGGY_POWER":
+            counters["skill_played_while_smoggy"] = (
+                history["skill_cards_played_this_turn"] > 0
+            )
+    return counters, warnings

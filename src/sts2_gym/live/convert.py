@@ -16,7 +16,7 @@ import copy
 from dataclasses import dataclass
 from typing import Any, cast
 
-from sts2_gym.live import ConversionError, cards, ids, powers, relics
+from sts2_gym.live import ConversionError, cards, ids, potions, powers, relics
 
 __all__ = [
     "ConversionError",
@@ -59,6 +59,16 @@ HISTORY_COUNTERS: dict[str, tuple[str, ...]] = {
     "attacks_played_this_turn": ("attack_cards_played_this_turn",),
     "skills_played_this_turn": ("skill_cards_played_this_turn",),
 }
+
+# `AttackOrSkillCardsPlayedThisTurn` counts finished Attack and Skill plays
+# (CombatEngine.cs:4638-4641) -- Nostalgia's count, which the game takes over the turn's
+# Attack and Skill plays (decompiled NostalgiaPower.cs) -- so it is the sum of the two
+# counts history reports separately, when it reports both.
+_ATTACK_OR_SKILL = "attack_or_skill_cards_played_this_turn"
+_ATTACK_OR_SKILL_PARTS = (
+    "attack_cards_played_this_turn",
+    "skill_cards_played_this_turn",
+)
 
 # Whispering Earring's turn-one auto-play is behind this flag (CombatState.cs:394); a
 # loaded position is always past the point where it would run.
@@ -130,6 +140,8 @@ def counter_names() -> frozenset[str]:
     """Every `counters` key the converter can write."""
     return (
         frozenset(name for names in HISTORY_COUNTERS.values() for name in names)
+        | {_ATTACK_OR_SKILL}
+        | powers.COMBAT_COUNTER_NAMES
         | relics.combat_counter_names()
         | frozenset(_ALWAYS)
     )
@@ -260,10 +272,14 @@ def _history(value: object) -> dict[str, int]:
         amount = _int(raw, f"history.{key}", minimum=0)
         for name in HISTORY_COUNTERS[key]:
             counters[name] = amount
+    if all(part in counters for part in _ATTACK_OR_SKILL_PARTS):
+        counters[_ATTACK_OR_SKILL] = sum(
+            counters[part] for part in _ATTACK_OR_SKILL_PARTS
+        )
     return counters
 
 
-def _potions(player: dict[str, Any]) -> dict[str, Any]:
+def _potions(player: dict[str, Any], warnings: list[str]) -> dict[str, Any]:
     capacity = _int(player["max_potion_slots"], "player.max_potion_slots", minimum=0)
     if capacity > POTION_SLOT_CAPACITY:
         raise ConversionError(
@@ -283,8 +299,15 @@ def _potions(player: dict[str, Any]) -> dict[str, Any]:
             )
         taken.add(slot)
         entry = _str_or_none(potion["id"], f"{where}.id")
-        if entry is not None:
-            slots[slot] = ids.potion_id(entry, path=f"{where}.id")
+        if entry is None:
+            continue
+        slots[slot] = ids.potion_id(entry, path=f"{where}.id")
+        if slots[slot] not in potions.modelled_potion_ids():
+            warnings.append(
+                f"{where}: potion {entry} has no emulator effect (no case in "
+                "PotionEffects.Apply); using it there spends it for nothing "
+                "(CombatEngine.cs:1870-1885)",
+            )
     return {"max_slots": capacity, "slots": slots}
 
 
@@ -639,8 +662,9 @@ def convert(live: dict[str, Any]) -> ConversionResult:
         key: _int(player[key], f"player.{key}", minimum=0)
         for key in ("hp", "max_hp", "block", "energy", "max_energy", "gold", "stars")
     }
+    player_powers = _powers(player["powers"], "player.powers")
     buffs = powers.to_buffs(
-        _powers(player["powers"], "player.powers"),
+        player_powers,
         owner="player",
         path="player.powers",
         warnings=warnings,
@@ -658,6 +682,12 @@ def convert(live: dict[str, Any]) -> ConversionResult:
 
     history = _history(top["history"])
     warnings.extend(relics.reads_warnings(live_relics, history, path="player.relics"))
+    power_counters, power_warnings = powers.combat_counters(
+        player_powers,
+        history,
+        path="player.powers",
+    )
+    warnings.extend(power_warnings)
 
     osty_hp, osty_max_hp = _osty(player["osty"])
     corruption = any(buff["id"] == powers.buff_id("CORRUPTION_POWER") for buff in buffs)
@@ -688,7 +718,7 @@ def convert(live: dict[str, Any]) -> ConversionResult:
             "debuffs_at_round_start": None,
         },
         "relics": relic_state.relics,
-        "potions": _potions(player),
+        "potions": _potions(player, warnings),
         "piles": {
             "hand": _pile(top, "hand", warnings, corruption),
             "discard": _pile(top, "discard_pile", warnings, corruption),
@@ -697,7 +727,7 @@ def convert(live: dict[str, Any]) -> ConversionResult:
         },
         "incoming": {"return_to_hand": [], "copies_to_hand": []},
         "enemies": _enemies(top, turn, warnings),
-        "counters": {**history, **relic_state.counters, **_ALWAYS},
+        "counters": {**history, **power_counters, **relic_state.counters, **_ALWAYS},
         "pending_selection": None,
     }
     _pending_selection(top["pending_selection"], warnings)
