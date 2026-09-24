@@ -569,13 +569,9 @@ public static class CardEffects
             }
 
             case IC.SetupStrike: // 1-cost, 7/9 dmg + 2/3 temporary Strength
-            {
                 DealDamage(state, Dmg(state, def, upgraded, card));
-                int strength = upgraded ? 3 : 2;
-                RelicEffects.GainPlayerStrength(state, strength);
-                BuffSystem.Apply(state.PlayerBuffs, BuffId.TemporaryStrength, strength);
+                RelicEffects.GainTemporaryPlayerStrength(state, upgraded ? 3 : 2);
                 break;
-            }
 
             case IC.Spite: // 0-cost, 5 dmg; 2/3 hits if the player lost HP this turn
                 DealDamageMultiHit(
@@ -2499,20 +2495,18 @@ public static class CardEffects
     }
 
     /// <summary>Fills the first empty potion slot, if any, with a uniformly random potion
-    /// id. Also Entropic Brew's loop over every empty slot: the game's own
-    /// `PotionFactory.CreateRandomPotionInCombat` rolls rarity-weighted odds this does not
-    /// model, so both callers get the same approximation rather than two different ones.</summary>
+    /// id -- Alchemize's approximation. The game's own
+    /// `PotionFactory.CreateRandomPotionInCombat` rolls rarity-weighted odds over the
+    /// character and shared pools this does not model (Entropic Brew's out-of-combat roll
+    /// is modelled, in `PotionEffects`).</summary>
     internal static void ProcureRandomPotion(CombatState state, Random rng)
     {
-        for (int i = 0; i < state.MaxPotionSlots; i++)
+        int slot = PotionEffects.FirstOpenPotionSlot(state);
+        if (slot >= 0)
         {
-            if (state.PotionSlots[i] == 0)
-            {
-                // PotionFactory.CreateRandomPotionInCombat reads
-                // Rng.CombatPotionGeneration, not the combat rng.
-                state.PotionSlots[i] = (state.PotionGenerationRng ?? rng).Next(1, 64);
-                break;
-            }
+            // PotionFactory.CreateRandomPotionInCombat reads
+            // Rng.CombatPotionGeneration, not the combat rng.
+            state.PotionSlots[slot] = (state.PotionGenerationRng ?? rng).Next(1, 64);
         }
     }
 
@@ -7936,8 +7930,7 @@ public static class CardEffects
                 // upgrading by 2 -- so FIVE Strength, or seven, and it is TAKEN BACK at the
                 // end of the turn. It was in a stack giving permanent Strength 1 or 2:
                 // wrong number and wrong duration, in opposite directions.
-                RelicEffects.GainPlayerStrength(state, upgraded ? 7 : 5);
-                BuffSystem.Apply(state.PlayerBuffs, BuffId.TemporaryStrength, upgraded ? 7 : 5);
+                RelicEffects.GainTemporaryPlayerStrength(state, upgraded ? 7 : 5);
                 break;
 
             case "NoEscape":
@@ -7969,8 +7962,7 @@ public static class CardEffects
                 // OnUpgrade +3 — temporary Strength for an ally, which is the player in
                 // singleplayer. It was grouped with the retain-hand cards, which is a
                 // different effect entirely.
-                RelicEffects.GainPlayerStrength(state, upgraded ? 8 : 5);
-                BuffSystem.Apply(state.PlayerBuffs, BuffId.TemporaryStrength, upgraded ? 8 : 5);
+                RelicEffects.GainTemporaryPlayerStrength(state, upgraded ? 8 : 5);
                 break;
             case "CorrosiveWave":
                 ApplyAllEnemyDebuff(state, BuffId.Poison, upgraded ? 5 : 3, rng);

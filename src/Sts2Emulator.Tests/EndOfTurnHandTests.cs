@@ -173,245 +173,109 @@ public class EndOfTurnHandTests
     }
 
     /// <summary>
-    /// Seed PRB00058's act 1 boss, replayed on the exact branch that aborted the process:
-    /// the training probe's run to the Soul Fysh fight at 120 simulations a decision, then
-    /// the search fork (`Sts2Run_Clone`, resample seed 14160) whose ninth step -- ending
-    /// the turn holding Beckon, with Centennial Puzzle unspent -- threw. The fight is then
-    /// played to its end.
+    /// Seed PRB00058's crash, rebuilt from its precondition instead of replayed from a
+    /// recorded trajectory: Soul Fysh's Beckon in hand, Centennial Puzzle held and not yet
+    /// spent this combat, and the turn ending with cards still to walk after the Beckon. The
+    /// hand, draw pile and HP are the ones the aborting search fork held on turn 2 (read back
+    /// off the probe's line at 4b02fc3, where that line still reached the fight). The
+    /// Beckon's 6 HP loss is the Puzzle's first, so three cards reach the hand while the turn
+    /// end is still walking it, which threw "Collection was modified" through the native
+    /// export. The fight is then played to its end.
     /// </summary>
+    /// <remarks>
+    /// The fork also held Battle Trance's NoDraw. It is left out here: `NoDrawPower` is only
+    /// removed in `AfterSideTurnEnd`, after `DoTurnEnd` has run the Beckon, so in the game it
+    /// would have gagged the Puzzle's draw, and a test that relied on the draw getting past it
+    /// would be relying on the emulator removing NoDraw early.
+    /// </remarks>
     [Fact]
-    public void SeedPrb00058SoulFyshFightPlaysToTheEnd()
+    public void SeedPrb00058CrashPreconditionEndsTheTurn()
     {
-        var run = new RunEngine();
-        // A8: the probe played this run when A8 was the only level the engine had.
-        run.Reset("PRB00058", ascension: 8);
-        foreach (int action in Prb00058RootActions)
+        var fight = Fight.Encounter(
+            CombatFactory.ActOneEncounter.SoulFysh,
+            ascension: 8,
+            seed: 0,
+            RelicEffects.CentennialPuzzle
+        );
+        var state = fight.State;
+        state.Hand =
+        [
+            Card(IC.DefendIronclad),
+            Card(ST.Injury),
+            Card(ST.Beckon),
+            Card(IC.StrikeIronclad),
+            Card(IC.Headbutt),
+        ];
+        state.DrawPile =
+        [
+            Card(IC.PommelStrike),
+            new CardInstance(IC.DefendIronclad, true),
+            Card(IC.StrikeIronclad),
+            Card(IC.Headbutt),
+        ];
+        state.DiscardPile = [];
+        state.PlayerHp = 60;
+        state.PlayerMaxHp = 80;
+        var dealt = AllCards(state).ToList();
+        Assert.Contains(state.Enemies, enemy => enemy.DefId == KE.SoulFysh);
+        Assert.Equal(0, PuzzleCounter(state));
+
+        var result = fight.EndTurn();
+
+        // The Puzzle paid out during the walk, and nothing the turn end held was lost.
+        Assert.Equal(1, PuzzleCounter(state));
+        var after = AllCards(state).ToList();
+        foreach (var group in dealt.GroupBy(card => (card.DefId, card.Upgraded)))
         {
-            Assert.Equal(0, run.Step(action, -1, out _, out _, out _));
+            Assert.True(
+                after.Count(card => (card.DefId, card.Upgraded) == group.Key) >= group.Count(),
+                $"{GeneratedData.Cards.Get(group.Key.DefId).Name} went missing at the turn end"
+            );
         }
 
-        Assert.Equal(RunPhase.Combat, run.State.Phase);
-        Assert.Contains(run.State.ActiveCombat!.Enemies, enemy => enemy.DefId == KE.SoulFysh);
-
-        var fork = run.Clone(resampleSeed: 14160);
-        foreach (int action in Prb00058ForkActions[..^1])
+        bool terminal = result.Terminal;
+        for (int step = 0; !terminal && step < 100; step++)
         {
-            Assert.Equal(0, fork.Step(action, -1, out _, out _, out _));
+            int[] legal = CombatEngine.ValidActions(state);
+            int action = legal.Contains(state.Hand.Count) ? state.Hand.Count : legal[0];
+            terminal = fight.Play(action).Terminal;
         }
 
-        var combat = fork.State.ActiveCombat!;
-        Assert.Contains(ST.Beckon, Fight.Ids(combat.Hand));
-        Assert.Equal(combat.Hand.Count, Prb00058ForkActions[^1]);
-        Assert.Equal(0, fork.Step(Prb00058ForkActions[^1], -1, out _, out _, out _));
-
-        for (int turn = 0; fork.State.Phase == RunPhase.Combat && turn < 100; turn++)
-        {
-            var fight = fork.State.ActiveCombat!;
-            int[] legal = CombatEngine.ValidActions(fight);
-            int action = legal.Contains(fight.Hand.Count) ? fight.Hand.Count : legal[0];
-            Assert.Equal(0, fork.Step(action, -1, out _, out _, out _));
-        }
-
-        Assert.NotEqual(RunPhase.Combat, fork.State.Phase);
+        Assert.True(terminal);
     }
 
     /// <summary>
-    /// Every action the probe's main line took from `Reset("PRB00058")` to the Soul Fysh
-    /// fight (`rl/run_train/probe_throughput.py`, `play_run("PRB00058", 120)`), all
-    /// untargeted.
+    /// The whole of seed PRB00058, played by a fixed policy until the run ends: in every
+    /// state, the lowest legal action. Nothing recorded, so a change to what the run offers
+    /// changes the path rather than breaking the test; what it pins is that no step on the
+    /// path aborts. The probe that found the crash played A8, the only level the engine had.
     /// </summary>
-    private static readonly int[] Prb00058RootActions =
-    [
-        0,
-        0,
-        0,
-        1,
-        2,
-        2,
-        2,
-        3,
-        3,
-        0,
-        2,
-        2,
-        3,
-        2,
-        2,
-        4,
-        2,
-        0,
-        0,
-        2,
-        3,
-        0,
-        4,
-        0,
-        1,
-        3,
-        3,
-        0,
-        1,
-        2,
-        4,
-        1,
-        3,
-        3,
-        4,
-        0,
-        0,
-        0,
-        3,
-        0,
-        1,
-        1,
-        2,
-        2,
-        1,
-        1,
-        2,
-        2,
-        4,
-        3,
-        2,
-        2,
-        0,
-        2,
-        0,
-        0,
-        0,
-        0,
-        3,
-        0,
-        2,
-        4,
-        3,
-        2,
-        5,
-        2,
-        3,
-        0,
-        2,
-        3,
-        0,
-        0,
-        0,
-        0,
-        3,
-        1,
-        0,
-        2,
-        0,
-        1,
-        0,
-        0,
-        0,
-        2,
-        1,
-        3,
-        2,
-        0,
-        3,
-        2,
-        0,
-        3,
-        2,
-        2,
-        1,
-        2,
-        3,
-        0,
-        4,
-        2,
-        0,
-        0,
-        0,
-        0,
-        1,
-        3,
-        0,
-        0,
-        1,
-        0,
-        3,
-        1,
-        1,
-        3,
-        3,
-        2,
-        4,
-        2,
-        8,
-        2,
-        4,
-        2,
-        2,
-        2,
-        2,
-        0,
-        0,
-        0,
-        2,
-        3,
-        0,
-        1,
-        1,
-        0,
-        3,
-        4,
-        2,
-        2,
-        2,
-        0,
-        1,
-        2,
-        4,
-        1,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        3,
-        0,
-        0,
-        1,
-        1,
-        0,
-        0,
-        3,
-        0,
-        3,
-        2,
-        3,
-        2,
-        7,
-        5,
-        3,
-        2,
-        5,
-        1,
-        0,
-        2,
-        1,
-        2,
-        0,
-        1,
-        0,
-        0,
-        2,
-        2,
-        0,
-        0,
-        0,
-        2,
-        3,
-        0,
-        0,
-        1,
-        0,
-    ];
+    [Fact]
+    public void SeedPrb00058PlaysToTheEndOfTheRun()
+    {
+        var run = new RunEngine();
+        run.Reset("PRB00058", ascension: 8);
+        var mask = new int[RunConstants.MaxActions];
+        bool terminal = false;
+        int step = 0;
+        for (; !terminal && step < MaxRunSteps; step++)
+        {
+            run.WriteActionMask(mask);
+            int action = Array.IndexOf(mask, 1);
+            Assert.True(action >= 0, $"no legal action at step {step} ({run.State.Phase})");
+            Assert.Equal(0, run.Step(action, -1, out _, out terminal, out _));
+        }
 
-    /// <summary>The aborting fork's steps; the last is the end turn that threw.</summary>
-    private static readonly int[] Prb00058ForkActions = [0, 4, 3, 1, 2, 3, 6, 4, 5];
+        Assert.True(terminal, $"the run was still going after {step} steps");
+        Assert.Equal(RunPhase.Complete, run.State.Phase);
+    }
+
+    /// <summary>A bound on the smoke test's steps, far past a run's length, so a loop fails rather than hangs.</summary>
+    private const int MaxRunSteps = 20_000;
+
+    private static IEnumerable<CardInstance> AllCards(CombatState state) =>
+        state.Hand.Concat(state.DrawPile).Concat(state.DiscardPile).Concat(state.ExhaustPile);
+
+    private static int PuzzleCounter(CombatState state) =>
+        state.Relics.Single(relic => relic.DefId == RelicEffects.CentennialPuzzle).Counter;
 }

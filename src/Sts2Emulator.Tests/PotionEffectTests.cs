@@ -1,5 +1,7 @@
 using Sts2Emulator.Core;
 using Sts2Emulator.Core.Effects;
+using Sts2Emulator.Core.Rng;
+using Sts2Emulator.Core.Run;
 using Sts2Emulator.GeneratedData;
 using Xunit;
 
@@ -483,11 +485,7 @@ public class PotionEffectTests
         // Strength deal 18 total.
         var state = CombatFactory.NewCombat(seed: 0);
         state.Hand = [];
-        state.DrawPile = TestDeck.Pile(
-            IC.StrikeIronclad,
-            IC.StrikeIronclad,
-            IC.StrikeIronclad
-        );
+        state.DrawPile = TestDeck.Pile(IC.StrikeIronclad, IC.StrikeIronclad, IC.StrikeIronclad);
         state.Enemies = [Enemy(hp: 100)];
 
         PotionEffects.Apply(15, state, new Random(0));
@@ -523,7 +521,7 @@ public class PotionEffectTests
 
         for (int i = 0; i < 3; i++)
         {
-            Assert.InRange(state.PotionSlots[i], 1, 63);
+            Assert.Contains(state.PotionSlots[i], RunRewardGenerator.PotionRewardPool.ToArray());
         }
 
         Assert.Equal(0, state.PotionSlots[3]);
@@ -542,8 +540,166 @@ public class PotionEffectTests
         PotionEffects.Apply(19, state, new Random(0));
 
         Assert.Equal(5, state.PotionSlots[1]);
-        Assert.InRange(state.PotionSlots[0], 1, 63);
-        Assert.InRange(state.PotionSlots[2], 1, 63);
+        Assert.Contains(state.PotionSlots[0], RunRewardGenerator.PotionRewardPool.ToArray());
+        Assert.Contains(state.PotionSlots[2], RunRewardGenerator.PotionRewardPool.ToArray());
+    }
+
+    /// <summary>
+    /// EntropicBrew.cs: while the belt has an open slot, procure
+    /// `PotionFactory.CreateRandomPotionOutOfCombat(Owner, Rng.CombatPotionGeneration)`.
+    /// `PotionFactory.CreateRandomPotion` draws `NextFloat()` for the rarity, then `NextItem`
+    /// over the options of that rarity, and `AddPotionInternal` takes the first open slot. So
+    /// each slot costs the stream two draws, in slot order. The expected ids replay that
+    /// roll on `GameRng`, the port of the game's `Rng`.
+    /// </summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(12345)]
+    public void EntropicBrew_RollsEachOpenSlotLikePotionFactory(int seed)
+    {
+        var fight = Fight.Hand().Enemy();
+        fight.State.PotionGenerationRng = new CountingRandom(seed);
+        fight.State.MaxPotionSlots = 3;
+        fight.State.PotionSlots[0] = EntropicBrew;
+
+        fight.Potion(0);
+
+        var game = new GameRng(seed);
+        int[] expected =
+        [
+            RollLikePotionFactory(game),
+            RollLikePotionFactory(game),
+            RollLikePotionFactory(game),
+        ];
+        Assert.Equal(expected, fight.State.PotionSlots[..3]);
+        Assert.Equal(6, fight.State.PotionGenerationRng.CallCount);
+        Assert.Equal(game.CallCount, fight.State.PotionGenerationRng.CallCount);
+    }
+
+    /// <summary>
+    /// `PotionModel.OnUseWrapper` calls `RemoveBeforeUse()` before `OnUse`, so the brew's own
+    /// slot is already open when its loop runs, and it is filled like the others.
+    /// </summary>
+    [Fact]
+    public void EntropicBrew_RefillsTheSlotItWasDrunkFrom()
+    {
+        var fight = Fight.Hand().Enemy();
+        fight.State.MaxPotionSlots = 3;
+        fight.State.PotionSlots[0] = BlockPotion;
+        fight.State.PotionSlots[1] = EntropicBrew;
+
+        fight.Potion(1);
+
+        Assert.Equal(BlockPotion, fight.State.PotionSlots[0]);
+        Assert.NotEqual(0, fight.State.PotionSlots[1]);
+        Assert.NotEqual(0, fight.State.PotionSlots[2]);
+        Assert.Equal(4, fight.State.PotionGenerationRng!.CallCount);
+    }
+
+    /// <summary>
+    /// A belt that is full but for the brew itself: the slot `RemoveBeforeUse` freed is the
+    /// only open one, so the loop rolls exactly once -- two draws -- fills it, and finds no
+    /// open slot left. The other potions are not touched.
+    /// </summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(7)]
+    public void EntropicBrew_OnAFullBeltRollsOnceIntoItsOwnSlot(int seed)
+    {
+        var fight = Fight.Hand().Enemy();
+        fight.State.PotionGenerationRng = new CountingRandom(seed);
+        fight.State.MaxPotionSlots = 3;
+        fight.State.PotionSlots[0] = BlockPotion;
+        fight.State.PotionSlots[1] = EntropicBrew;
+        fight.State.PotionSlots[2] = FirePotion;
+
+        fight.Potion(1);
+
+        int[] expected = [BlockPotion, RollLikePotionFactory(new GameRng(seed)), FirePotion];
+        Assert.Equal(expected, fight.State.PotionSlots[..3]);
+        Assert.Equal(2, fight.State.PotionGenerationRng.CallCount);
+    }
+
+    /// <summary>
+    /// PotionFactory's odds: Rare at or under 0.1, Uncommon at or under 0.35, Common above --
+    /// 10%, 25% and 65%. The options are `GetPotionOptions`: the Ironclad pool, then the
+    /// shared one. The out-of-combat roll has no `CanBeGeneratedInCombat` filter, so Blood
+    /// Potion, Fruit Juice and Fairy in a Bottle can come up, and over enough seeds every
+    /// option does.
+    /// </summary>
+    [Fact]
+    public void EntropicBrew_RollsRarityWithPotionFactoryOdds()
+    {
+        int[] options = [.. PotionPools.Ironclad.ToArray(), .. PotionPools.Shared.ToArray()];
+        var byRarity = new Dictionary<PotionRarity, int>();
+        var seen = new HashSet<int>();
+        var fight = Fight.Hand().Enemy();
+        fight.State.MaxPotionSlots = 3;
+        const int Seeds = 2000;
+        for (int seed = 0; seed < Seeds; seed++)
+        {
+            fight.State.PotionGenerationRng = new CountingRandom(seed);
+            Array.Clear(fight.State.PotionSlots);
+            fight.State.PotionSlots[0] = EntropicBrew;
+
+            fight.Potion(0);
+
+            foreach (int potion in fight.State.PotionSlots[..3])
+            {
+                Assert.Contains(potion, options);
+                seen.Add(potion);
+                var rarity = GeneratedData.Potions.Get(potion).Rarity;
+                byRarity[rarity] = byRarity.GetValueOrDefault(rarity) + 1;
+            }
+        }
+
+        const double Rolls = Seeds * 3;
+        Assert.InRange(byRarity[PotionRarity.Rare] / Rolls, 0.08, 0.12);
+        Assert.InRange(byRarity[PotionRarity.Uncommon] / Rolls, 0.22, 0.28);
+        Assert.InRange(byRarity[PotionRarity.Common] / Rolls, 0.62, 0.68);
+        Assert.Equal(options.Order(), seen.Order());
+    }
+
+    /// <summary>
+    /// `Sozu.ShouldProcurePotion` is false for its owner, so the first `TryToProcure` fails
+    /// and the brew's loop breaks: one roll, two draws, and nothing gained.
+    /// </summary>
+    [Fact]
+    public void EntropicBrew_UnderSozuRollsOnceAndGainsNothing()
+    {
+        var fight = Fight.Hand().Enemy();
+        fight.State.Relics.Add(new RelicInstance(RelicEffects.Sozu));
+        fight.State.MaxPotionSlots = 3;
+        fight.State.PotionSlots[0] = EntropicBrew;
+
+        fight.Potion(0);
+
+        Assert.All(fight.State.PotionSlots, slot => Assert.Equal(0, slot));
+        Assert.Equal(2, fight.State.PotionGenerationRng!.CallCount);
+    }
+
+    private const int BlockPotion = 5;
+
+    private const int EntropicBrew = 19;
+
+    private const int FirePotion = 23;
+
+    /// <summary>
+    /// `PotionFactory.CreateRandomPotion(options, 1, rng)`, transcribed: `NextFloat()` against
+    /// float thresholds, then `NextItem` over the options of that rarity in pool order.
+    /// </summary>
+    private static int RollLikePotionFactory(GameRng rng)
+    {
+        float roll = rng.NextFloat();
+        var rarity =
+            roll <= 0.1f ? PotionRarity.Rare
+            : roll <= 0.35f ? PotionRarity.Uncommon
+            : PotionRarity.Common;
+        int[] options = [.. PotionPools.Ironclad.ToArray(), .. PotionPools.Shared.ToArray()];
+        return rng.NextItem(
+            options.Where(potion => GeneratedData.Potions.Get(potion).Rarity == rarity).ToArray()
+        );
     }
 
     // ── 20: Essence of Darkness ─────────────────────────────────────────────────────
