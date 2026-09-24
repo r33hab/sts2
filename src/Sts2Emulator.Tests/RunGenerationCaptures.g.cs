@@ -20,7 +20,7 @@ public class RunGenerationCaptureTests
     public void RunGeneration_MatchesCapture_4Mw6Ntldwu()
     {
         var engine = new RunEngine();
-        engine.Reset("4MW6NTLDWU");
+        engine.Reset("4MW6NTLDWU", ascension: 8);
         var s = engine.State;
 
         Assert.Equal(RunConstants.ActOvergrowth, s.Act);
@@ -46,7 +46,7 @@ public class RunGenerationCaptureTests
     public void RunGeneration_MatchesCapture_Aab()
     {
         var engine = new RunEngine();
-        engine.Reset("AAB");
+        engine.Reset("AAB", ascension: 8);
         var s = engine.State;
 
         Assert.Equal(RunConstants.ActOvergrowth, s.Act);
@@ -72,7 +72,7 @@ public class RunGenerationCaptureTests
     public void RunGeneration_MatchesCapture_Headless1()
     {
         var engine = new RunEngine();
-        engine.Reset("HEADLESS1");
+        engine.Reset("HEADLESS1", ascension: 8);
         var s = engine.State;
 
         Assert.Equal(RunConstants.ActUnderdocks, s.Act);
@@ -98,7 +98,7 @@ public class RunGenerationCaptureTests
     public void RunGeneration_MatchesCapture_L4Cef9U55L()
     {
         var engine = new RunEngine();
-        engine.Reset("L4CEF9U55L");
+        engine.Reset("L4CEF9U55L", ascension: 8);
         var s = engine.State;
 
         Assert.Equal(RunConstants.ActUnderdocks, s.Act);
@@ -124,7 +124,7 @@ public class RunGenerationCaptureTests
     public void RunGeneration_MatchesCapture_Uns55Lcmkp()
     {
         var engine = new RunEngine();
-        engine.Reset("UNS55LCMKP");
+        engine.Reset("UNS55LCMKP", ascension: 8);
         var s = engine.State;
 
         Assert.Equal(RunConstants.ActUnderdocks, s.Act);

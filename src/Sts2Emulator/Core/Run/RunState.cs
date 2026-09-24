@@ -132,6 +132,13 @@ public sealed record ActRooms(
 public sealed class RunState
 {
     public string StringSeed = "";
+
+    /// <summary>
+    /// The run's ascension level -- the game's <c>RunState.AscensionLevel</c>, which every
+    /// <c>AscensionHelper</c> check reads. The run's own rules read it here, and every
+    /// combat the run starts is handed it as <see cref="CombatState.AscensionLevel" />.
+    /// </summary>
+    public int AscensionLevel = Ascension.DefaultLevel;
     public RunRngSet Rng = new("0");
     public PlayerRngSet PlayerRng = new(new RunRngSet("0"));
     public int PlayerHp;
@@ -167,9 +174,10 @@ public sealed class RunState
     /// </summary>
     /// <remarks>
     /// <c>Player.CreateForNewRun</c> passes a literal 3 and
-    /// <c>Player.initialMaxPotionSlotCount</c> is 3, but every live capture at A8 reports
-    /// <c>max_potion_slots: 2</c> -- the emulator models A8, so 2 is the base here and the
-    /// decompiled constant is the un-ascended one. Phial Holster's
+    /// <c>Player.initialMaxPotionSlotCount</c> is 3, and every live capture at A8 reports
+    /// <c>max_potion_slots: 2</c>: <c>AscensionManager.ApplyEffectsTo</c> takes one away
+    /// under TightBelt (A4). <c>RunEngine.Reset</c> sets it from the run's level; the 2
+    /// here is A8's, for a state no reset has touched. Phial Holster's
     /// <c>GainMaxPotionCount(1)</c> is what moves it, and a capture holding three potions
     /// is what proved it moves at all.
     /// </remarks>
@@ -508,6 +516,13 @@ public sealed class RunState
     /// disables itself afterwards.
     /// </summary>
     public bool LavaRockTriggered;
+
+    /// <summary>
+    /// Silver Crucible's `TreasureRoomsEntered`: treasure rooms walked into while the relic
+    /// is held. Its `ShouldGenerateTreasure` answers <c>TreasureRoomsEntered &gt; 1</c>, so
+    /// the first chest after the pickup is empty and every later one is an ordinary chest.
+    /// </summary>
+    public int SilverCrucibleTreasureRoomsEntered;
 
     /// <summary>
     /// Relic rewards still owed, each already rolled. The screen carries one at a time,

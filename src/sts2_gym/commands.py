@@ -25,6 +25,7 @@ from .run_constants import (
     PHASE_TREASURE,
     REWARD_SKIP_ACTION,
     SHOP_SKIP_ACTION,
+    TREASURE_TAKE_RELIC_ACTION,
 )
 
 CARD_ID_BY_REPLAY_ID: dict[str, int] | None = None
@@ -258,7 +259,7 @@ def translate_command(
         return None
     if action_name == "take_chest_relic":
         if phase == PHASE_TREASURE:
-            return REWARD_SKIP_ACTION
+            return TREASURE_TAKE_RELIC_ACTION
         return None
     if action_name == "NetPickRelicAction":
         return None

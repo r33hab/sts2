@@ -99,4 +99,23 @@ public class LivingFogTests
 
         Assert.Contains(KE.GasBomb, fight.EnemyDefIds);
     }
+
+    /// <summary>
+    /// `GasBomb`'s HP is `GetValueIfAscension(ToughEnemies, 8, 7)`. A bomb summoned mid-fight
+    /// reads the fight's level like everything else in it; the summon used to take A8's 8
+    /// whatever the fight ran at.
+    /// </summary>
+    [Theory]
+    [InlineData(0, 7)]
+    [InlineData(7, 7)]
+    [InlineData(8, 8)]
+    public void TheGasBombsHpFollowsTheFightsLevel(int ascension, int hp)
+    {
+        var fight = Encounter(ascension);
+        fight.EndTurn();
+        fight.EndTurn();
+
+        var bomb = fight.State.Enemies.Single(enemy => enemy.DefId == KE.GasBomb);
+        Assert.Equal(hp, bomb.MaxHp);
+    }
 }

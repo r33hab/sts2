@@ -13,6 +13,7 @@ replay_full_run_trace = importlib.import_module("replay_full_run_trace")
 compare_traces = importlib.import_module("compare_traces")
 sts2_gym = importlib.import_module("sts2_gym")
 native = importlib.import_module("sts2_gym.native")
+run_constants = importlib.import_module("sts2_gym.run_constants")
 run_env = importlib.import_module("sts2_gym.run_env")
 
 Sts2CombatEnv = sts2_gym.Sts2CombatEnv
@@ -48,7 +49,8 @@ class Sts2GymTests(unittest.TestCase):
         try:
             obs = (ctypes.c_int * native.RUN_OBS_SIZE)()
 
-            self.assertEqual(native.run_reset(handle, "0", obs), 0)
+            # A8: the 64/80 and the eleven-card deck below are that level's.
+            self.assertEqual(native.run_reset(handle, "0", obs, 8), 0)
             self.assertEqual(native.run_phase(handle), PHASE_ANCIENT)
             # 35 scalars, then the deck and the relics card by card and relic by relic.
             layout = native.RUN_OBS_LAYOUT
@@ -88,7 +90,8 @@ class Sts2GymTests(unittest.TestCase):
         handle = native.run_create()
         try:
             obs = (ctypes.c_int * native.RUN_OBS_SIZE)()
-            self.assertEqual(native.run_reset(handle, "0", obs), 0)
+            # A8, whose starting deck carries Ascender's Bane (10001).
+            self.assertEqual(native.run_reset(handle, "0", obs, 8), 0)
 
             self.assertEqual(
                 native.run_state_list(handle, 0, 16),
@@ -486,6 +489,91 @@ class Sts2GymTests(unittest.TestCase):
                 {"phase": PHASE_CARD_REWARD},
             ),
         )
+
+    def test_the_chest_relic_is_taken_and_proceeding_leaves_it(self):
+        # `take_chest_relic` is the chest's own pick, not the room's proceed: it used to
+        # translate to the leave action, which is what a live proceed with the relic still
+        # in the chest does -- `SkipRelicLocally`.
+        obs = np.zeros(1, dtype=np.int32)
+        treasure = {"phase": run_env.PHASE_TREASURE}
+
+        self.assertEqual(
+            replay_full_run_trace.translate_action(
+                {"action": "take_chest_relic"},
+                obs,
+                treasure,
+            ),
+            run_constants.TREASURE_TAKE_RELIC_ACTION,
+        )
+        self.assertEqual(
+            replay_full_run_trace.translate_action(
+                {"action": "proceed"},
+                obs,
+                treasure,
+            ),
+            run_env.REWARD_SKIP_ACTION,
+        )
+        self.assertIsNone(
+            replay_full_run_trace.translate_action(
+                {"action": "take_chest_relic"},
+                obs,
+                {"phase": PHASE_MAP},
+            ),
+        )
+
+
+class RunAscensionTests(unittest.TestCase):
+    """The run is played at the ascension its caller gives, and a new caller gets 0."""
+
+    def test_the_run_is_played_at_the_ascension_it_is_given(self):
+        # Neow heals what is missing, times 0.8 under WearyTraveler (A2), and AscendersBane
+        # (A5) adds the curse to the starting deck.
+        for ascension, hp, deck_size in ((0, 80, 10), (8, 64, 11)):
+            env = Sts2RunEnv(seed="0", ascension=ascension)
+            try:
+                _, info = env.reset()
+                self.assertEqual((80, hp), (info["player_max_hp"], info["player_hp"]))
+                self.assertEqual(deck_size, info["deck_size"])
+                # A fork is the same run, at the same level.
+                fork = env.clone(resample_hidden=False)
+                try:
+                    self.assertEqual(hp, fork._info()["player_hp"])
+                finally:
+                    fork.close()
+            finally:
+                env.close()
+
+    def test_a_new_run_starts_at_ascension_zero(self):
+        handle = native.run_create()
+        env = Sts2RunEnv(seed="0")
+        try:
+            obs = (ctypes.c_int * native.RUN_OBS_SIZE)()
+            self.assertEqual(native.run_reset(handle, "0", obs), 0)
+            self.assertEqual(80, native.run_info(handle)[5])
+
+            _, info = env.reset()
+            self.assertEqual(80, info["player_hp"])
+        finally:
+            native.run_destroy(handle)
+            env.close()
+
+    def test_a_level_the_run_engine_does_not_model_is_refused(self):
+        # DoubleBoss (A10) is not modelled, so the run refuses the level outright rather
+        # than play a run that is quietly wrong.
+        handle = native.run_create()
+        try:
+            obs = (ctypes.c_int * native.RUN_OBS_SIZE)()
+            self.assertEqual(native.run_reset(handle, "0", obs, 10), -2)
+            self.assertEqual(native.run_reset(handle, "0", obs, -1), -2)
+            self.assertEqual(native.run_reset(handle, "0", obs, 9), 0)
+        finally:
+            native.run_destroy(handle)
+        env = Sts2RunEnv(seed="0", ascension=10)
+        try:
+            with self.assertRaises(RuntimeError):
+                env.reset()
+        finally:
+            env.close()
 
 
 class CommittedRunTraceTests(unittest.TestCase):

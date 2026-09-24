@@ -84,7 +84,13 @@ def collect(runs: int) -> tuple[dict[str, list[tuple[int, ...]]], list[int]]:
     rows: dict[str, list[tuple[int, ...]]] = collections.defaultdict(list)
     ends: list[int] = []
     for run in range(runs):
-        env = Sts2RunEnv(seed=run, max_floors=16, max_episode_steps=4000)
+        # A8, the level the position sampler's shapes were measured at.
+        env = Sts2RunEnv(
+            seed=run,
+            max_floors=16,
+            max_episode_steps=4000,
+            ascension=8,
+        )
         _, info = env.reset(seed=run)
         # A lethal blow terminates before any post-step top-up could fire, so buy the
         # headroom up front instead of healing after the fact.

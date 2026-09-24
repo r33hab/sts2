@@ -127,10 +127,10 @@ public static class RunConstants
 
     /// <summary>
     /// The game's <c>MapPointTypeCounts.NumOfElites</c>:
-    /// <c>round(5 * (SwarmingElites ? 1.6 : 1))</c>. The emulator models high
-    /// ascension, so SwarmingElites is on and this is 8.
+    /// <c>round(5 * (SwarmingElites ? 1.6 : 1))</c> -- eight from A1, five at A0.
     /// </summary>
-    public const int MapEliteCount = 8;
+    public static int MapEliteCount(int ascension) =>
+        (int)Math.Round(5f * (Ascension.Has(ascension, Ascension.SwarmingElites) ? 1.6f : 1f));
 
     /// <summary>The game's <c>MapPointTypeCounts.NumOfShops</c>.</summary>
     public const int MapShopCount = 3;
@@ -138,6 +138,13 @@ public static class RunConstants
     public const int MapFinalRestRow = MapBossRow - 1;
     public const int MapStartCol = MapWidth / 2;
     public const int RewardSkipAction = 3;
+
+    /// <summary>
+    /// Takes the chest's relic in a treasure room: `PickRelicLocally(0)`, the one holder a
+    /// solo chest has. Leaving is <see cref="RewardSkipAction" />, which with the relic still
+    /// in the chest is `SkipRelicLocally`.
+    /// </summary>
+    public const int TreasureTakeRelicAction = 0;
 
     /// <summary>
     /// Commits the highlighted bundle on the Scroll Boxes screen. The game answers that

@@ -106,7 +106,8 @@ def play(
     extra_hp: int = 200,
 ) -> RunOutcome:
     outcome = RunOutcome(seed)
-    env = Sts2RunEnv(seed=seed)
+    # A8, the level the soak's before/after comparisons were measured at.
+    env = Sts2RunEnv(seed=seed, ascension=8)
     try:
         # The run's seed is the STRING one the constructor took; gymnasium's reset(seed=)
         # only accepts an int and would seed nothing useful here.
