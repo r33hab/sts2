@@ -4406,9 +4406,9 @@ public sealed class RunEngine
             case RunConstants.EventHungryForMushrooms:
                 // Two RelicOptions: BIG MUSHROOM outright, or FRAGRANT MUSHROOM with
                 // `.ThatDoesDamage(15m)` on the option. The emulator gave max HP and a
-                // potion. Neither relic does anything yet -- both are in the 125 the
-                // emulator does not model -- but granting the right one puts the run's
-                // relic list where the game puts it, which is what an event owes.
+                // potion. Granting the right relic puts the run's relic list where the game
+                // puts it, which is what an event owes; both relics are modelled, and Big
+                // Mushroom's opening-hand penalty lives in `RelicEffects`.
                 // The HP swing belongs to the RELICS, not to the event: both are
                 // `HasUponPickupEffect`, so it lands through `ApplyRelicPickup` and would
                 // land the same way if the relic arrived by any other route. The option's

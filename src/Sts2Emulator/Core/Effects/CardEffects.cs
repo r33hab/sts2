@@ -2501,15 +2501,12 @@ public static class CardEffects
     /// is modelled, in `PotionEffects`).</summary>
     internal static void ProcureRandomPotion(CombatState state, Random rng)
     {
-        for (int i = 0; i < state.MaxPotionSlots; i++)
+        int slot = PotionEffects.FirstOpenPotionSlot(state);
+        if (slot >= 0)
         {
-            if (state.PotionSlots[i] == 0)
-            {
-                // PotionFactory.CreateRandomPotionInCombat reads
-                // Rng.CombatPotionGeneration, not the combat rng.
-                state.PotionSlots[i] = (state.PotionGenerationRng ?? rng).Next(1, 64);
-                break;
-            }
+            // PotionFactory.CreateRandomPotionInCombat reads
+            // Rng.CombatPotionGeneration, not the combat rng.
+            state.PotionSlots[slot] = (state.PotionGenerationRng ?? rng).Next(1, 64);
         }
     }
 

@@ -642,25 +642,36 @@ public static class PotionEffects
         return options[stream.Next(options.Length)];
     }
 
-    /// <summary>`Player.HasOpenPotionSlots`, over the slots the belt actually has.</summary>
-    private static bool HasOpenPotionSlot(CombatState state)
+    /// <summary>
+    /// The first empty slot the belt actually has, or -1 when it is full --
+    /// `Player.AddPotionInternal`'s `_potionSlots.IndexOf(null)`.
+    /// </summary>
+    /// <remarks>
+    /// USABLE slots only: <c>PotionSlots</c> is <c>PotionSlotCapacity</c> wide so the
+    /// observation keeps one shape, and the slots past <c>MaxPotionSlots</c> do not exist
+    /// yet, so they are never free.
+    /// </remarks>
+    internal static int FirstOpenPotionSlot(CombatState state)
     {
         int usable = Math.Min(state.MaxPotionSlots, state.PotionSlots.Length);
         for (int i = 0; i < usable; i++)
         {
             if (state.PotionSlots[i] == 0)
             {
-                return true;
+                return i;
             }
         }
 
-        return false;
+        return -1;
     }
+
+    /// <summary>`Player.HasOpenPotionSlots`, over the slots the belt actually has.</summary>
+    private static bool HasOpenPotionSlot(CombatState state) => FirstOpenPotionSlot(state) >= 0;
 
     /// <summary>
     /// `PotionCmd.TryToProcure`: refused outright while the owner holds Sozu
     /// (`Sozu.ShouldProcurePotion` is false for its owner), otherwise into the first open
-    /// slot (`Player.AddPotionInternal`, `_potionSlots.IndexOf(null)`).
+    /// slot.
     /// </summary>
     private static bool TryToProcure(CombatState state, int potionId)
     {
@@ -669,16 +680,13 @@ public static class PotionEffects
             return false;
         }
 
-        int usable = Math.Min(state.MaxPotionSlots, state.PotionSlots.Length);
-        for (int i = 0; i < usable; i++)
+        int slot = FirstOpenPotionSlot(state);
+        if (slot < 0)
         {
-            if (state.PotionSlots[i] == 0)
-            {
-                state.PotionSlots[i] = potionId;
-                return true;
-            }
+            return false;
         }
 
-        return false;
+        state.PotionSlots[slot] = potionId;
+        return true;
     }
 }

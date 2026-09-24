@@ -1,6 +1,7 @@
 using Sts2Emulator.Core;
 using Sts2Emulator.Core.Effects;
 using Sts2Emulator.Core.Rng;
+using Sts2Emulator.Core.Run;
 using Sts2Emulator.GeneratedData;
 using Xunit;
 
@@ -520,7 +521,7 @@ public class PotionEffectTests
 
         for (int i = 0; i < 3; i++)
         {
-            Assert.InRange(state.PotionSlots[i], 1, 63);
+            Assert.Contains(state.PotionSlots[i], RunRewardGenerator.PotionRewardPool.ToArray());
         }
 
         Assert.Equal(0, state.PotionSlots[3]);
@@ -539,8 +540,8 @@ public class PotionEffectTests
         PotionEffects.Apply(19, state, new Random(0));
 
         Assert.Equal(5, state.PotionSlots[1]);
-        Assert.InRange(state.PotionSlots[0], 1, 63);
-        Assert.InRange(state.PotionSlots[2], 1, 63);
+        Assert.Contains(state.PotionSlots[0], RunRewardGenerator.PotionRewardPool.ToArray());
+        Assert.Contains(state.PotionSlots[2], RunRewardGenerator.PotionRewardPool.ToArray());
     }
 
     /// <summary>
@@ -594,6 +595,30 @@ public class PotionEffectTests
         Assert.NotEqual(0, fight.State.PotionSlots[1]);
         Assert.NotEqual(0, fight.State.PotionSlots[2]);
         Assert.Equal(4, fight.State.PotionGenerationRng!.CallCount);
+    }
+
+    /// <summary>
+    /// A belt that is full but for the brew itself: the slot `RemoveBeforeUse` freed is the
+    /// only open one, so the loop rolls exactly once -- two draws -- fills it, and finds no
+    /// open slot left. The other potions are not touched.
+    /// </summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(7)]
+    public void EntropicBrew_OnAFullBeltRollsOnceIntoItsOwnSlot(int seed)
+    {
+        var fight = Fight.Hand().Enemy();
+        fight.State.PotionGenerationRng = new CountingRandom(seed);
+        fight.State.MaxPotionSlots = 3;
+        fight.State.PotionSlots[0] = BlockPotion;
+        fight.State.PotionSlots[1] = EntropicBrew;
+        fight.State.PotionSlots[2] = FirePotion;
+
+        fight.Potion(1);
+
+        int[] expected = [BlockPotion, RollLikePotionFactory(new GameRng(seed)), FirePotion];
+        Assert.Equal(expected, fight.State.PotionSlots[..3]);
+        Assert.Equal(2, fight.State.PotionGenerationRng.CallCount);
     }
 
     /// <summary>
@@ -657,6 +682,8 @@ public class PotionEffectTests
     private const int BlockPotion = 5;
 
     private const int EntropicBrew = 19;
+
+    private const int FirePotion = 23;
 
     /// <summary>
     /// `PotionFactory.CreateRandomPotion(options, 1, rng)`, transcribed: `NextFloat()` against
