@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import hashlib
 import json
 import multiprocessing
 import os
@@ -100,6 +101,13 @@ SEL_REMOVE_UPGRADABLE = 8
 SEL_REMOVE_TAGGED_BASIC = 9
 
 STEP_CAP = 6000  # a run that has not ended by here is a bug, not a long run
+
+# `run_search` seeds simulation j of combat decision `move` with `move * sims + j`, and the
+# native clone takes that seed as a C int. Keeping `move` below this bound keeps the product
+# inside int32 for any budget up to MAX_SIMS.
+MOVE_BASE_LIMIT = 1_000_000
+MAX_SIMS = 2_000
+assert (MOVE_BASE_LIMIT + STEP_CAP) * MAX_SIMS < 2**31
 
 
 class RunCombat:
@@ -532,8 +540,23 @@ class RunRecord:
     decisions_by_phase: dict[int, int] = field(default_factory=dict)
 
 
-def _run_seed_int(seed: str) -> int:
-    return int.from_bytes(seed.encode("utf-8")[-8:].rjust(8, b"\0"), "little") % (2**31)
+def run_streams(seed: str) -> tuple[np.random.Generator, np.random.Generator, int]:
+    """Return the run's MCTS stream, its exploration stream and its determinization base.
+
+    The whole canonical seed (the game's canonicalization: upper case, O -> 0, I -> 1) is
+    hashed with blake2b to 64 bits and fed to a `SeedSequence`, which spawns one child per
+    consumer. Two run seeds therefore share no stream even when they share a suffix, and
+    search never draws from the stream exploration uses (DESIGN.md 5.10). The base offsets
+    `run_search`'s `move` argument, so determinization seeds differ between runs too.
+    """
+    canonical = seed.upper().replace("O", "0").replace("I", "1").strip()
+    digest = hashlib.blake2b(canonical.encode("utf-8"), digest_size=8).digest()
+    mcts_seq, explore_seq = np.random.SeedSequence(
+        int.from_bytes(digest, "little"),
+    ).spawn(2)
+    mcts = np.random.default_rng(mcts_seq)
+    move_base = int(mcts.integers(0, MOVE_BASE_LIMIT))
+    return mcts, np.random.default_rng(explore_seq), move_base
 
 
 def parse_budget(label: str) -> tuple[int, int]:
@@ -608,15 +631,19 @@ def play_run(
     survive -- and a boosted run's floors say nothing about play.
 
     Raises:
+        ValueError: If a budget exceeds `MAX_SIMS`, which would overflow the clone seed.
         RuntimeError: If a screen offers no legal action, or the run ends outside the
             Complete phase -- both engine defects a soak should surface, not hide.
 
     """
     hard = elite_boss_sims or sims
+    if max(sims, hard) > MAX_SIMS:
+        raise ValueError(f"budgets above {MAX_SIMS} sims overflow the clone seed")
     budget = str(sims) if hard == sims else f"{sims}/{hard}"
     record = RunRecord(seed=seed, sims=sims, budget=budget, boosted=boost_hp > 0)
     policy = RulesPolicy()
-    rng = np.random.default_rng(_run_seed_int(seed) + sims)
+    # The rules policy draws nothing, so the exploration stream is unused here.
+    rng, _explore, move_base = run_streams(seed)
     env = Sts2RunEnv(seed=seed, max_episode_steps=10**9)
     start = time.perf_counter()
     try:
@@ -626,7 +653,7 @@ def play_run(
         if boost_hp > 0:
             native.run_debug_set_hp(handle, boost_hp, boost_hp, env._run_obs_buf)
             info = env._info()
-        decision_base = 0
+        decision_base = move_base
         while record.steps < STEP_CAP:
             phase = int(info["phase"])
             if phase == rc.PHASE_COMPLETE:

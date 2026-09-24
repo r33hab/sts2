@@ -5,7 +5,7 @@ repo). It fixes every interface Tasks 2-5 build against. Paths are relative to t
 root; line numbers are at `37e4264`. Numbers in section 2 were measured on this machine by
 `rl/run_train/probe_throughput.py`; everything else cites the code it rests on.
 
-**The six decisions that shape everything else**
+**The seven decisions that shape everything else**
 
 1. **Combat inside a run is searched on run clones.** `combat_mcts.run_search` runs
    unchanged on a run handle through a 60-line adapter (`RunCombat` in
@@ -17,19 +17,30 @@ root; line numbers are at `37e4264`. Numbers in section 2 were measured on this 
    fights, and 500 in elite and boss fights, where the deaths are. Measured single-process:
    9.5 s per rules-policy run (3,040 runs/h on 8 workers), and 31.6 s per run that reaches
    the boss (911/h, or 547/h under a conservative 0.6 scaling factor). The target is
-   300/h (section 2.7).
-3. **Training runs at ascension 8, the only level the run engine models** (section 1.5).
-   The plan asked for A0 first; the engine cannot do it without C# work.
-4. **One feature definition, two front ends that meet in a `RunView`.** The engine and
-   the live coach both build the same frozen dataclass. A single `encode(view)` turns it
-   into the vector, and a single `apply_option(view, option)` produces the "state after
-   option". Train and serve therefore share every line that touches a feature (section 3).
+   300/h. Boss kills lean towards more ordinary-fight simulations, so Task 4 rechecks the
+   budget against 250/500 on boss kills (2.7).
+3. **Ascension is a config value, default 0** (controller ruling). The run engine at
+   `37e4264` models A8 only. The ascension parameter arrives with the `spire-coach-gaps`
+   branch (native run reset, `native.py` and `run_env.py`, default 0), and every
+   component here passes the configured value through once that branch is integrated
+   (1.5.1).
+4. **One feature definition, two front ends that meet in a `RunView` and a `Decision`.**
+   The engine and the live coach each build the same frozen dataclasses. One
+   `encode(view)` turns a view into the vector, and one `apply_option(view, option)`
+   produces the "state after option", so train and serve share every line that touches a
+   feature (section 3). Tests hold the two front ends together on synthetic round trips
+   and on every non-combat screen of the 32 captured live runs (3.6).
 5. **Options are valued on afterstates by one network.** Deterministic options are
-   applied to the view. Transforms get expected-value counts. Events, `?` rooms and rare
-   random rest options become learned "pending" inputs of that same network (section 4).
-6. **Self-play uses the latest learner. The coach only ever gets the champion.** A
-   challenger replaces the champion only under the plan's CI rule. The learner is reset to
-   the champion if it regresses badly (section 5.6).
+   applied to the view. Transforms get expected-value features. Events, `?` rooms and rare
+   random rest options become learned "pending" inputs of that same network. Enchant
+   targets go to the rules policy (section 4).
+6. **The coach's number is expected floors, with a boss kill worth W = 26**: the floor
+   Act 2 opens on plus half of Act 2. The boss-kill probability is reported beside it
+   (5.2).
+7. **Self-play uses the latest learner. The coach only ever gets the champion.** A
+   challenger replaces the champion only under the plan's CI rule plus a boss-kill guard,
+   both computed on the eval seeds that both policies completed. The learner is reset to
+   the champion if it regresses badly (5.6).
 
 ---
 
@@ -41,7 +52,7 @@ root; line numbers are at `37e4264`. Numbers in section 2 were measured on this 
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Python wrapper     | `Sts2RunEnv` (`src/sts2_gym/run_env.py:51`). `reset()` creates a handle and calls `Sts2Run_Reset` (`run_env.py:80-91`). `step(action, target=-1)` calls `Sts2Run_Step` and maps a refused action (status != 0) to reward -1 without stepping (`run_env.py:131-158`). `action_masks()` is 256 wide (`run_env.py:219-223`). `_info()` gathers the per-screen lists (`run_env.py:331-420`). `map_graph()` returns nodes, edges, position and boss (`run_env.py:172-217`).                                                                                                                                                                                                                        |
 | native handle pool | 256 run handles (`src/Sts2Emulator/Interop/RunNativeExports.cs:19`). `Sts2Run_Create` returns -1 when full (`:71-84`). The `[UnmanagedCallersOnly]` entry points live in `NativeExports.cs:892-1040` and forward to `RunNativeExports`.                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| reset              | `Sts2Run_Reset(handle, seed)` (`RunNativeExports.cs:120-131`) runs `RunEngine.Reset` (`Core/Run/RunEngine.cs:10-88`): canonical seed, HP 64/80, 99 gold, the starter deck including Ascender's Bane (`RunConstants.cs:876-889`), Burning Blood, Neow's options, act selection plus every act's rooms, and the act-1 map.                                                                                                                                                                                                                                                                                                                                                                      |
+| reset              | `Sts2Run_Reset(handle, seed)` (`RunNativeExports.cs:120-131`) runs `RunEngine.Reset` (`Core/Run/RunEngine.cs:10-88`): canonical seed, HP 64/80, 99 gold, the starter deck including Ascender's Bane (`RunConstants.cs:876-889`; the HP and the Bane are A8 values, 1.5.1), Burning Blood, Neow's options, act selection plus every act's rooms, and the act-1 map.                                                                                                                                                                                                                                                                                                                            |
 | step               | `Sts2Run_Step(handle, action, target, obs, reward, terminal, truncated)` (`RunNativeExports.cs:133-160`), then `RunEngine.Step` (`RunEngine.cs:1115-1139`). `Step` turns HP <= 0 anywhere into `Complete`, then `StepInner` dispatches on the phase (`RunEngine.cs:1141-1428`).                                                                                                                                                                                                                                                                                                                                                                                                               |
 | phase              | `Sts2Run_GetPhase` (`RunNativeExports.cs:342-345`) returns `(int)State.Phase`. The same number is info[0] (`RunEngine.cs:1102`) and the run block's first scalar (`RunEngine.cs:985`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | mask               | `Sts2Run_ActionMask` (`RunNativeExports.cs:197-206`) calls `RunEngine.WriteActionMask` (`RunEngine.cs:544-861`), 256 wide (`RunConstants.cs:102`). Indices are phase-local: the same index means different things on different screens.                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
@@ -80,20 +91,20 @@ never reach the model. The STS2MCP column shows the live screen each decision co
 and how `commands.py` translates that screen's commands, which documents the index
 correspondence.
 
-| phase                             | legal actions (mask)                                                                                                                                                                                                     | options the policy sees                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | live screen (`commands.py`)                                                                                                          |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| 8 Ancient                         | 0..2 where `NeowOptions[i] != 0` (`RunEngine.cs:762-771`). Only 0 while `NeowAwaitingProceed` (`:758-760`).                                                                                                              | `neow.relic` per legal i. Its relic is `NeowOptions[i]` (list 3); slot 2 is the cursed blessing (`RunEngine.cs:1473-1475`). The proceed is **auto**.                                                                                                                                                                                                                                                                                                                                          | `event` with `is_ancient: true`; options carry `relic_name`. `choose_event_option` passes the index through (`commands.py:214-215`). |
-| 2 Map                             | node slots i with a non-zero type (`RunEngine.cs:588-597`), up to 7 (`RunConstants.cs:124`).                                                                                                                             | `map.node` per slot: type = obs[run + 12 + i] (`RunEngine.cs:1001-1006`), coordinates = list 7.                                                                                                                                                                                                                                                                                                                                                                                               | `map.next_options[k]` matched on `col` (`commands.py:169-174`).                                                                      |
-| 1 CardReward                      | 0..3 always (3 = skip); 4 with Pael's Wing, 5 with a Lasting Candy offer, 6 with a Driftwood reroll (`RunEngine.cs:560-586`).                                                                                            | `card.take` for 0..2 with a non-zero card (obs run + 9..11; upgraded = list 5), and for 5 (card from `fourth_reward_offset`). Also `card.skip` (3), `card.sacrifice` (4) and `card.reroll` (6).                                                                                                                                                                                                                                                                                               | `card_reward.cards[i]`; `select_card_reward` / `skip_card_reward` (`commands.py:228-256`).                                           |
-| 5 RelicReward (rewards screen)    | one index per item, in the order gold, potion, relic, card item(s) (`RunEngine.cs:5803-5834`); 3 leaves. 4..6 (drop a potion) are accepted but not in the mask (`RunEngine.cs:1921-1933`).                               | `reward.gold` (**auto**-claimed), `reward.potion` (only if a usable slot is free), `reward.relic`, `reward.card` (**auto**-opened; the card screen then asks), `reward.proceed` (**auto** once only proceed is left). Item order from list 6.                                                                                                                                                                                                                                                 | `rewards.items[i]`; `claim_reward` (`commands.py:265-273`), `discard_potion` (`:293-301`).                                           |
-| 4 Shop                            | cards 0..6, relics 7..9, potions 10..12 that are stocked and affordable (potions need a free usable slot), 13 = removal once per visit, 14 = leave (`RunEngine.cs:704-747`).                                             | `shop.card`, `shop.relic`, `shop.potion` (item from lists 8/9/10, price from list 4), `shop.remove` **flattened** into one option per removable deck card (the removal screen follows), and `shop.leave`. Buying is sequential: one purchase per decision until `shop.leave` wins.                                                                                                                                                                                                            | `shop.items[i]` (`category`, `price`, `card_id`...); `buy_card` (`commands.py:282-290`).                                             |
-| 3 Rest                            | heal 0, smith 1 (if anything is upgradable), clone 2, lift 4, dig 5, hatch 6, cook 7, kindle 8 (each only while its relic/card is present and unspent), leave 3 (`RunEngine.cs:599-680`).                                | `rest.heal`, `rest.smith` **flattened** into one option per distinct upgradable card (the upgrade screen follows), and `rest.lift/dig/hatch/cook/kindle/clone`. `rest.leave` (3) is offered by the emulator but is **excluded** until an option has been taken this visit (the game's `can_proceed` is false until then; section 1.5). The result page (`RestResultPending`) is **auto**.                                                                                                     | `rest_site.options[i].id` (HEAL, SMITH, ...); `commands.py:205-213`.                                                                 |
-| 7 Event                           | 3 always (`RunEngine.cs:5380`), plus a bespoke per-event mask (`RunEngine.cs:5378-`); option counts come from `Generated/EventOptions.g.cs`. The finished page (`EventId == -1`) is **auto** (`RunEngine.cs:2478-2482`). | `event.option` per legal a != 3, identified by (event id = info[9], option index a, step = options already taken in this visit). `event.leave` (3) is **excluded** unless it is the only legal action (section 1.5). Every act-1 event's real options are indices 0..2 (`EventOptions.g.cs` counts are at most 3, and the bespoke masks stop at 2), so 3 is never a real option in Act 1. Only Welcome to Wongos, an Act 2 event, uses 3 as its own Leave (`RunEngine.cs:5680-5681`).         | `event.event_id` + `options[i]` (`is_locked`, `is_proceed`); `choose_event_option` (`commands.py:175-215`).                          |
-| 9 TransformSelect                 | offer grid: 0..n-1, plus n = "done" if optional (`RunEngine.cs:789-806`); rest upgrade: upgradable deck indices (`:807-816`); deck selection: indices passing `CanSelectCard` (`:817-826`). There is never a skip.       | Purpose from list 20 (`DeckSelection`, `RunState.cs:5-76`): `select.offer` / `select.offer_done` (offer grid, list 17), `select.upgrade`, `select.remove` (Remove, RemoveUpgradable, RemoveTaggedBasic), `select.transform` (TransformToRandom, ...Upgraded), `select.transform_to` (TransformTo, ...Carrying; the target card id is the argument), `select.enchant` (the argument is the enchantment), `select.duplicate`. Two-card selections are two decisions (`RunEngine.cs:4930-4938`). | `card_select` (`screen_type`, `prompt`, `cards`); `select_card` / `confirm_selection` (`commands.py:302-343`).                       |
-| 10 Treasure                       | 3 only (`RunEngine.cs:836-838`).                                                                                                                                                                                         | **auto** (see 1.5: the chest relic is not modelled).                                                                                                                                                                                                                                                                                                                                                                                                                                          | `treasure.relics`; `take_chest_relic` (`commands.py:259-262`).                                                                       |
-| 12 BundleSelect                   | 0, 1, and 2 = confirm once one is picked (`RunEngine.cs:773-786`).                                                                                                                                                       | `bundle.pick` per bundle (3 card ids each, list 18). The confirm is **auto**.                                                                                                                                                                                                                                                                                                                                                                                                                 | `select_bundle` / `confirm_bundle_selection` (`commands.py:139-142`).                                                                |
-| 11 CrystalSphere, 13 FakeMerchant | Act 2+ events (`scripts/soak_act_one.py:40-50`).                                                                                                                                                                         | Not reachable before the Act 1 boss. If one appears: rules fallback, counted.                                                                                                                                                                                                                                                                                                                                                                                                                 | n/a                                                                                                                                  |
-| anything else                     | whatever the mask says                                                                                                                                                                                                   | **unknown**: rules fallback (the lowest legal action), counted by (phase, kind) into `status.json`.                                                                                                                                                                                                                                                                                                                                                                                           | n/a                                                                                                                                  |
+| phase                             | legal actions (mask)                                                                                                                                                                                                     | options the policy sees                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | live screen (`commands.py`)                                                                                                          |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| 8 Ancient                         | 0..2 where `NeowOptions[i] != 0` (`RunEngine.cs:762-771`). Only 0 while `NeowAwaitingProceed` (`:758-760`).                                                                                                              | `neow.relic` per legal i. Its relic is `NeowOptions[i]` (list 3); slot 2 is the cursed blessing (`RunEngine.cs:1473-1475`). The proceed is **auto**.                                                                                                                                                                                                                                                                                                                                                                                         | `event` with `is_ancient: true`; options carry `relic_name`. `choose_event_option` passes the index through (`commands.py:214-215`). |
+| 2 Map                             | node slots i with a non-zero type (`RunEngine.cs:588-597`), up to 7 (`RunConstants.cs:124`).                                                                                                                             | `map.node` per slot: type = obs[run + 12 + i] (`RunEngine.cs:1001-1006`), coordinates = list 7.                                                                                                                                                                                                                                                                                                                                                                                                                                              | `map.next_options[k]` matched on `col` (`commands.py:169-174`).                                                                      |
+| 1 CardReward                      | 0..3 always (3 = skip); 4 with Pael's Wing, 5 with a Lasting Candy offer, 6 with a Driftwood reroll (`RunEngine.cs:560-586`).                                                                                            | `card.take` for 0..2 with a non-zero card (obs run + 9..11; upgraded = list 5), and for 5 (card from `fourth_reward_offset`). Also `card.skip` (3), `card.sacrifice` (4) and `card.reroll` (6).                                                                                                                                                                                                                                                                                                                                              | `card_reward.cards[i]`; `select_card_reward` / `skip_card_reward` (`commands.py:228-256`).                                           |
+| 5 RelicReward (rewards screen)    | one index per item, in the order gold, potion, relic, card item(s) (`RunEngine.cs:5803-5834`); 3 leaves. 4..6 (drop a potion) are accepted but not in the mask (`RunEngine.cs:1921-1933`).                               | `reward.gold` (**auto**-claimed), `reward.potion` (only if a usable slot is free), `reward.relic`, `reward.card` (**auto**-opened; the card screen then asks), `reward.proceed` (**auto** once only proceed is left). Item order from list 6.                                                                                                                                                                                                                                                                                                | `rewards.items[i]`; `claim_reward` (`commands.py:265-273`), `discard_potion` (`:293-301`).                                           |
+| 4 Shop                            | cards 0..6, relics 7..9, potions 10..12 that are stocked and affordable (potions need a free usable slot), 13 = removal once per visit, 14 = leave (`RunEngine.cs:704-747`).                                             | `shop.card`, `shop.relic`, `shop.potion` (item from lists 8/9/10, price from list 4), `shop.remove` **flattened** into one option per removable deck card (the removal screen follows), and `shop.leave`. Buying is sequential: one purchase per decision until `shop.leave` wins.                                                                                                                                                                                                                                                           | `shop.items[i]` (`category`, `price`, `card_id`...); `buy_card` (`commands.py:282-290`).                                             |
+| 3 Rest                            | heal 0, smith 1 (if anything is upgradable), clone 2, lift 4, dig 5, hatch 6, cook 7, kindle 8 (each only while its relic/card is present and unspent), leave 3 (`RunEngine.cs:599-680`).                                | `rest.heal`, `rest.smith` **flattened** into one option per distinct upgradable card (the upgrade screen follows), and `rest.lift/dig/hatch/cook/kindle/clone`. `rest.leave` (3) is offered by the emulator but is **excluded** until an option has been taken this visit (the game's `can_proceed` is false until then; section 1.5). The result page (`RestResultPending`) is **auto**.                                                                                                                                                    | `rest_site.options[i].id` (HEAL, SMITH, ...); `commands.py:205-213`.                                                                 |
+| 7 Event                           | 3 always (`RunEngine.cs:5380`), plus a bespoke per-event mask (`RunEngine.cs:5378-`); option counts come from `Generated/EventOptions.g.cs`. The finished page (`EventId == -1`) is **auto** (`RunEngine.cs:2478-2482`). | `event.option` per legal a != 3, identified by (event id = info[9], option index a, step = options already taken in this visit). `event.leave` (3) is **excluded** unless it is the only legal action (section 1.5). Every act-1 event's real options are indices 0..2 (`EventOptions.g.cs` counts are at most 3, and the bespoke masks stop at 2), so 3 is never a real option in Act 1. Only Welcome to Wongos, an Act 2 event, uses 3 as its own Leave (`RunEngine.cs:5680-5681`).                                                        | `event.event_id` + `options[i]` (`is_locked`, `is_proceed`); `choose_event_option` (`commands.py:175-215`).                          |
+| 9 TransformSelect                 | offer grid: 0..n-1, plus n = "done" if optional (`RunEngine.cs:789-806`); rest upgrade: upgradable deck indices (`:807-816`); deck selection: indices passing `CanSelectCard` (`:817-826`). There is never a skip.       | Purpose from list 20 (`DeckSelection`, `RunState.cs:5-76`): `select.offer` / `select.offer_done` (offer grid, list 17), `select.upgrade`, `select.remove` (Remove, RemoveUpgradable, RemoveTaggedBasic), `select.transform` (TransformToRandom, ...Upgraded), `select.transform_to` (TransformTo, ...Carrying; the target card id is the argument), `select.enchant` (the argument is the enchantment; always decided by the rules policy, section 4), `select.duplicate`. Two-card selections are two decisions (`RunEngine.cs:4930-4938`). | `card_select` (`screen_type`, `prompt`, `cards`); `select_card` / `confirm_selection` (`commands.py:302-343`).                       |
+| 10 Treasure                       | 3 only (`RunEngine.cs:836-838`).                                                                                                                                                                                         | **auto** (see 1.5: the chest relic is not modelled).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | `treasure.relics`; `take_chest_relic` (`commands.py:259-262`).                                                                       |
+| 12 BundleSelect                   | 0, 1, and 2 = confirm once one is picked (`RunEngine.cs:773-786`).                                                                                                                                                       | `bundle.pick` per bundle (3 card ids each, list 18). The confirm is **auto**.                                                                                                                                                                                                                                                                                                                                                                                                                                                                | `select_bundle` / `confirm_bundle_selection` (`commands.py:139-142`).                                                                |
+| 11 CrystalSphere, 13 FakeMerchant | Act 2+ events (`scripts/soak_act_one.py:40-50`).                                                                                                                                                                         | Not reachable before the Act 1 boss. If one appears: rules fallback, counted.                                                                                                                                                                                                                                                                                                                                                                                                                                                                | n/a                                                                                                                                  |
+| anything else                     | whatever the mask says                                                                                                                                                                                                   | **unknown**: rules fallback (the lowest legal action), counted by (phase, kind) into `status.json`.                                                                                                                                                                                                                                                                                                                                                                                                                                          | n/a                                                                                                                                  |
 
 The rewards screen, the card screen and card-select screens can nest (Neow's
 Kaleidoscope, Brain Leech, the shop's removal). The engine's phase always names the
@@ -141,8 +152,8 @@ from that run and reshuffles the unseen middle of the draw pile (`ResampleHidden
 `Sts2_Clone`: each stream gets its own named seed instead of one shared seed (a defect of
 `CombatState.Clone`, `StateCloning.cs:182-195`). `RunCombat.done` is set when the step
 reports `terminal` or the run block's phase scalar is no longer Combat, the rule above.
-`combat_mcts` only calls `fork`, `legal`,
-`step`, `done`, `obs`, `won`, `hp`, `max_hp` and `close`, so a duck-typed adapter
+`combat_mcts` only calls `fork`, `legal`, `step`, `done`, `obs`, `won`, `hp`, `max_hp`
+and `close`, so a duck-typed adapter
 (`RunCombat`, `probe_throughput.py`) makes `run_search`, `best_action`, CRN and the tempo
 rollout work **unchanged**. The run observation opens with the combat observation, so
 `rollout_weights` reads the hand and the intents at its usual offsets. Common random numbers
@@ -165,39 +176,49 @@ shows up only in the rollout loop that follows a run clone, where `Sts2Run_Step`
 15.1 us against `Sts2_Step`'s 7.4 us (cProfile, same fights). The likeliest cause is the
 allocation the RunState deep copy makes and the collection work it leaves for later
 calls; it was not isolated further. At equal wall time, option (a) therefore runs about
-a third fewer simulations. Section 2 shows that the budget still clears the target. A C# export would collide with the snapshot-loader
-branch, which bumps both native API versions (that plan's Task 2 item 7). **Stage 2
+a third fewer simulations. Section 2 shows that the budget still clears the target. A C#
+export would collide with the snapshot-loader branch, which bumps both native API
+versions (that plan's Task 2 item 7). **Stage 2
 searches run clones; the export waits for the prior integration in section 6.5.**
 
 ### 1.4 What one self-play run is
 
-1. `reset(seed)`, then loop.
-2. Phase Combat: `combat_mcts.run_search(RunCombat(handle), legal, sims, rng, c=0.1,
-move=k, crn=True, crn_fraction=0.2)` then `best_action`, until the phase leaves Combat.
-   `sims` is the budget's `hard` value when the fight began on an elite or boss node, and
-   `normal` otherwise (2.7). `k` counts combat decisions across the whole run, so
-   determinization seeds never repeat within a run.
-   `rng = np.random.default_rng(seed_int(run_seed))`.
+1. `reset(seed)` at the configured ascension (1.5.1), then loop.
+2. Phase Combat: `combat_mcts.run_search` on `RunCombat(handle)` with the legal actions,
+   `sims`, `mcts_rng`, `c=0.1`, `move=move_base + k`, `crn=True` and
+   `crn_fraction=0.2`, then `best_action`, until the phase leaves Combat. `sims` is the
+   budget's `hard` value when the fight began on an elite or boss node, and `normal`
+   otherwise (2.7). `k` counts combat decisions across the whole
+   run. `mcts_rng` and `move_base` come from the run's own seed streams (5.10), so the
+   determinization seeds `(move_base + k) * sims + j` differ between runs and never repeat
+   within one.
 3. Phase Complete: the player died. Outcome floor = info[1].
-4. A boss fight won: Act 1 cleared. Outcome floor = 18 (section 5.2).
-5. Anything else: `engine.decision()`. Auto screens are stepped directly, the rest go to the
-   policy, and the chosen option is executed. A smith or removal is two engine actions: the
-   screen action, then the deck index.
+4. A boss fight won: Act 1 cleared. Outcome class 18 (5.2).
+5. Anything else: `engine.decision()`. Auto screens are stepped directly, the rest go to
+   the policy, which samples with the run's `explore_rng` (5.10), and the chosen option is
+   executed. A smith or removal is two engine actions: the screen action, then the deck
+   index.
 6. Step cap: 6,000 engine steps. A run that hits it is recorded with `truncated: true` and
    is never trained on.
 
 ### 1.5 Engine facts that constrain the design
 
-1. **The run engine models A8 only.** HP is hardcoded to 64/80 (`RunEngine.cs:17-18`).
-   The elite count is 8 because "the emulator models high ascension, so SwarmingElites is
-   on" (`RunConstants.cs:127-133`). The ancient heal is 80%, WearyTraveler
-   (`RunEngine.cs:1521-1525`). The belt starts at 2 slots, TightBelt (`RunState.cs:176`).
-   Ascender's Bane is in the starter deck (`RunConstants.cs:888`). `Sts2Run_Reset` takes no
-   ascension. **Training runs at A8.** `ascension` stays a config value, but
-   `RunSession` raises `ValueError` for anything but 8, naming these lines. The coach shows
-   a warning when the live ascension is not the model's. _This departs from the plan's "A0
-   first" constraint. The reason is that the engine cannot produce an A0 run, and adding
-   ascension to the run layer is emulator work outside this plan._
+1. **The run engine at `37e4264` models A8 only; training uses a configurable
+   ascension, default 0.** HP is hardcoded to 64/80 (`RunEngine.cs:17-18`), which is the
+   80% ancient heal of WearyTraveler (A2, `RunEngine.cs:1521-1525`). The elite count is 8
+   because "the emulator models high ascension, so SwarmingElites is on"
+   (`RunConstants.cs:127-133`). The belt starts at 2 slots (TightBelt, A4;
+   `RunState.cs:176`), and Ascender's Bane (A5) is in the starter deck
+   (`RunConstants.cs:888`). `Sts2Run_Reset` takes no ascension. By controller ruling,
+   training uses a configurable `ascension` defaulting to **0**. The parameter arrives
+   with the `spire-coach-gaps` branch, which threads `ascension` through the native run
+   reset and `native.py`/`run_env.py` with default 0. Every component here takes
+   `ascension` from config and passes it on: `RunSession`, `selfplay`, `evaluate`, the
+   stage-3 generator (`train_combat.py --ascension`; the combat API has taken an ascension
+   since v16) and the model metadata. Until the branch is integrated, `RunSession` raises
+   `ValueError` for any ascension but 8 and names this section, so nothing silently
+   trains at the wrong level. Section 2 was measured at A8, the only level this build runs
+   (2.1).
 2. **Treasure rooms never grant the chest relic.** `EnterTreasureRoom` pays gold only
    (`RunRewardGenerator.cs:997-1009`), and phase 10 offers nothing but proceed
    (`RunEngine.cs:836-838, 1410-1419`). `SharedRelicBag` is populated
@@ -224,8 +245,12 @@ move=k, crn=True, crn_fraction=0.2)` then `best_action`, until the phase leaves 
    `step`).
 6. **The run API does not export the belt size.** `RunState.MaxPotionSlots` is 2 plus
    relic grants (`RunNonCombatEffects.cs:341, 610, 645`: Potion Belt +2, Phial Holster +1,
-   Alchemical Coffer +4). The engine front end computes it from the relics, and the mod
-   sends `max_potion_slots`. The agreement test checks the two match.
+   Alchemical Coffer +4). The game's base is 3, and TightBelt (A4) takes one away
+   (decompiled `AscensionManager.ApplyEffectsTo`). The engine front end therefore computes
+   `(2 if ascension >= 4 else 3)` plus the grants, and the replay test (3.6) checks the
+   result against the mod's `max_potion_slots` on every captured screen. Exporting the
+   count from the run API would retire the formula; that is a one-line export for the
+   `spire-coach-gaps` branch, which must also set the base from the ascension.
 7. **The native library can abort the whole process.** The probe hit an unhandled
    `System.InvalidOperationException: Collection was modified` in
    `CombatEngine.EndTurn` (called from `Sts2Run_Step`). NativeAOT turns it into SIGABRT
@@ -263,6 +288,19 @@ move=k, crn=True, crn_fraction=0.2)` then `best_action`, until the phase leaves 
   20%) on run clones (1.3). Everything else is the probe's `RulesPolicy`, which is the
   baseline Task 2A promotes. Seeds are `PRB00000`...; 58 of them are used below
   (`PRB00058` aborts the process, 1.5.7).
+- **Ascension.** Every number here is A8, the only level this engine build runs
+  (1.5.1). At the default A0 the enemies are weaker (no Tough or Deadly values), elites
+  fewer (5, not 8), the ancient heal full, the belt 3 slots and Ascender's Bane absent.
+  Runs will last longer and fights end sooner, so the full-length figures of 2.4 are the
+  planning basis. Task 4 re-measures at the configured ascension after integration.
+- **Seeding.** These measurements used the probe's first seed helper, which hashed only a
+  seed's last 8 bytes and passed the same determinization seeds to every run. The probe
+  now derives independent streams from the whole seed (5.10). That changes which random
+  numbers a run draws, not what a simulation costs. A 20-seed rerun with the new streams
+  gave 1.36, 2.68, 5.18 and 10.01 s per run at 30, 60, 120 and 120/500 sims, against
+  1.45, 2.80, 4.89 and 8.44 s on the same seeds with the old ones. An ordinary-fight
+  decision at 120 sims cost 55 ms in both. The per-run differences are different random
+  paths: at 120/500 the new runs reached floor 14.0 on average, against 13.2.
 - **Commands.**
   ```
   uv run python rl/run_train/probe_throughput.py --sims 30,60,120,250,500 --runs 20 \
@@ -375,21 +413,29 @@ three the brief names) the margin is 4-14x even at full length and with the 0.6 
 
 ### 2.6 What the budget buys
 
-Paired by seed (same seed, same rules policy, only the budget differs), 58 seeds:
+Paired by seed (same seed, same rules policy, only the budget differs), 58 seeds. "Boss
+kills" counts each side's kills. "Only one side cleared" counts the seeds where exactly one
+side killed the boss, with the exact McNemar p-value:
 
-| comparison                   | mean floor difference (paired SE) | boss kills     |
-| ---------------------------- | --------------------------------- | -------------- |
-| 500 - 120                    | **+0.91 (0.40)**                  | 6 vs 1         |
-| 120/500 - 120                | **+0.45 (0.23)**                  | 1 vs 1         |
-| 250 - 120                    | +0.00 (0.43)                      | 2 vs 1         |
-| 250/500 - 120/500            | -0.24 (0.47)                      | 5 vs 1         |
-| 500 - 120/500                | +0.47 (0.46)                      | 6 vs 1         |
-| 60 - 30, 120 - 30 (20 seeds) | +0.15 (0.29), -0.05 (0.21)        | 1 vs 0, 0 vs 0 |
+| comparison                   | mean floor difference (paired SE) | boss kills     | only one side cleared (p) |
+| ---------------------------- | --------------------------------- | -------------- | ------------------------- |
+| 500 - 120                    | **+0.91 (0.40)**                  | 6 vs 1         | 6 vs 1 (0.125)            |
+| 120/500 - 120                | **+0.45 (0.23)**                  | 1 vs 1         | 1 vs 1 (1.000)            |
+| 250 - 120                    | +0.00 (0.43)                      | 2 vs 1         | 2 vs 1 (1.000)            |
+| 250/500 - 120/500            | -0.24 (0.47)                      | 5 vs 1         | 4 vs 0 (0.125)            |
+| 500 - 120/500                | +0.47 (0.46)                      | 6 vs 1         | 5 vs 0 (0.062)            |
+| 60 - 30, 120 - 30 (20 seeds) | +0.15 (0.29), -0.05 (0.21)        | 1 vs 0, 0 vs 0 |                           |
 
-Two differences are resolved: flat 500 over flat 120 (t = 2.3), and 120/500 over 120
-(t = 2.0). Raising the ordinary-fight budget from 120 to 250 bought nothing measurable,
-with or without 500 in the hard fights. FINDINGS saw the same for ordinary fights: 60 to
-300 sims was +0.8 HP (the augmented rows of its "Plain MCTS figures it out" table).
+Two floor differences are resolved: flat 500 over flat 120 (t = 2.3), and 120/500 over
+120 (t = 2.0). Raising the ordinary-fight budget from 120 to 250 bought no floors, with or
+without 500 in the hard fights. FINDINGS saw the same for ordinary fights: 60 to 300 sims
+was +0.8 HP (the augmented rows of its "Plain MCTS figures it out" table).
+
+**Boss kills lean the other way.** No boss-kill difference is resolved at 58 seeds, but
+every one points the same way: more ordinary-fight simulations bring more HP to the boss.
+250/500 cleared 4 seeds that 120/500 did not, and never the reverse. Scored with the value
+the policy maximizes (V with W = 26, 5.2), 250/500 - 120/500 is +0.38 floors (paired SE
+0.62) and 500 - 120/500 is +1.24 (0.66).
 
 ### 2.7 The default budget: 120/500
 
@@ -406,14 +452,30 @@ extra simulations change outcomes, and what they cost. The reasons:
    elites. The live coach searches about 8,000 simulations per decision (spec 7.3), so
    self-play's hard fights should be as strong as can be afforded.
 3. **It is measurably better than flat 120**: +0.45 floors, paired SE 0.23.
-4. **Extra ordinary-fight budget bought nothing measurable** (2.6), and 250/500 costs 29%
-   more per full-length run than 120/500.
-5. **Flat 500 is the upgrade, not the default.** It may be better than 120/500 (+0.47,
-   paired SE 0.46, not resolved), costs 1.8x at full length, and has no margin under the
-   0.6 factor (304/h). Task 4 reports the loop's real runs/hour in `status.json`. If that
-   shows the planning factor above 0.9, switching `combat_budget` to 500 is a config
-   change. It starts a new data era: shards record the budget, the fight buffer keeps only
-   fights at the current budget, and V's 8-generation window ages the rest out.
+4. **Extra ordinary-fight budget has not been shown to pay, but boss kills lean towards
+   it** (2.6). 250/500 costs 29% more per full-length run than 120/500. With neither side
+   resolved, throughput breaks the tie for now, and Task 4 settles it (below).
+5. **Flat 500 is an upgrade candidate, not the default.** It costs 1.8x at full length and
+   has no margin under the 0.6 factor (304/h).
+
+**The Task 4 recheck.** Once generation 1 is trained, Task 4 plays 200 budget-check seeds
+(`B0000`-`B0199`, used nowhere else) with the generation-1 learner at argmax, at 120/500
+and at 250/500, paired by seed. It switches the default to 250/500 when all three hold:
+
+1. **Boss kills first.** 250/500 kills the boss on significantly more seeds: exact
+   McNemar on the seeds only one budget cleared, one-sided p < 0.05.
+2. **Floors are not given up.** The paired 95% CI lower bound on the mean-floor difference
+   (250/500 - 120/500) is above -0.25.
+3. **Throughput holds.** Let f be generation 0's measured runs/h divided by 3,040, the
+   single-process extrapolation for the same policy and budget (2.3). The budget stays
+   eligible while its full-length rate from 2.4 times f is at least 300 runs/h: 704 f for
+   250/500, which needs f >= 0.43.
+
+Flat 500 joins the check on the same terms when 507 f >= 300, that is f >= 0.59. The
+outcome goes into `status.json` and into this section. A budget change is a config
+change that starts a new data era: shards record the budget, the fight buffer keeps only
+fights at the current budget, V's 8-generation window ages the rest out, and the champion
+is re-evaluated under the new budget before the next promotion (5.6).
 
 The plan's interface takes `combat_budget: int`. It becomes
 `CombatBudget(normal: int, hard: int)`, written "120/500", and an int n still means n/n.
@@ -433,11 +495,11 @@ self-play runs a day.
 
 ## 3. Feature specification
 
-### 3.1 The shared intermediate: `RunView`
+### 3.1 The shared intermediates: `RunView` and `Decision`
 
-`rl/run_train/features.py` owns every feature. Both front ends produce a `RunView`, and
-everything downstream (encoding, applying an option, fight queries) takes a `RunView`
-and nothing else.
+`rl/run_train/features.py` owns every feature. Both front ends produce a `RunView` (the
+state) and a `Decision` (the options on screen, 3.4). Everything downstream (encoding,
+applying an option, fight queries, scoring) takes those and nothing else.
 
 ```python
 @dataclass(frozen=True)
@@ -458,7 +520,7 @@ class MapNode:
 class Pending:              # what the afterstate commits to; all-empty in a plain state
     room: int = 0           # NODE_* of the room being entered, 0 = none
     special: str = ""       # one of SPECIALS (3.2 block B), "" = none
-    event_id: int = 0       # emulator event id (RunConstants.cs:270-360), 0 = none, -2 = unknown
+    event_id: int = 0       # emulator event id (RunConstants.cs:270-360), 0 = none
     event_option: int = -1
     event_step: int = 0
 
@@ -476,65 +538,93 @@ class RunView:
     potions: tuple[int, ...]             # sorted emulator potion ids, empties dropped
     max_potion_slots: int
     map_nodes: tuple[MapNode, ...]       # sorted by (row, col); the whole act map
-    position: tuple[int, int] | None     # (col, row) the run stands on; None = unknown
-    boss: int | None                     # emulator encounter id of the act boss
+    position: tuple[int, int]            # (col, row) the run stands on
+    boss: int                            # emulator encounter id of the act boss
     pending: Pending = Pending()
 ```
 
-`deck` may hold fractional weight only inside `encode`, never in the view: the EV of a
-transform (section 4) is applied in vector space by `encode_after_transform`.
+A view always has a map, a position and a boss. The engine always knows them, and the live
+front end refuses to build a view without them (below), so V never sees an "unknown"
+input it was not trained on. `deck` never holds fractions: the EV of a transform
+(section 4) is applied in vector space by `encode_after_transform`.
 
-**Engine front end.** `view_from_engine(session) -> RunView` reads:
+**Engine front end.** `view_from_engine(env: Sts2RunEnv, ascension: int) -> RunView`. It
+takes the env rather than a session so the replay test (3.6) can call it on the replay's
+own env; `RunSession.view()` passes its env and its configured ascension. It reads:
 
-| field                   | source                                                                                      |
-| ----------------------- | ------------------------------------------------------------------------------------------- |
-| floor, gold, hp, max hp | info[1], info[4], info[5], info[6] (`RunEngine.cs:1102-1110`)                               |
-| deck                    | the observation's deck block (id, upgraded, enchantment, amount) (`RunEngine.cs:1032-1044`) |
-| relics                  | state list 1                                                                                |
-| potions                 | state list 2, truncated to `max_potion_slots`                                               |
-| max potion slots        | 2 + 2*PotionBelt + PhialHolster + 4*AlchemicalCoffer                                        |
-| map                     | lists 15 and 16, position from list 21                                                      |
-| boss                    | list 14[1]                                                                                  |
-| region                  | info[2]; the run's act id is a region, not an ordinal (`run_constants.py:57-69`)            |
-| act index               | 0: stage 2 plays Act 1 only, and `RunState.CurrentActIndex` is not exported                 |
-| ascension               | 8                                                                                           |
+| field                   | source                                                                                         |
+| ----------------------- | ---------------------------------------------------------------------------------------------- |
+| floor, gold, hp, max hp | info[1], info[4], info[5], info[6] (`RunEngine.cs:1102-1110`)                                  |
+| deck                    | the observation's deck block (id, upgraded, enchantment, amount) (`RunEngine.cs:1032-1044`)    |
+| relics                  | state list 1                                                                                   |
+| potions                 | state list 2, truncated to `max_potion_slots`                                                  |
+| max potion slots        | `(2 if ascension >= 4 else 3)` + 2 Potion Belt + 1 Phial Holster + 4 Alchemical Coffer (1.5.6) |
+| map                     | lists 15 and 16, position from list 21                                                         |
+| boss                    | list 14[1]                                                                                     |
+| region                  | info[2]; the run's act id is a region, not an ordinal (`run_constants.py:57-69`)               |
+| act index               | 0: stage 2 plays Act 1 only, and `RunState.CurrentActIndex` is not exported                    |
+| ascension               | the argument (the engine does not report it)                                                   |
 
 It never reads lists 11-13.
 
-**Live front end.** `view_from_live(live_run: dict) -> RunView` reads the JSON of section
-3.5. It maps slugs to ids with tables built from `Generated/Cards.g.cs` / `Relics.g.cs`
-(`Entry`), `Potions.g.cs` (Name -> UPPER*SNAKE, as `scripts/replay_full_run_trace.py:194-208`),
-and the fixed boss table of 3.5. Mod node-type strings map to `NODE*\*`. An unknown slug
-raises `UnknownIdError(path)`: the coach then shows "unmodelled content" and does not
-score the screen.
+**Live front end.** `view_from_live(live_run: dict) -> RunView` reads the format of 3.5:
+the mod payload's own `run` and `player` objects plus the cached map. Ids are the game's
+`ModelId.Entry` strings. `vocab.py` maps them through `Generated/Cards.g.cs` and
+`Relics.g.cs` (`Entry`) and `Potions.g.cs` (Name to `UPPER_SNAKE`, as
+`scripts/replay_full_run_trace.py:194-208`). Enchantments go through the `Enchantment`
+enum (`sts2_gym.names`), bosses through the table in 3.5, and node-type strings to
+`NODE_*`. It raises two errors:
 
-`from_run_engine(session) -> np.ndarray` and `from_live(live_run) -> np.ndarray` are
-`encode(view_from_...(x))`. They are the two front ends the plan names.
+- `UnknownIdError(path)` for an id with no emulator counterpart. The coach shows
+  "unmodelled content" and scores nothing.
+- `NotReadyError` when no map screen has been cached for the current act, or the current
+  position is not known (3.7). The coach shows "waiting for the map" and scores nothing,
+  rather than feeding V an input it never saw in training. One consequence: Neow's
+  screens come before the first map screen, so the coach never scores Neow's choice
+  (self-play still learns it, because the engine knows the map from the start). The map
+  exists by then (Neow is its row-0 Ancient node), so a mod fork that sent `map` on
+  every payload would lift this.
+
+`from_run_engine(env, ascension) -> np.ndarray` and `from_live(live_run) -> np.ndarray` are
+`encode(view_from_...(...))`: the two front ends the plan names.
+
+**`LiveRunTracker`** (in `features.py`) owns the live-side bookkeeping. The coach uses it,
+and so does the replay test (3.6), so there is one implementation:
+
+- `update(payload)` runs on every settled mod payload. It caches `payload["map"]` (its
+  `nodes`, `boss` and `current_position`) whenever `state_type` is `map`, and drops the
+  cache when `run.act` changes. It tracks the position (from `run.map_coord`, or inferred,
+  3.7), event pages and the source of a selection screen (3.7).
+- `live_run(payload) -> dict` assembles the 3.5 object from the payload and the cache.
+  It raises `NotReadyError` while no map is cached for the act or the position is
+  unknown.
+- `screen(payload) -> dict` assembles the 3.7 screen object, with the tracker's fields.
 
 ### 3.2 The vector (`FEATURE_VERSION = 1`)
 
-`encode(view) -> np.ndarray[float32]` of length **1845** (the base vector). The value
-network appends the 8-number fight block H (3.3), so its input is 1853 wide. Vocabularies
+`encode(view) -> np.ndarray[float32]` of length **1843** (the base vector). The value
+network appends the 8-number fight block H (3.3), so its input is 1851 wide. Vocabularies
 are frozen from `data/id_map.json`: an index is the rank of the id among that table's
 sorted ids. Cards: 577 ids, relics 296, potions 63. Any change to a vocabulary or layout
 bumps `FEATURE_VERSION`, and a checkpoint with a different version refuses to load.
 
-| block             | offset | size | contents (all float32)                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ----------------- | -----: | ---: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A scalars         |      0 |   24 | 0 hp/max_hp, 1 hp/100, 2 max_hp/100, 3 (max_hp-hp)/100, 4 gold/100, 5 floor/17, 6 act_index, 7 region==Overgrowth, 8 region==Underdocks, 9 ascension/10, 10 deck size/30, 11 relic count/10, 12 potions held/3, 13 free slots/3, 14 max slots/3, 15 rows to boss/16 (boss row - position row; 17-floor if the position is unknown), 16 position known, 17-22 boss one-hot [74 Ceremonial Beast, 82 The Kin, 83 Vantom, 77 Lagavulin Matriarch, 79 Soul Fysh, 84 Waterfall Giant], 23 boss unknown |
-| B pending         |     24 |  258 | 24-32 pending room one-hot [none, monster, elite, rest, shop, treasure, unknown, boss, ancient]; 33-44 special one-hot `SPECIALS = [card.sacrifice, card.reroll, rest.lift, rest.dig, rest.cook, rest.hatch, rest.kindle, rest.clone, rest.dreamcatcher, reserved x3]`; 45-277 event option one-hot, index (event_id-1)\*4 + min(option,3) for ids 1..58, and 277 = unknown event; 278-281 event step one-hot [0, 1, 2, >=3]                                                                      |
-| C map ahead       |    282 |   25 | over all paths from `position` (exclusive) to the boss, for T in [monster, elite, rest, shop, treasure, unknown]: min, mean, max count on a path (each /5) and distance in rows to the nearest reachable T (/16, 1.0 if none): 4 x 6 = 24 numbers, types in that order and stats in that order; then log(1 + paths)/5. All zero if the position is unknown.                                                                                                                                       |
-| D deck aggregates |    307 |   25 | counts /10 by type [Attack, Skill, Power, Curse, Status]; by rarity [Basic, Common, Uncommon, Rare, other]; by cost [0, 1, 2, 3+, X]; upgraded count /10; sum of printed damage /100 and block /100 (upgrade-aware, `names.CardInfo.damage_for/block_for`); mean cost (X = 0); counts /10 of [exhaust, ethereal, innate, retain, unplayable]; enchanted count /10                                                                                                                                 |
-| E deck counts     |    332 | 1154 | card vocab x [base, upgraded]: copies held (a transform EV writes fractions here)                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| F relics          |   1486 |  296 | multi-hot over the relic vocab                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| G potions         |   1782 |   63 | copies held, over the potion vocab                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| _H fight summary_ | _1845_ |  _8_ | _appended by `policy.py` (3.3): [weak E_loss/100, weak P_death, normal E_loss/100, normal P_death, elite ..., boss ...]_                                                                                                                                                                                                                                                                                                                                                                          |
+| block             | offset | size | contents (all float32)                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ----------------- | -----: | ---: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A scalars         |      0 |   22 | 0 hp/max_hp, 1 hp/100, 2 max_hp/100, 3 (max_hp-hp)/100, 4 gold/100, 5 floor/17, 6 act_index, 7 region==Overgrowth, 8 region==Underdocks, 9 ascension/10, 10 deck size/30, 11 relic count/10, 12 potions held/3, 13 free slots/3, 14 max slots/3, 15 rows to boss/16 (boss row - position row), 16-21 boss one-hot [74 Ceremonial Beast, 82 The Kin, 83 Vantom, 77 Lagavulin Matriarch, 79 Soul Fysh, 84 Waterfall Giant]                      |
+| B pending         |     22 |  258 | 22-30 pending room one-hot [none, monster, elite, rest, shop, treasure, unknown, boss, ancient]; 31-42 special one-hot `SPECIALS = [card.sacrifice, card.reroll, rest.lift, rest.dig, rest.cook, rest.hatch, rest.kindle, rest.clone, rest.dreamcatcher, reserved x3]`; 43-275 event option one-hot, index 43 + (event_id-1)\*4 + min(option,3) for ids 1..58, and 275 = an event id outside 1..58; 276-279 event step one-hot [0, 1, 2, >=3] |
+| C map ahead       |    280 |   25 | over all paths from `position` (exclusive) to the boss, for T in [monster, elite, rest, shop, treasure, unknown]: min, mean, max count on a path (each /5) and distance in rows to the nearest reachable T (/16, 1.0 if none): 4 x 6 = 24 numbers, types in that order and stats in that order; then log(1 + paths)/5                                                                                                                         |
+| D deck aggregates |    305 |   25 | counts /10 by type [Attack, Skill, Power, Curse, Status]; by rarity [Basic, Common, Uncommon, Rare, other]; by cost [0, 1, 2, 3+, X]; upgraded count /10; sum of printed damage /100 and block /100 (upgrade-aware, `names.CardInfo.damage_for/block_for`); mean cost (X and unplayable = 0); counts /10 of [exhaust, ethereal, innate, retain, unplayable]; enchanted count /10                                                              |
+| E deck counts     |    330 | 1154 | card vocab x [base, upgraded]: copies held (a transform EV writes fractions here)                                                                                                                                                                                                                                                                                                                                                             |
+| F relics          |   1484 |  296 | multi-hot over the relic vocab                                                                                                                                                                                                                                                                                                                                                                                                                |
+| G potions         |   1780 |   63 | copies held, over the potion vocab                                                                                                                                                                                                                                                                                                                                                                                                            |
+| _H fight summary_ | _1843_ |  _8_ | _appended by `policy.py` (3.3): [weak E_loss/100, weak P_death, normal E_loss/100, normal P_death, elite ..., boss ...]_                                                                                                                                                                                                                                                                                                                      |
 
 `rest.dreamcatcher` marks a heal taken while holding Dream Catcher, whose heal comes
 with a card reward. Relic **counters are deliberately absent.** Their meaning is
 emulator-specific (research notes, "Relic counter semantics"), and the mod's counters
 are display values, so no test could keep the two front ends agreeing on them. Pending
-blocks are zero in every plain state; only `apply_option` sets them.
+blocks are zero in every plain state; only `apply_option` sets them. There is no
+"unknown" input anywhere: position, map and boss are always known (3.1).
 
 **Map-ahead algorithm.** Build the DAG from `map_nodes` (children edges). Take the rows
 strictly above the position up to the boss. Walk the nodes in reverse topological order
@@ -552,9 +642,11 @@ label) rows to evaluate. The pools are the region's weak, normal and elite lists
 (`RunConstants.cs` Overgrowth/Underdocks `*Encounters`: 4/12/3 and 4/10/3 ids), plus the
 known boss. `fight_block(outcomes) -> np.ndarray[8]` takes the uniform mean of E[HP lost]
 and P(death) over each pool. Both functions live in `features.py`, so the layout has one
-owner. `policy.py` runs `FightNet` on the queries. Training fits FightNet first and then
-computes H for every V row with it (5.3), so V never sees an empty H block. Generation 0
-is played by the rules policy, which needs no H.
+owner. `policy.py` runs `FightNet` on the queries. FightNet reads encoded blocks (A, D, E,
+F and G, 5.1), so it is defined for any encoded afterstate, including the fractional
+transform EV (section 4). Training fits FightNet first and then computes H for every V
+row with it (5.3), so V never sees an empty H block. Generation 0 is played by the rules
+policy, which needs no H.
 
 The pools are static game data: every run of a region draws from the same lists. They
 are not the run's generated encounter sequence (state lists 11-12), which is hidden and
@@ -578,6 +670,7 @@ class Option:
     node: tuple[int, int, int] | None = None   # (col, row, NODE_*)
     event: tuple[int, int, int] | None = None  # (event id, option index, step)
     arg: int = 0                      # transform_to card id / enchantment ordinal
+    scorable: bool = True             # False: no value; the rules policy decides (3.7)
 
 @dataclass(frozen=True)
 class Decision:
@@ -586,155 +679,123 @@ class Decision:
 ```
 
 Kinds: `neow.relic`, `map.node`, `card.take`, `card.skip`, `card.sacrifice`,
-`card.reroll`, `reward.potion`, `reward.relic`, `reward.proceed` (leave the screen; unclaimed items are lost),
-`shop.card`, `shop.relic`, `shop.potion`, `shop.remove`, `shop.leave`, `rest.heal`,
-`rest.smith`, `rest.lift`, `rest.dig`, `rest.cook`, `rest.hatch`, `rest.kindle`,
-`rest.clone`, `event.option`, `select.offer`, `select.offer_done`, `select.upgrade`,
-`select.remove`, `select.transform`, `select.transform_to`, `select.enchant`,
-`select.duplicate` and `bundle.pick`. Treasure screens are not decisions on either side:
-the emulator offers only proceed (1.5.2), and the game's chest has one relic.
-`engine.py` builds these from the engine (1.2). The coach builds them from mod screens.
+`card.reroll`, `reward.potion`, `reward.relic`, `reward.proceed` (leave the screen;
+unclaimed items are lost), `shop.card`, `shop.relic`, `shop.potion`, `shop.remove`,
+`shop.leave`, `rest.heal`, `rest.smith`, `rest.lift`, `rest.dig`, `rest.cook`,
+`rest.hatch`, `rest.kindle`, `rest.clone`, `event.option`, `select.offer`,
+`select.offer_done`, `select.upgrade`, `select.remove`, `select.transform`,
+`select.transform_to`, `select.enchant`, `select.duplicate` and `bundle.pick`. Treasure
+screens are not decisions on either side: the emulator offers only proceed (1.5.2), and
+the game's chest has one relic. `engine.py` builds these from the engine (1.2), and
+`decision_from_live` builds them from mod screens (3.7). `select.enchant` options are
+always `scorable=False`: enchant targets go to the rules policy (section 4).
+
 `deck_index` always indexes `view.deck` in its sorted order. The engine side maps it back
 to `State.Deck`, whose order the selection screens use (the observation's deck block is in
-`State.Deck` order, `RunConstants.cs:51-58`). Options with identical afterstates (the five
-Strikes of a removal screen) are collapsed to one, keeping the lowest index.
+`State.Deck` order, `RunConstants.cs:51-58`). The live side maps a grid card to the first
+`view.deck` entry with the same (id, upgraded, enchantment). Options with identical
+afterstates (the five Strikes of a removal screen) are collapsed to one, keeping the
+lowest index.
 
 **Flattened options** (`shop.remove`, `rest.smith`) take their candidates from the screen
 that follows. `engine.py` steps the screen action (13, or 1) on a **faithful** clone
 (`Sts2Run_Clone(handle, 0, 0)`), reads that clone's mask and destroys it. This is safe
 because nothing is rolled forward: the follow-up screen's candidate list is shown to the
-player anyway. The live coach offers one `shop.remove` per deck card except Ascender's
-Bane. The real removal screen then gets its own `select.remove` decision, scored the same
-way.
+player anyway. The live side flattens from `view.deck`: every removable card for
+`shop.remove` (Ascender's Bane is not removable), every upgradable card for `rest.smith`.
+The removal or upgrade grid that follows is then its own `select.remove` or
+`select.upgrade` decision on both sides, scored the same way.
 
 ### 3.5 The live-run input format (`features.from_live`)
 
-The coach sends this object. Every field is on STS2MCP's non-combat payloads (sampled
-from `tests/fixtures/run_trace/QS2GYXRKWN-a8.json`). The deck comes from the
-cat12079801 base, which reports it on every non-combat screen (spec 5.1), and card
-enchantments from the spire-coach fork, which adds `enchantment: {id, amount} | null`
-to every card object (stage 0-1a plan, "Our additions"). Ids are the game's
-`ModelId.Entry` strings, the convention of the live snapshot schema
-(`2026-09-24-snapshot-schemas.md`). The mod sends the map only on map screens, so the
-coach caches the act's `nodes` and `boss` from the latest map screen and keeps
-`current` pointed at the node the player last travelled to. `features.py` builds its own
-id tables (`vocab.py`: `Entry` strings from `Generated/*.g.cs`, the `Enchantment` enum
-from `Core/Card.cs` through `sts2_gym.names`), so it depends on neither the snapshot
-loader nor the live converter.
+`from_live` reads the settled mod payload's own `run` and `player` objects (mod schema 4,
+non-combat screens) plus the map that `LiveRunTracker` caches. So the coach passes mod
+data through rather than converting it, and the replay test (3.6) exercises the same path
+on real payloads. Fields beyond the ones below are ignored. The fields and their sources:
+
+- `run.act`, `run.floor` and `run.ascension` come from the mod's `run` object on every
+  payload. `run.map_coord` is a field the spire-coach mod fork must add (3.7).
+- `player.deck` is on every screen in the merged mod, with each card shaped like a hand
+  card: `id`, `is_upgraded`, `upgrade_level`, and `enchantment: {id, amount} | null`
+  (`McpMod.StateBuilder.cs` `BuildCardInfo`, `McpMod.StateExtras.cs` `AddCardExtras`).
+  The captured fixtures already carry `player.deck` on 4,030 of 4,188 payloads, without
+  the enchantment field. A card with no `enchantment` key reads as unenchanted. That is
+  right for the fixtures, which predate `schema_version`, and would be wrong for a live
+  payload from an older mod, so the coach refuses payloads whose `schema_version` is
+  missing or below 4 (it shows "update the mod"). Only the replay test reads the
+  fixtures' older payloads.
+- `player.relics`, `player.potions` (occupied slots; a null id is an empty slot) and
+  `player.max_potion_slots` are the mod's own. Relic `counter` is carried but not used.
+- `map` is the tracker's cache of the last map screen in this act: the mod's `nodes`
+  with their `children`, `boss`, and `current_position`, which the tracker keeps current
+  (3.7), plus `act`, the `run.act` it was cached in.
 
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "spire-coach/live-run/1",
   "type": "object",
-  "required": [
-    "schema",
-    "character",
-    "ascension",
-    "act",
-    "floor",
-    "hp",
-    "max_hp",
-    "gold",
-    "deck",
-    "relics",
-    "potions",
-    "max_potion_slots",
-    "map"
-  ],
+  "required": ["run", "player", "map"],
   "properties": {
-    "schema": { "const": "spire-coach/live-run/1" },
-    "character": {
-      "const": "IRONCLAD",
-      "description": "player.character, normalised"
+    "run": {
+      "type": "object",
+      "required": ["act", "floor", "ascension"],
+      "properties": {
+        "act": { "type": "integer", "minimum": 1 },
+        "floor": { "type": "integer", "minimum": 1 },
+        "ascension": { "type": "integer", "minimum": 0, "maximum": 20 },
+        "map_coord": { "$ref": "#/$defs/coord" }
+      }
     },
-    "ascension": {
-      "type": "integer",
-      "minimum": 0,
-      "maximum": 20,
-      "description": "run.ascension"
-    },
-    "act": {
-      "type": "integer",
-      "minimum": 1,
-      "description": "run.act (1-based)"
-    },
-    "act_region": {
-      "enum": ["OVERGROWTH", "UNDERDOCKS", null],
-      "description": "optional; derived from map.boss.id when null"
-    },
-    "floor": { "type": "integer", "minimum": 1, "description": "run.floor" },
-    "hp": { "type": "integer", "minimum": 0, "description": "player.hp" },
-    "max_hp": {
-      "type": "integer",
-      "minimum": 1,
-      "description": "player.max_hp"
-    },
-    "gold": { "type": "integer", "minimum": 0, "description": "player.gold" },
-    "deck": {
-      "type": "array",
-      "description": "player.deck (every card, any order)",
-      "items": {
-        "type": "object",
-        "required": ["id", "upgraded"],
-        "properties": {
-          "id": {
-            "type": "string",
-            "description": "card entry slug, e.g. STRIKE_IRONCLAD"
-          },
-          "upgraded": { "type": "boolean", "description": "is_upgraded" },
-          "enchantment": {
-            "type": ["string", "null"],
-            "description": "game enchantment id, e.g. SHARP (mod: card.enchantment.id)"
-          },
-          "enchant_amount": {
-            "type": ["integer", "null"],
-            "minimum": 0,
-            "description": "mod: card.enchantment.amount"
+    "player": {
+      "type": "object",
+      "required": [
+        "hp",
+        "max_hp",
+        "gold",
+        "deck",
+        "relics",
+        "potions",
+        "max_potion_slots"
+      ],
+      "properties": {
+        "character": { "type": "string" },
+        "hp": { "type": "integer", "minimum": 0 },
+        "max_hp": { "type": "integer", "minimum": 1 },
+        "gold": { "type": "integer", "minimum": 0 },
+        "deck": { "type": "array", "items": { "$ref": "#/$defs/card" } },
+        "relics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id"],
+            "properties": {
+              "id": { "type": "string" },
+              "counter": { "type": ["integer", "null"] }
+            }
           }
-        }
-      }
-    },
-    "relics": {
-      "type": "array",
-      "description": "player.relics",
-      "items": {
-        "type": "object",
-        "required": ["id"],
-        "properties": {
-          "id": { "type": "string", "description": "relic entry slug" },
-          "counter": {
-            "type": ["integer", "null"],
-            "description": "carried, not a feature"
+        },
+        "potions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id"],
+            "properties": {
+              "id": { "type": ["string", "null"] },
+              "slot": { "type": "integer", "minimum": 0 }
+            }
           }
-        }
+        },
+        "max_potion_slots": { "type": "integer", "minimum": 0, "maximum": 6 }
       }
-    },
-    "potions": {
-      "type": "array",
-      "description": "player.potions (occupied slots only)",
-      "items": {
-        "type": "object",
-        "required": ["id"],
-        "properties": {
-          "id": { "type": "string", "description": "potion entry slug" },
-          "slot": { "type": "integer", "minimum": 0 }
-        }
-      }
-    },
-    "max_potion_slots": {
-      "type": "integer",
-      "minimum": 0,
-      "maximum": 6,
-      "description": "player.max_potion_slots"
     },
     "map": {
       "type": "object",
-      "required": ["nodes", "current", "boss"],
+      "required": ["act", "nodes", "boss", "current_position"],
       "properties": {
+        "act": { "type": "integer", "minimum": 1 },
         "nodes": {
           "type": "array",
-          "description": "map.nodes, the whole act incl. start and boss",
           "items": {
             "type": "object",
             "required": ["col", "row", "type", "children"],
@@ -765,21 +826,339 @@ loader nor the live converter.
             }
           }
         },
-        "current": {
-          "type": ["object", "null"],
-          "description": "map.current_position, or the node last travelled to; null if unknown",
-          "properties": {
-            "col": { "type": "integer" },
-            "row": { "type": "integer" }
-          }
-        },
         "boss": {
+          "type": "object",
+          "required": ["id"],
+          "properties": { "id": { "type": "string" } }
+        },
+        "current_position": { "$ref": "#/$defs/coord" }
+      }
+    }
+  },
+  "$defs": {
+    "coord": {
+      "type": "object",
+      "required": ["col", "row"],
+      "properties": {
+        "col": { "type": "integer" },
+        "row": { "type": "integer" }
+      }
+    },
+    "card": {
+      "type": "object",
+      "required": ["id", "is_upgraded"],
+      "properties": {
+        "id": { "type": "string" },
+        "is_upgraded": { "type": "boolean" },
+        "upgrade_level": { "type": "integer", "minimum": 0 },
+        "enchantment": {
           "type": ["object", "null"],
-          "description": "map.boss",
+          "required": ["id", "amount"],
           "properties": {
             "id": { "type": "string" },
-            "col": { "type": "integer" },
-            "row": { "type": "integer" }
+            "amount": { "type": "integer" }
+          }
+        },
+        "index": { "type": "integer" }
+      }
+    }
+  }
+}
+```
+
+The schema is the contract, and the tests check it with `jsonschema` (added to the dev
+group). Measured for this design: both schemas are valid Draft 2020-12, the 958 live-run
+objects built from fixture screens that follow a cached map and carry `player.deck`
+validate against this one, and the 1,090 fixture screens against 3.7's, with no errors.
+At run time `view_from_live` checks the required fields itself and raises `ValueError`
+naming the first one missing, so the coach needs no new dependency.
+
+The boss table, the one closed list in the format: `CEREMONIAL_BEAST_BOSS` 74,
+`THE_KIN_BOSS` 82, `VANTOM_BOSS` 83, `LAGAVULIN_MATRIARCH_BOSS` 77, `SOUL_FYSH_BOSS` 79,
+`WATERFALL_GIANT_BOSS` 84. The first three are Overgrowth, the last three Underdocks
+(`RunConstants.cs:395-399`; slugs are the decompiled class names, and the fixture shows
+`CEREMONIAL_BEAST_BOSS`). The boss also gives the region (1 or 2). **The boss is used as a
+feature on purpose.** The game names it on the map from the moment the act opens, and the
+mod reports it (`map.boss.id`), so it is visible state, not the hidden "upcoming
+encounter identity" the feature contract forbids. No monster node's encounter is ever
+used. The mod's `character` is the localized title ("The Ironclad"); the coach refuses
+other characters before calling `from_live`.
+
+### 3.6 Keeping the two front ends honest (Review Focus 3)
+
+1. **Synthetic round trips.** Play 3 seeds with the rules policy. At every non-combat
+   screen assert, exactly:
+   - `from_live(to_live_run(view)) == encode(view)`, where
+     `view = view_from_engine(env, ascension)`;
+   - `decision_from_live(decision_to_live(d, view), view) == d` for the engine decision
+     `d`, for every option kind 3.7 lists as buildable, and `scorable=False` (never an
+     exception) for every kind it lists as not buildable;
+   - the same equality for the encoding of every `apply_option` afterstate of `d`,
+     pending blocks included.
+
+   `to_live_run` and `decision_to_live` render the mod's own shapes (Entry slugs, mod enum
+   strings, display-name relics), so every parse path runs.
+
+2. **Real payloads: the replay agreement test** (`tests/python/test_run_train_live_replay.py`).
+   The fixtures in `tests/fixtures/run_trace/` are 32 captured Act 1 runs with 1,090
+   non-combat screens. The test replays each trace with `scripts/replay_full_run_trace.py`,
+   feeds every payload to one `LiveRunTracker`, and compares
+   `view_from_live(tracker.live_run(payload))` with `view_from_engine(replay_env, asc)`,
+   where `asc` is the trace's own `run.ascension` (8 in every fixture). 958 of the 1,090
+   screens follow a cached map and carry `player.deck`. There the two views must agree
+   on every field the payload carries:
+   - hp, max hp, gold, floor, act and ascension;
+   - relics (ids, as a set), potions (ids, as a multiset) and max potion slots (the
+     formula of 1.5.6 matches the mod's value on all 4,188 fixture payloads);
+   - the deck as a multiset of (id, upgraded). Enchantments are compared once payloads
+     carry the merged mod's `enchantment {id, amount}`; none of the fixtures do;
+   - the map (nodes, children, types, boss) and the position.
+
+   On the 87 screens before the first map screen (Neow's pages and the screens they
+   open) the test asserts `NotReadyError`. The 45 screens of `QS2GYXRKWN-a8` that follow
+   its first map were captured before the mod sent `player.deck` and are skipped. The
+   replay script already holds the emulator to these payloads field by field
+   (`DEFAULT_PER_STEP_FIELDS`: hp, max hp, gold, deck, relics, potions), so a failure
+   here is a front-end bug, not an emulator one.
+
+   Where the payload does not pin the position, the test asserts `NotReadyError`. Without
+   `run.map_coord`, that is 35% of the fixtures' map moves (3.7). It then repeats the screen
+   with `run.map_coord` injected from the trace's own `choose_map_node`, which is what the
+   mod field will carry. At the same screens it builds
+   `decision_from_live(tracker.screen(payload), view)` and
+   `engine.decision_of(replay_env, asc)`, and compares the multisets of afterstate
+   encodings over every option both sides can build.
+
+   Plumbing: `replay_trace` gains an optional `observer(reference_step, env)` callback,
+   called after each replayed step; nothing else in the script changes. Every fixture is
+   A8, so after integration the replay must run the engine at the trace's own
+   `run.ascension`, never the default 0. The one known divergence
+   (`check_run_traces.KNOWN_DIVERGENCES`) is a final game-over frame, not a non-combat
+   screen.
+
+3. **Name matching on real data.** Every relic display name in the fixtures must map to
+   the relic the run then holds, and every event slug to an emulator event. That covers
+   Neow's options, relic rewards and chests: 113 occurrences, 40 distinct. Measured for
+   this design, all 113 relic names and all 14 event slugs match, and no two of the 296
+   relic Entry slugs collide once normalized.
+4. **Pure function.** The encoded vector is a function of the view alone: deck, relic and
+   potion order never matter (tested by shuffling).
+
+### 3.7 The live decision contract (`features.decision_from_live`)
+
+`decision_from_live(screen: dict, view: RunView) -> Decision` builds the options on a live
+screen. `decision_to_live(decision, view) -> dict` renders an engine decision as a live
+screen, for the tests. `screen` is the settled payload's `state_type` and screen object
+(mod schema 4) plus the fields `LiveRunTracker.screen(payload)` adds. Every option carries
+`scorable`. When it is `False`, `score_options` returns no value for that option, and the
+coach shows the option without a number (and may show the rules policy's pick, labelled
+as a rule). A screen type the table does not know returns `Decision(type="unknown")`
+with every option unscorable, and the coach counts it.
+
+The mod screen fields used, for the screen types the table below builds options from.
+`decision_from_live` does not validate: a `state_type` outside this enum yields
+`Decision(type="unknown")`.
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "spire-coach/live-screen/1",
+  "type": "object",
+  "required": ["state_type"],
+  "properties": {
+    "state_type": {
+      "enum": [
+        "map",
+        "card_reward",
+        "rewards",
+        "shop",
+        "rest_site",
+        "event",
+        "card_select",
+        "bundle_select",
+        "treasure"
+      ]
+    },
+    "event_step": { "type": ["integer", "null"] },
+    "source": {
+      "type": ["object", "null"],
+      "properties": {
+        "event": { "type": "string" },
+        "relic": { "type": "string" }
+      }
+    },
+    "map": {
+      "type": "object",
+      "required": ["next_options"],
+      "properties": {
+        "next_options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["index", "col", "row", "type"],
+            "properties": {
+              "index": { "type": "integer" },
+              "col": { "type": "integer" },
+              "row": { "type": "integer" },
+              "type": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "card_reward": {
+      "type": "object",
+      "required": ["cards"],
+      "properties": {
+        "cards": { "type": "array", "items": { "$ref": "#/$defs/card" } },
+        "can_skip": { "type": "boolean" },
+        "alternatives": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["index", "option_id"],
+            "properties": {
+              "index": { "type": "integer" },
+              "option_id": { "type": "string" },
+              "enabled": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "rewards": {
+      "type": "object",
+      "required": ["items", "can_proceed"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["index", "type"],
+            "properties": {
+              "index": { "type": "integer" },
+              "type": { "type": "string" },
+              "description": { "type": "string" },
+              "potion_id": { "type": "string" },
+              "gold_amount": { "type": "integer" }
+            }
+          }
+        },
+        "can_proceed": { "type": "boolean" }
+      }
+    },
+    "shop": {
+      "type": "object",
+      "required": ["items"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["index", "category", "price", "is_stocked"],
+            "properties": {
+              "index": { "type": "integer" },
+              "category": {
+                "enum": ["card", "relic", "potion", "card_removal"]
+              },
+              "price": { "type": "integer" },
+              "is_stocked": { "type": "boolean" },
+              "can_afford": { "type": "boolean" },
+              "card_id": { "type": "string" },
+              "relic_id": { "type": "string" },
+              "potion_id": { "type": "string" }
+            }
+          }
+        },
+        "can_proceed": { "type": "boolean" }
+      }
+    },
+    "rest_site": {
+      "type": "object",
+      "required": ["options"],
+      "properties": {
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["index", "id", "is_enabled"],
+            "properties": {
+              "index": { "type": "integer" },
+              "id": { "type": "string" },
+              "is_enabled": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "event": {
+      "type": "object",
+      "required": ["event_id", "is_ancient", "options"],
+      "properties": {
+        "event_id": { "type": "string" },
+        "is_ancient": { "type": "boolean" },
+        "body": { "type": ["string", "null"] },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["index", "is_locked", "is_proceed"],
+            "properties": {
+              "index": { "type": "integer" },
+              "title": { "type": "string" },
+              "description": { "type": "string" },
+              "is_locked": { "type": "boolean" },
+              "is_proceed": { "type": "boolean" },
+              "relic_name": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "card_select": {
+      "type": "object",
+      "required": ["screen_type", "cards"],
+      "properties": {
+        "screen_type": { "type": "string" },
+        "prompt": { "type": ["string", "null"] },
+        "cards": { "type": "array", "items": { "$ref": "#/$defs/card" } },
+        "can_skip": { "type": "boolean" },
+        "min_select": { "type": "integer" },
+        "max_select": { "type": "integer" }
+      }
+    },
+    "bundle_select": {
+      "type": "object",
+      "required": ["bundles"],
+      "properties": {
+        "bundles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["index", "cards"],
+            "properties": {
+              "index": { "type": "integer" },
+              "cards": { "type": "array", "items": { "$ref": "#/$defs/card" } }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "card": {
+      "type": "object",
+      "required": ["id", "is_upgraded", "index"],
+      "properties": {
+        "id": { "type": "string" },
+        "is_upgraded": { "type": "boolean" },
+        "index": { "type": "integer" },
+        "enchantment": {
+          "type": ["object", "null"],
+          "required": ["id", "amount"],
+          "properties": {
+            "id": { "type": "string" },
+            "amount": { "type": "integer" }
           }
         }
       }
@@ -788,42 +1167,61 @@ loader nor the live converter.
 }
 ```
 
-The boss table, the one closed list in the format: `CEREMONIAL_BEAST_BOSS` 74,
-`THE_KIN_BOSS` 82, `VANTOM_BOSS` 83, `LAGAVULIN_MATRIARCH_BOSS` 77, `SOUL_FYSH_BOSS` 79,
-`WATERFALL_GIANT_BOSS` 84. The first three are Overgrowth, the last three Underdocks
-(`RunConstants.cs:395-399`; slugs are the decompiled class names, and the fixture shows
-`CEREMONIAL_BEAST_BOSS`). **The boss is used as a feature on purpose.** The game names it
-on the map from the moment the act opens, and the mod reports it (`map.boss.id`), so it is
-visible state, not the hidden "upcoming encounter identity" the feature contract forbids.
-No monster node's encounter is ever used.
+How each screen becomes options (field names are the mod's; "unscorable" means
+`scorable=False`):
 
-The coach also sends `decision` objects (3.4) built from the screen. The mapping (the
-coach plan implements it) is: `card_reward.cards[i]` becomes `card.take` (id,
-is_upgraded), plus `card.skip` when `can_skip`. `shop.items[i]` becomes `shop.card/relic/potion`
-(price), and `category: card_removal` becomes one `shop.remove` per deck card.
-`rest_site.options[i].id` becomes `rest.<id lower>`, with SMITH flattened per upgradable
-card. `event.options[i]` (not locked, not proceed) becomes `event.option` (event slug to
-emulator id via `RunConstants` `Event<Name>` constants, slugified). Its step is counted by
-the coach across consecutive screens of the same event, and is 0 if the coach joined
-mid-event. `map.next_options[k]` becomes `map.node`. `card_select` becomes `select.*`,
-with the kind from `screen_type` or prompt keywords (Remove, Upgrade, Transform, Enchant,
-Choose). `rewards.items[i]` becomes `reward.*`.
+| screen                                                                            | options built                                                                                                                                                                                                                                                                               | unscorable, and the fallback                                                                                                                                                                                                                                           |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `map`                                                                             | `map.node` per `next_options[k]` (col, row, type)                                                                                                                                                                                                                                           | none                                                                                                                                                                                                                                                                   |
+| `card_reward`                                                                     | `card.take` per card, including Lasting Candy's fourth; `card.skip`, `card.sacrifice` and `card.reroll` from `alternatives[].option_id` (`Skip`, `SACRIFICE`, `REROLL`, case-insensitive)                                                                                                   | an alternative with another id                                                                                                                                                                                                                                         |
+| `rewards`                                                                         | `reward.potion` from `potion_id` (only with a free slot); `reward.relic` from the display name in `description`, matched to a relic Entry by dropping case and non-alphanumerics; `reward.proceed` when `can_proceed`; gold and card items are auto, as on the engine side (1.2)            | a relic name that matches no Entry                                                                                                                                                                                                                                     |
+| `shop`                                                                            | `shop.card` (`card_id`, taken as unupgraded as on the engine side; `apply_option` applies the eggs), `shop.relic` (`relic_id`), `shop.potion` (`potion_id`) for stocked, affordable items; `shop.remove` flattened over `view.deck` for a stocked `card_removal`; `shop.leave`              | none                                                                                                                                                                                                                                                                   |
+| `rest_site`                                                                       | `rest.heal`, `rest.lift`, `rest.dig`, `rest.hatch`, `rest.cook`, `rest.kindle`, `rest.clone` from `options[].id` (HEAL, LIFT, DIG, HATCH, COOK, KINDLE, CLONE; decompiled `RestSiteOption` subclasses) where `is_enabled`; `rest.smith` (SMITH) flattened over upgradable `view.deck` cards | any other id (MEND is multiplayer)                                                                                                                                                                                                                                     |
+| `event`, `is_ancient`                                                             | `neow.relic` per option, from `relic_name` matched like a reward relic                                                                                                                                                                                                                      | a name that matches no Entry                                                                                                                                                                                                                                           |
+| `event`                                                                           | `event.option` per option that is neither locked nor proceed: (emulator id of `event_id`, via the `Event<Name>` constants slugified; `index`; `event_step`). A page whose only option is proceed is auto                                                                                    | every option when `event_step` is null (the coach joined mid-event)                                                                                                                                                                                                    |
+| `card_select`, `screen_type` `upgrade`                                            | `select.upgrade` per card                                                                                                                                                                                                                                                                   | none                                                                                                                                                                                                                                                                   |
+| `card_select`, `select` or `simple_select`                                        | `select.remove` per card when `prompt` contains "Remove"; `select.duplicate` when `source.relic` is `DOLLYS_MIRROR`                                                                                                                                                                         | any other prompt: prompt keywords are the only purpose signal, so only the known ones count                                                                                                                                                                            |
+| `card_select`, `transform`                                                        | `select.transform` (random, not upgraded: the EV of section 4) per card                                                                                                                                                                                                                     | every card when `source` is null, or names a non-random source: event `WOOD_CARVINGS` (TransformTo Peck or Toric Toughness), relic `CLAWS` (TransformToCarrying into Maul) or relic `ASTROLABE` (upgraded transforms); the payload names no target and no upgrade flag |
+| `card_select`, `enchant` (older mods: `NDeckEnchantSelectScreen`)                 | `select.enchant` per card                                                                                                                                                                                                                                                                   | always: enchant targets go to the rules policy (section 4)                                                                                                                                                                                                             |
+| `card_select`, `choose`                                                           | `select.offer` per offered card; `select.offer_done` when `can_skip`                                                                                                                                                                                                                        | none                                                                                                                                                                                                                                                                   |
+| `bundle_select`                                                                   | `bundle.pick` per bundle (its three cards)                                                                                                                                                                                                                                                  | none                                                                                                                                                                                                                                                                   |
+| `treasure`, `game_over`, combat states                                            | no decision                                                                                                                                                                                                                                                                                 | n/a                                                                                                                                                                                                                                                                    |
+| anything else (`crystal_sphere`, `fake_merchant`, `relic_select`, `overlay`, ...) | `Decision(type="unknown")`                                                                                                                                                                                                                                                                  | every option; counted                                                                                                                                                                                                                                                  |
 
-### 3.6 Keeping the two front ends honest (Review Focus 3)
+**The tracker's fields.**
 
-- `features.to_live_run(view) -> dict` renders a view as live JSON, using slugs and the
-  mod's enum strings, so the parse path is fully exercised. Required test: play 3 seeds
-  with the rules policy, and at **every** non-combat decision assert
-  `from_live(to_live_run(view_from_engine(s)))` equals `from_run_engine(s)` exactly. This
-  covers each decision type met, all pending blocks through `apply_option`, and positions
-  at every row.
-- Required fixture test: parse the real mod map payloads in
-  `tests/fixtures/run_trace/QS2GYXRKWN-a8.json`. Assert their map blocks (C) equal those
-  computed from `Sts2RunEnv(seed="QS2GYXRKWN")`'s map at the same position. Run generation
-  matches live saves exactly (HANDOFF "Run generation is exact"), so any difference is a
-  front-end bug.
-- The encoded vector is a pure function of the view: deck, relic and potion order never
-  matter (tested by shuffling).
+- `event_step` counts the pages already answered at this event, starting from its first
+  page. A new page is a change of `body`, of the option titles or of the option
+  descriptions while `event_id` stays the same. Titles alone are not enough: Abyssal
+  Baths' repeated "Linger" pages differ only in `body` (decompiled
+  `ABYSSAL_BATHS.pages.LINGER{n}`), and Slippery Bridge repeats an empty body with the
+  same two titles while its descriptions change (the HP cost rises by one per "Hold On",
+  `SlipperyBridge.CurrentHpLoss`, and the card at stake is redrawn). Counted this way,
+  the pages equal the option choices on all 23 event visits in the captured runs; titles
+  and body alone miss both Slippery Bridge visits. Screens the event opens in between (a
+  card selection, a rewards or card screen) do not end the visit. The field is null when
+  the tracker did not see the event's first page. The engine side counts the event
+  options taken in this visit, and the replay test (3.6) checks that the two agree on
+  every captured event.
+- `source` records what opened a `card_select` screen: `{"event": id}` when the previous
+  screen was that event, `{"relic": id}` when a relic appeared in `player.relics` since the
+  previous screen (bought, claimed or chosen), and null otherwise.
+- **The position** comes from `run.map_coord` when the mod sends it. The spire-coach mod
+  fork must add that field to `run` on every payload: `runState.VisitedMapCoords.Last()`,
+  which the game's map shows the player. Until then the tracker infers the node from the
+  last map screen's `next_options`. That works when only one option was offered, or only
+  one option's type matches the room entered (a `?` matches any room). Otherwise the
+  tracker raises `NotReadyError` until the next map screen names the position. In the
+  captured runs that happens on 88 of 251 map moves (35%). The inference is exact on the
+  other 163: 133 moves had one option and 30 were unique by room type.
+
+**Not buildable from live payloads**, collected from the table: transform targets and
+the upgraded flag (unscorable unless the source is known to be a plain random transform),
+purposes beyond Remove on generic select screens (prompt keywords), `select.duplicate`
+without its source relic, event pages after a mid-event join, alternatives and rest
+options with unknown ids, relic names that match no Entry, and every screen type outside
+the table. Enchant targets are deliberately unscorable (section 4). None of these is ever
+an exception: each yields `scorable=False`, and the whole screen is still shown.
 
 ---
 
@@ -835,43 +1233,73 @@ are recomputed from the stored pre-decision view and the chosen option. That gua
 train/serve parity even where `apply_option` models an effect only partly. The network
 learns the remainder from outcomes.
 
-| option                                                              | afterstate                                                                                                                                                                                                                                                                                       |
-| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `card.take` X, `select.offer` X, `select.duplicate` i               | deck += card (with the eggs applied: Molten Egg upgrades an Attack, Toxic Egg a Skill, Frozen Egg a Power, when upgradable; `RunNonCombatEffects.cs:252-273`)                                                                                                                                    |
-| `card.skip`, `select.offer_done`, `reward.proceed`, `shop.leave`    | unchanged                                                                                                                                                                                                                                                                                        |
-| `shop.card/relic/potion`                                            | deck/relics/potions += item; gold -= price                                                                                                                                                                                                                                                       |
-| `shop.remove` i                                                     | deck -= i; gold -= price                                                                                                                                                                                                                                                                         |
-| `select.remove` i                                                   | deck -= i                                                                                                                                                                                                                                                                                        |
-| `select.upgrade` i, `rest.smith` i                                  | deck[i].upgraded = true                                                                                                                                                                                                                                                                          |
-| `select.enchant` i                                                  | deck[i].enchantment = arg, amount 1                                                                                                                                                                                                                                                              |
-| `select.transform_to` i                                             | deck -= i; deck += arg (upgraded and enchantment carried for ...Carrying)                                                                                                                                                                                                                        |
-| `select.transform` i                                                | deck -= i; **expected value**: block E gets 1/N at each card of the Ironclad transform pool (the Ironclad pool minus Basic rarity, `CardPools.g.cs`), upgraded for TransformToRandomUpgraded. Implemented as `encode_after_transform(view, i, upgraded)`, because a `RunView` holds whole cards. |
-| `rest.heal`                                                         | hp = min(max_hp, hp + max(1, floor(0.3*max_hp)) + 15*RegalPillow) (`RunEngine.cs:5268-5276`, `RelicEffects.cs:1754`); Stone Humidifier: max_hp += 5 and hp += 5 (`RunEngine.cs:2061-2066`); Dream Catcher: special `rest.dreamcatcher`                                                           |
-| `rest.cook`                                                         | max_hp += 9, hp += 9, special `rest.cook` (the two removals follow as decisions)                                                                                                                                                                                                                 |
-| `rest.lift/dig/hatch/kindle/clone`, `card.sacrifice`, `card.reroll` | special = the kind (**learned**)                                                                                                                                                                                                                                                                 |
-| `neow.relic` R, `reward.relic` R                                    | relics += R                                                                                                                                                                                                                                                                                      |
-| `reward.potion` P                                                   | potions += P                                                                                                                                                                                                                                                                                     |
-| `bundle.pick` b                                                     | deck += its 3 cards                                                                                                                                                                                                                                                                              |
-| `map.node` n                                                        | position = n; floor += 1; pending.room = type(n)                                                                                                                                                                                                                                                 |
-| `event.option` (e, o, s)                                            | pending.event = (e, o, s) (**learned**)                                                                                                                                                                                                                                                          |
+| option                                                              | afterstate                                                                                                                                                                                                                                            |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `card.take` X, `select.offer` X, `select.duplicate` i               | deck += card (with the eggs applied: Molten Egg upgrades an Attack, Toxic Egg a Skill, Frozen Egg a Power, when upgradable; `RunNonCombatEffects.cs:252-273`)                                                                                         |
+| `card.skip`, `select.offer_done`, `reward.proceed`, `shop.leave`    | unchanged                                                                                                                                                                                                                                             |
+| `shop.card/relic/potion`                                            | deck/relics/potions += item; gold -= price                                                                                                                                                                                                            |
+| `shop.remove` i                                                     | deck -= i; gold -= price                                                                                                                                                                                                                              |
+| `select.remove` i                                                   | deck -= i                                                                                                                                                                                                                                             |
+| `select.upgrade` i, `rest.smith` i                                  | deck[i].upgraded = true                                                                                                                                                                                                                               |
+| `select.enchant` i                                                  | not scored: the rules policy picks (below)                                                                                                                                                                                                            |
+| `select.transform_to` i                                             | deck -= i; deck += arg (upgraded and enchantment carried for ...Carrying)                                                                                                                                                                             |
+| `select.transform` i                                                | **expected value**, built by `encode_after_transform(view, i, upgraded)` because a `RunView` holds whole cards (below)                                                                                                                                |
+| `rest.heal`                                                         | `hp = min(max_hp, hp + max(1, floor(0.3 * max_hp)) + 15 * has_regal_pillow)` (`RunEngine.cs:5268-5276`, `RelicEffects.cs:1754`); Stone Humidifier: `max_hp += 5` and `hp += 5` (`RunEngine.cs:2061-2066`); Dream Catcher: special `rest.dreamcatcher` |
+| `rest.cook`                                                         | `max_hp += 9`, `hp += 9`, special `rest.cook` (the two removals follow as decisions)                                                                                                                                                                  |
+| `rest.lift/dig/hatch/kindle/clone`, `card.sacrifice`, `card.reroll` | special = the kind (**learned**)                                                                                                                                                                                                                      |
+| `neow.relic` R, `reward.relic` R                                    | relics += R                                                                                                                                                                                                                                           |
+| `reward.potion` P                                                   | potions += P                                                                                                                                                                                                                                          |
+| `bundle.pick` b                                                     | deck += its 3 cards                                                                                                                                                                                                                                   |
+| `map.node` n                                                        | position = n; floor += 1; pending.room = type(n)                                                                                                                                                                                                      |
+| `event.option` (e, o, s)                                            | pending.event = (e, o, s) (**learned**)                                                                                                                                                                                                               |
+
+**The transform EV.** Let P be the card's transform pool, exactly as
+`RunRewardGenerator.TransformOptionsFor` builds it (`RunRewardGenerator.cs:46-73`): the
+original's own pool (Ironclad; Colorless for Ancient, Event and Token originals; Curse or
+Status for those), without the original itself and without `MultiplayerOnly` cards,
+narrowed to Common, Uncommon and Rare unless the original is a Curse or Status.
+`vocab.py` rebuilds P from `CardPools.g.cs` and `Cards.g.cs`. With N = |P| and outcome
+decks `d_j = deck - i + P_j` (upgraded for TransformToRandomUpgraded):
+
+- block E holds the old counts minus card i, plus 1/N at each card of P;
+- block D is the mean of `D(d_j)` over the N outcomes. D is not linear (mean cost, for
+  one), so it is averaged over the decks rather than read off the fractional counts;
+- blocks A (the deck size does not change), F and G are those of any `d_j`;
+- H is FightNet evaluated on these encoded blocks. FightNet reads encoded blocks (3.3), so
+  that is well defined, and the encoding is the same one training stores for a chosen
+  transform, so train and serve agree. It is the fight summary of the mean deck, not the
+  mean of the N decks' summaries, which would cost N times as many evaluations per
+  option.
 
 **Why this split.**
 
 - **Deterministic options are applied directly.** Their effect is known and cheap to
   compute, and applying it lets the network compare the new deck with the old one on
   exactly the features it already reads.
-- **Transforms use explicit expected-value counts.** The outcome distribution is static
+- **Transforms use explicit expected-value features.** The outcome distribution is static
   game data (the pool) and the structure is known, so an exact EV beats a learned guess.
+- **Enchant targets go to the rules policy, in self-play and in the coach.** The enchant
+  screen asks which card gets an enchantment the preceding option already chose. V cannot
+  tell the targets apart: block E counts cards by (id, upgraded), so enchanting any
+  target changes only D's enchanted count, the same for every target, and every option
+  would get the same value. The rules policy picks the highest-tier card among those the
+  screen lists; engine and game list only cards the enchantment can take. What the
+  enchantment is worth is still learned, through the event option or relic that grants it
+  (the pending blocks). The screen is also rare: 8 of the 1,090 non-combat screens in
+  the captured runs (8 of their 21 card-select screens). So there is no per-card
+  enchantment block in `FEATURE_VERSION` 1. It is
+  revisited if enchant-heavy content (the Act 2 and 3 ancients) enters scope.
 - **Unknown (`?`) rooms and the room about to be entered use `pending.room`,** an input
   of the same network. The target of an afterstate at a `?` node averages over what the
   room became in real runs, so the network learns the expectation itself. That includes
   the history-dependent odds (`RunEngine.cs:397-540`) that neither front end can see.
-- **Events and the rare random rest/card options use the learned pending blocks**: a
+- **Events and the rare random rest and card options use the learned pending blocks**: a
   per-option head expressed as inputs of one network, rather than hand-written EVs.
   1. The emulator models 57 events, 31 of them reachable in Act 1, with multi-page,
-     random, fight-bearing and screen-opening effects. Hand-coding their expected effects is a large surface where the emulator's
-     own event models were repeatedly wrong (HANDOFF E54, E76-E78: "Read the decompiled
-     model before trusting an event's options").
+     random, fight-bearing and screen-opening effects. Hand-coding their expected effects
+     is a large surface where the emulator's own event models were repeatedly wrong
+     (HANDOFF E54, E76-E78: "Read the decompiled model before trusting an event's
+     options").
   2. The coach has no run-level simulator: the snapshot loader is combat-only, so an
      engine-computed EV could not be reproduced live.
   3. The learned value is trained on the emulator's actual outcomes, downstream effects
@@ -898,45 +1326,64 @@ embedding of a deck is the count-weighted sum of per-card vectors.
 - **FightNet** predicts a fight's outcome. Input: blocks A, D, E, F, G of the view at
   fight start (the pending blocks B and the map block C are not used), plus a
   one-hot over the 88 encounter ids (`sts2_gym.env.ENCOUNTER_NAMES`, 0-87) and a weak
-  flag. Dense width 24 + 25 + 88 + 1 = 138, concatenated with the embeddings (104) = 242,
+  flag. Dense width 22 + 25 + 88 + 1 = 136, concatenated with the embeddings (104) = 240,
   then 256 -> ReLU -> 128 -> ReLU -> **22 logits**: class 0 = death, and classes 1-21 =
-  HP lost (hp_before - hp_after, after end-of-fight heals) in buckets (-inf, 0], 1-4, 5-8,
+  HP lost (`hp_before - hp_after`, after end-of-fight heals) in buckets (-inf, 0], 1-4, 5-8,
   ..., 73-76, and 77 or more. About 180k parameters. `E[loss]` uses the bucket centres, and
   `P(death) = p[0]`.
-- **RunValueNet (V)** values an afterstate. Input: the 1853-wide vector (base plus H).
-  Dense = A + B + C + D + H = 340, concatenated with the embeddings = 444, then 256 ->
+- **RunValueNet (V)** values an afterstate. Input: the 1851-wide vector (base plus H).
+  Dense = A + B + C + D + H = 338, concatenated with the embeddings = 442, then 256 ->
   ReLU -> dropout 0.1 -> 256 -> ReLU -> heads: **18 floor logits** (class k-1 = the run
   ended on floor k for k = 1..17; class 17 = Act 1 boss killed) and one sigmoid end-HP
   fraction. About 270k parameters.
 
-**Why these sizes.** In StS1, a roughly 100k-parameter policy was enough for card,
-path, shop and rest judgement (spec section 3). Upstream measured that cutting a combat
-net from 935k to 167k parameters moved validation NLL by 0.002 ("capacity never was the
+**Why these sizes.** In StS1, a roughly 100k-parameter policy was enough for card, path,
+shop and rest judgement (spec section 3). Upstream measured that cutting a combat net
+from 935k to 167k parameters moved validation NLL by 0.002 ("capacity never was the
 limit", FINDINGS). The regime is data-bound: about 16k runs per buffer window (5.4), and
 a few dozen correlated decisions per run (51-58 engine steps, many of them auto screens,
 2.3). So the width goes into shared embeddings, a 64-dimensional vector per card for
-cards that appear thousands of times a day, and a two-layer 256 trunk. Weight decay and early stopping handle the rest. Inference in the
-workers is numpy (`NumpyMLP` loaded from the checkpoint's `.npz` export), so self-play
-processes never import torch. A test asserts the numpy and torch outputs agree within
-1e-5.
+cards that appear thousands of times a day, and a two-layer 256 trunk. Weight decay and
+early stopping handle the rest. Inference in the workers is numpy (`NumpyMLP` loaded
+from the checkpoint's `.npz` export), so self-play processes never import torch. A test
+asserts the numpy and torch outputs agree within 1e-5.
 
-### 5.2 Targets
+### 5.2 Targets, and the value the coach shows
 
-- **Final floor**: the floor the run ended on, or **18** if the Act 1 boss died, so a
-  clear sits one floor past a death at the boss. `V_run = E[floor] = sum_k k * p_k`
-  over k = 1..18, in expected-floor units. This is what the coach shows, as differences
-  from the best option.
-- **Boss kill**: `P(boss killed) = p_18`. Nothing extra is trained.
+- **Final floor**: the floor the run ended on (1-17), or class 18 if the Act 1 boss died.
+  V's floor head is a distribution `p_1 .. p_18` over these.
+- **The value.** `V_W = sum_{k=1..17} k * p_k + W * p_18`, in expected-floor units, with
+  **W = 26**. W is a policy and export parameter: it is written to `model.json`, and the
+  coach and the loop read it from there. `V_W` is what the policy maximizes and what the
+  coach shows, as differences from the best option.
+- **Why W = 26.** A death at the boss ends the run, and a kill does not. The spec's
+  currency is the expected final floor of the whole run, so W is the floor a run that
+  clears Act 1 can be expected to reach. The floor counter continues across acts
+  (HANDOFF "Reaching act 2": a capture enters Act 2 on floor 17), and every act's map has
+  the same 16 rows (`RunConstants.MapBossRow`), so Act 2 spans floors 18 to 34. Act 2 is
+  not validated in the emulator yet (spec section 3), so nothing can measure how far such a
+  run gets. W assumes half of Act 2: 18 + 8 = 26. That is deliberately modest for a
+  policy that dies near floor 13 of Act 1 today.
+  - What W buys: turning 1 percentage point of "dies at the boss" into "kills the boss"
+    is worth 0.01 \* (26 - 17) = 0.09 floors. At W = 18 it would be worth 0.01, and V
+    would barely tell a deck that can kill the boss from one that only reaches it.
+  - On the probe's 58 paired seeds, W = 26 swaps the order of 120/500 and 250/500 (2.6).
+  - W is in no training target (the network learns the distribution), so changing it
+    needs no retraining. Once Act 2 is modelled, it is replaced by V's own estimate at
+    Act 2's first floor.
+- **Boss kill**: `p_boss = p_18`. `score_options` reports it for every option beside
+  `V_W`. The coach shows it as the win chance once the champion's eval boss-kill rate is
+  at least 5% (spec 8.1), read from `model.json`.
 - **End HP**: hp/max_hp at the end of Act 1, 0 if dead. An auxiliary head, trained with
   weight 0.25. It is kept for the Act 2 extension, and decisions never read it.
 - **Fight outcome**: the 22-way class of each fight (5.1). Label: hp at fight start
   against hp on the first post-fight observation, and death.
-- **Bootstrapped floor target** for decision t with afterstate x*t:
-  `y_t = (1 - beta) * onehot(final floor) + beta _ p_gen(x_{t+1})`. Here `p_gen` is the
+- **Bootstrapped floor target** for decision t with afterstate `x_t`:
+  `y_t = (1 - beta) * onehot(final floor) + beta * p_gen(x_{t+1})`. Here `p_gen` is the
   generating network's own floor distribution for the next chosen afterstate, stored in
-  the shard at generation time. Use beta = 0.3 (upstream's measured best blend,
-  FINDINGS "the value target"). The last decision of a run, and all data from a policy
-  with no network (the rules policy), use beta = 0.
+  the shard at generation time. Use beta = 0.3 (upstream's measured best blend, FINDINGS
+  "the value target"). The last decision of a run, and all data from a policy with no
+  network (the rules policy), use beta = 0.
 
 ### 5.3 Losses and optimisation
 
@@ -957,51 +1404,90 @@ processes never import torch. A test asserts the numpy and torch outputs agree w
 
 - V: the decisions of the last **8 generations** of self-play data (about 16k runs).
   Older data came from weaker policies and would bias V down.
-- FightNet: every fight played at the current `combat_budget`, from every generation,
-  capped at the newest **400k** fights. A fight's outcome given (deck, relics, HP,
-  encounter) depends on the combat searcher. That is fixed while the budget is, so old
-  fights stay valid; changing the budget starts a new era (2.7).
+- FightNet: every fight played at the current `combat_budget` and ascension, from every
+  generation, capped at the newest **400k** fights. A fight's outcome given (deck,
+  relics, HP, encounter) depends on the combat searcher and on the ascension's enemy
+  values. Both are fixed within an era, so old fights stay valid; changing either
+  starts a new era (2.7, 5.7).
 - Shards keep pre-decision `RunView`s and options, never vectors (5.7), so a
   `FEATURE_VERSION` change re-encodes old data instead of discarding it.
 
 ### 5.5 Exploration
 
-Self-play picks options with `pi(o) = (1 - eps) * softmax(V(o) / tau_g) + eps * uniform`,
+Self-play picks options with `pi(o) = (1 - eps) * softmax(V_W(o) / tau_g) + eps * uniform`,
+over the decision's scorable options (unscorable ones go to the rules policy, 3.4),
 where `tau_g = max(0.10, 0.60 * 0.85^g)` floors and g is the generation of the playing
 policy, and `eps = 0.02`. At tau = 0.6, an option 0.3 floors worse is still picked 60% as
 often as the best; at tau = 0.1 it is picked 5% as often. Generation 0 is the rules
-policy with a uniformly random option at probability eps0 = 0.15. The sampling RNG is
-seeded from the run seed, like MCTS, so a self-play run is reproducible; the retry rule in
-5.7 relies on it. Evaluation is argmax (tau = eps = 0), so it is deterministic given the
-seed.
+policy with a uniformly random option at probability eps0 = 0.15. All of this sampling
+draws from the run's `explore_rng` (5.10), so a self-play run is reproducible; the retry
+rule of 5.8 relies on it. Evaluation is argmax (tau = eps = 0), so it is deterministic
+given the seed.
 
 ### 5.6 Generations, evaluation, promotion
 
-- A generation is **2,000 runs** at the default budget: 40-66 min on 8 workers at today's
-  run length, and 2.2-3.7 h once runs reach the boss (2.8). Training follows (minutes),
-  then evaluation of the new learner on the 200 held-out seeds
-  (`rl/run_train/eval_seeds.json`: 200 fixed 10-character seeds starting with `E`, from
-  the alphabet `0-9A-Z` without I and O, which the game folds into 1 and 0,
-  `SeedHelper.cs:23-24`). Training seeds are `T{gen:04d}R{i:04d}`, so no training seed can
-  equal an eval seed.
-- **Promotion (the plan's rule).** The challenger becomes champion iff the lower bound of
-  its 95% CI on mean floor (mean - 1.96 \* s / sqrt(200)) exceeds the champion's mean
-  floor on the same 200 seeds. Boss-kill rate is reported with a Wilson 95% interval and
-  does not gate. The initial champion is the rules policy, evaluated once (Task 2B).
+- **A generation** is **2,000 runs** at the default budget: 40-66 min on 8 workers at
+  today's run length, and 2.2-3.7 h once runs reach the boss (2.8). Training follows
+  (minutes), then evaluation of the new learner.
+- **Seed sets.** They never overlap. Every seed is drawn from `0-9A-Z` without I and O,
+  which the game folds into 1 and 0 (`SeedHelper.cs:23-24`), and each set has its own
+  first character.
+
+  | set          | seeds                                                          | used for                                                 |
+  | ------------ | -------------------------------------------------------------- | -------------------------------------------------------- |
+  | training     | `T{gen:04d}R{i:04d}`                                           | self-play                                                |
+  | eval         | 200 seeds, `E` + 9 characters (`rl/run_train/eval_seeds.json`) | promotion only                                           |
+  | final test   | 500 seeds, `F` + 9 characters (`rl/run_train/test_seeds.json`) | the spec's stage-2 bar only; never promotion or training |
+  | budget check | `B0000`-`B0199`                                                | the recheck of 2.7                                       |
+
+- **Evaluation runs through the runner** (5.8), with its crash handling.
+  `evaluate.evaluate(policy_spec, seeds, config) -> EvalResult` stores one
+  `SeedResult(seed, status, floor, boss_killed, value)` per seed. The status is one of
+  `completed`, `aborted` (the worker died twice), `error` (raised twice) and
+  `truncated` (step cap), and only `completed` seeds count. Every `EvalResult` carries an
+  `EvalMeta`: combat budget, ascension, both native API versions, `FEATURE_VERSION`, W,
+  and SHA-256 hashes of the seed file and the policy checkpoint.
+- **Comparisons use the seeds both sides completed.** Promotion and rollback compare the
+  challenger and the champion on S = completed(challenger) ∩ completed(champion). The
+  champion is re-scored from its stored per-seed results. It is re-evaluated first when
+  its stored `EvalMeta` differs from the current config in budget, ascension, native API
+  version, feature version or W, since each of those changes what the same policy
+  scores. Seeds outside S are listed in `status.json` (`excluded_eval_seeds`, with each
+  side's status).
+- **Promotion.** The challenger becomes champion iff both hold on S:
+  1. **The plan's rule.** The lower bound of its 95% CI on mean floor
+     (mean - 1.96 \* s / sqrt(|S|)) exceeds the champion's mean floor.
+  2. **The boss-kill guard.** It does not lose boss kills beyond noise:
+     n01 - n10 <= max(2, ceil(1.96 \* sqrt(n01 + n10))). Here n01 counts seeds in S that
+     the champion cleared and the challenger did not, and n10 the reverse.
+
+  Mean floor counts a boss kill as 18, the plan's "mean floor reached"; mean `V_W` is
+  reported beside it. Boss-kill rates carry Wilson 95% intervals.
+
 - **What the rule can see.** The per-seed floor SD measured in section 2 is about 4.0, so
   the challenger's CI half-width is 1.96 \* 4.0 / sqrt(200) = 0.55 floors. Two policies'
   paired per-seed differences have an SD of 3.0-3.6 (2.6). A true gain of delta floors is
   therefore promoted with probability of about Phi((delta - 0.55) / 0.23): 14% for 0.3,
   50% for 0.55, 97% for 1.0. The rule is deliberately conservative, and it costs
-  nothing to keep training through unpromoted generations.
+  nothing to keep training through unpromoted generations. The guard allows the noise of
+  a paired count, and two kills more.
 - **Self-play uses the latest learner**, not the champion (AlphaZero, not AlphaGo Zero).
   A champion-only loop would stall on stale data behind a rule this conservative. The
   coach and `export` only ever see the champion (Review Focus 4).
-- **Rollback.** If the challenger's CI _upper_ bound falls below the champion's mean, the
-  next generation's learner is reset to the champion's weights. The event is logged in
-  `status.json`.
+- **Rollback.** If the challenger's CI _upper_ bound on S falls below the champion's
+  mean, the next generation's learner is reset to the champion's weights. The event is
+  logged in `status.json`.
+- **The final test.** `python -m rl.run_train final-test` evaluates the champion and the
+  rules policy on the 500 test seeds, through the same runner and on the seeds both
+  completed. It writes `runs/stage2/final_test.json`: mean floor and boss-kill rate for
+  each, the paired floor difference with its 95% CI, and the boss-kill difference with
+  its 95% CI. The spec's stage-2 bar asks for at least +1.0 mean floor and a higher
+  boss-kill rate, both outside the 95% CI. The final test is never used for promotion.
+- **Where the numbers go.** `status.json` and `model.json` both carry, for the champion:
+  eval mean floor (95% CI), eval boss-kill rate (Wilson 95% CI), eval mean `V_W`, the
+  self-play boss-kill rate of the generation it last played, W, and its `EvalMeta`.
 
-### 5.7 Shards and files (resumability, Review Focus 1-2)
+### 5.7 Shards, files and resuming (Review Focus 1-2)
 
 `runs/stage2/` (the repo's `.gitignore` gets `runs/`):
 
@@ -1009,74 +1495,129 @@ seed.
 config.json                effective config; a resume with another feature_version refuses
 status.json                atomic (tmp + rename); fields below
 loop.pid, loop.log
-champion.json              {generation, checkpoint, npz, eval}
+champion.json              {generation, checkpoint, npz, eval path}
 gen_0000/                  generation 0 = rules policy
-  shards/w03_0007.jsonl.gz one line per run (the RunRecord below); written as .tmp, fsynced, renamed
-  manifest.json            written last, atomically: seeds, shard files, failures -> the generation is complete
+  shards/r0007.jsonl.gz    up to 25 runs (RunRecords); written only by the parent: tmp, fsync, rename
+  quarantine.jsonl         one line per quarantined seed as it happens (seed, exit code, last encounter); appended and fsynced by the parent
+  manifest.json            written last: seeds, shard files, the quarantine list
   learner.pt, learner.npz  the checkpoint trained after this generation
-  eval.json                challenger evaluation
+  eval.json                the learner's EvalResult: one SeedResult per eval seed, with EvalMeta
+  promotion.json           the decision: champion before and after, S, both summaries, n01, n10
+final_test.json            the last final-test report
 ```
 
 RunRecord (one JSON line): schema, feature_version, seed, generation, policy
-{kind, checkpoint, tau, eps}, combat {budget: "120/500", c, crn_fraction}, outcome {final_floor,
-boss_killed, died, end_hp, end_max_hp, truncated}, map {region, boss, nodes},
-decisions [{i, type, floor, state (RunView without the map), options, chosen, values,
-p_chosen, fallback}], fights [{floor, node_type, encounter, weak, sims, state, hp_before,
-hp_after, won, decisions, seconds}], stats {unknown_decisions, forced_skips,
-potion_left_full_belt, seconds}.
+{kind, checkpoint, tau, eps}, combat {budget: "120/500", c, crn_fraction}, ascension,
+outcome {final_floor, boss_killed, died, end_hp, end_max_hp, truncated},
+map {region, boss, nodes}, decisions [{i, type, floor, state (RunView without the map),
+options, chosen, values, p_chosen, fallback}], fights [{floor, node_type, encounter,
+weak, sims, state, hp_before, hp_after, won, decisions, seconds}],
+stats {unknown_decisions, forced_skips, potion_left_full_belt, seconds}.
 
-On restart, the loop finds the last generation with a manifest and deletes `*.tmp`. For
-an incomplete generation it keeps finished shards and plays only the seeds they do not
-list. A worker that dies or raises has its unfinished seeds re-queued. A seed that
-crashes twice is quarantined: logged with its exit code and the encounter it was in,
-listed in the manifest, and not retried. A run is deterministic given its seed and
-policy, so the retry mostly confirms a native defect (1.5.7). The manifest lists the
-quarantined seeds, so the generation still completes. Checkpoints are written
-tmp-then-rename.
+**Resuming.** On start, the loop finds the newest generation directory and resumes it at
+the first phase whose output is missing. Every output is written tmp-then-rename, so a
+file exists whole or not at all.
 
-`status.json`: generation, phase (generating/training/evaluating/idle), runs_this_generation,
-games_played_total, runs_per_hour, champion {generation, checkpoint, mean_floor, ci95,
-boss_kill_rate, ci95}, last_challenger {same fields, promoted, rolled_back},
-unknown_decisions {"phase/kind": count}, forced_skips, worker_restarts,
-quarantined_seeds {"encounter": count}, combat_budget, last_update (ISO 8601, UTC).
+| found in `gen_N`                  | what runs                                                                                                                                                                                                                                                     |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| no `manifest.json`                | generate: delete `*.tmp`, keep the shards' runs, play only the seeds that no shard and no `quarantine.jsonl` line lists                                                                                                                                       |
+| `manifest.json`, no `learner.npz` | train on the buffer ending at N                                                                                                                                                                                                                               |
+| a learner, no `eval.json`         | evaluate the learner                                                                                                                                                                                                                                          |
+| `eval.json`, no `promotion.json`  | promote: re-evaluate the champion if its `EvalMeta` is stale, apply 5.6, write `champion.json`, then `promotion.json`. If `champion.json` already names generation N, the crash fell between those two writes: write `promotion.json` from the stored numbers |
+| `promotion.json`                  | the generation is done: start `gen_{N+1}`                                                                                                                                                                                                                     |
+
+A config change that alters `EvalMeta` takes effect at the next promotion, through the
+champion's re-evaluation. A budget or ascension change also starts a new data era:
+shards record both, and the V and fight buffers (5.4) keep only data at the current
+values, so the first generation after the change trains on its own runs only (2.7).
+
+`status.json`: generation, phase (generating/training/evaluating/promoting/idle/stopped),
+runs_this_generation, games_played_total, runs_per_hour, champion {generation,
+checkpoint, eval {mean_floor, ci95, boss_kill_rate, wilson95, mean_value},
+selfplay_boss_kill_rate, W, eval_meta}, last_challenger {the same fields, promoted,
+rolled_back, guard {n01, n10}}, excluded_eval_seeds, unknown_decisions {"phase/kind":
+count}, forced_skips, worker_restarts, quarantined_seeds {"encounter": count},
+combat_budget, ascension, budget_check (2.7), last_update (ISO 8601, UTC).
 
 ### 5.8 Worker process model
 
-`runner.py` starts `workers` processes from a `spawn` context. Each process calls
-`os.nice(10)` and loads the native library itself; the emulator is not thread-safe, so
-there is one library per process. The processes pull seeds from a `multiprocessing.Queue`
-and push completed shard paths onto a result queue. A `ProcessPoolExecutor` is avoided on
-purpose: a native abort breaks the whole pool, and here it must cost one worker.
+`runner.py` owns every multi-process job: self-play generations, evaluations, the final
+test and the budget check. It starts `workers` processes from a `spawn` context. Each
+calls `os.nice(10)` and loads its own native library (one per process, because the
+emulator is not thread-safe).
 
-The parent polls `exitcode`. When a process dies, it:
+**One seed at a time, over a private pipe.** Each worker has its own
+`multiprocessing.Pipe`, and there is no shared task queue. A process killed while it
+holds a shared `Queue`'s internal lock can wedge that queue for every other worker (the
+`multiprocessing` docs warn against terminating a process that uses a queue), and a
+native abort (1.5.7) is exactly such a kill. The parent sends a worker one task,
+`(seed, policy_spec, config)`. The worker answers `("fight", seed, encounter_id)` at each
+fight start and `("done", seed, record)` or `("error", seed, traceback)` at the end, and
+only then gets its next task. So the parent always knows the one seed each worker holds.
 
-1. logs the exit code and the seeds the process held;
-2. re-queues those seeds, minus any already written to a finished shard;
-3. starts a replacement process.
+**The parent is the only writer.** Records come back over the pipes. The parent appends
+them to the current shard buffer and writes a shard every 25 records and at the end of a
+job (tmp, fsync, rename). A worker's death loses at most the seed it held. A parent crash
+loses at most the unflushed buffer, whose seeds are replayed on resume (5.7).
 
-A process that raises a Python exception reports the seed and the traceback on the
-result queue and carries on with its next seed; the parent re-queues that seed under the
-same retry-once rule as a dead process. Stop is SIGTERM to the loop: workers
-finish or abandon the current run, nothing half-written is renamed into place, and
-`status.json` records `phase: stopped`.
+**Failures.** The parent polls each worker's `exitcode` and pipe. A worker that dies is
+replaced; a native abort shows up as SIGABRT, `exitcode == -6`. Its seed is re-queued
+once, and quarantined on a second failure with the exit code and the last encounter the
+worker reported (a `quarantine.jsonl` line, 5.7). A Python exception comes back over the
+pipe; the worker carries on, and the seed follows the same retry-once rule. In an
+evaluation, a quarantined seed becomes a `SeedResult` with status `aborted` or `error`,
+never a missing row.
+
+**Stopping.** SIGTERM to the loop: the parent stops dispatching, terminates the workers
+(SIGTERM, then SIGKILL after 10 s), flushes the completed records it holds, and writes
+`status.json` with `phase: stopped`.
 
 ### 5.9 Defaults (every one is a config value)
 
-| name                          | default                                                                               | where it comes from      |
-| ----------------------------- | ------------------------------------------------------------------------------------- | ------------------------ |
-| `workers` (stage 2 / stage 3) | 8 / 2                                                                                 | Global Constraints       |
-| `combat_budget`               | 120/500 (`CombatBudget(normal=120, hard=500)`)                                        | 2.7                      |
-| `c`, `crn_fraction`, rollout  | 0.1, 0.2, tempo                                                                       | `combat_mcts` (FINDINGS) |
-| `ascension`                   | 8                                                                                     | 1.5.1                    |
-| `runs_per_generation`         | 2,000                                                                                 | 5.6                      |
-| `eval_seeds`                  | 200 (`eval_seeds.json`)                                                               | Global Constraints       |
-| `tau_g`, `eps`, `eps0`        | max(0.10, 0.60 \* 0.85^g), 0.02, 0.15                                                 | 5.5                      |
-| `beta` (bootstrap blend)      | 0.3                                                                                   | 5.2                      |
-| buffers (V / fights)          | 8 generations / 400k fights                                                           | 5.4                      |
-| optimiser                     | AdamW 1e-3, wd 1e-4, batch 1024, <= 30 epochs, patience 3                             | 5.3                      |
-| `run_step_cap`                | 6,000                                                                                 | 1.4                      |
-| shard size                    | 25 runs                                                                               | 5.7                      |
-| stage 3                       | 150 fights x 40 encounters, 300 sims, window 3 iterations, eval 240 fights at 60 sims | 6                        |
+| name                          | default                                                                                      | where it comes from      |
+| ----------------------------- | -------------------------------------------------------------------------------------------- | ------------------------ |
+| `workers` (stage 2 / stage 3) | 8 / 2                                                                                        | Global Constraints       |
+| `combat_budget`               | 120/500 (`CombatBudget(normal=120, hard=500)`), rechecked in Task 4                          | 2.7                      |
+| `c`, `crn_fraction`, rollout  | 0.1, 0.2, tempo                                                                              | `combat_mcts` (FINDINGS) |
+| `ascension`                   | 0 (controller ruling); the run engine needs the `spire-coach-gaps` branch for anything but 8 | 1.5.1                    |
+| `W` (value of a boss kill)    | 26                                                                                           | 5.2                      |
+| `runs_per_generation`         | 2,000                                                                                        | 5.6                      |
+| seed sets                     | 200 eval, 500 final test, 200 budget check                                                   | 5.6                      |
+| promotion                     | CI rule on mean floor + boss-kill guard, on the seeds both completed                         | 5.6                      |
+| `tau_g`, `eps`, `eps0`        | max(0.10, 0.60 \* 0.85^g), 0.02, 0.15                                                        | 5.5                      |
+| `beta` (bootstrap blend)      | 0.3                                                                                          | 5.2                      |
+| buffers (V / fights)          | 8 generations / 400k fights                                                                  | 5.4                      |
+| optimiser                     | AdamW 1e-3, wd 1e-4, batch 1024, <= 30 epochs, patience 3                                    | 5.3                      |
+| `run_step_cap`                | 6,000                                                                                        | 1.4                      |
+| shard size                    | 25 runs                                                                                      | 5.7                      |
+| stage 3                       | 150 fights x 40 encounters, 300 sims, window 3 iterations, eval 240 fights at 60 sims        | 6                        |
+
+### 5.10 Seeding
+
+Every random choice a run makes comes from streams derived from its seed. A run is then
+reproducible (the retry rule of 5.8 relies on it), and no two runs share a stream:
+
+```
+canonical   = seed.upper().replace("O", "0").replace("I", "1").strip()   # SeedHelper.Canonicalize
+entropy     = int.from_bytes(blake2b(canonical.encode(), digest_size=8).digest(), "little")
+mcts_ss, explore_ss = numpy.random.SeedSequence(entropy).spawn(2)
+mcts_rng    = default_rng(mcts_ss)      # UCT ties, the tempo rollout, Dirichlet noise
+explore_rng = default_rng(explore_ss)   # softmax and epsilon sampling of options (5.5)
+move_base   = mcts_rng.integers(0, 1_000_000)
+```
+
+`run_search` seeds simulation j of decision `move` with `move * sims + j`, and `move` is
+`move_base + k` (1.4), so determinization seeds differ between runs. The bound keeps
+`(move_base + 6,000) * sims` inside the clone's C int for budgets up to 2,000 sims. This
+replaces the probe's first helper, which hashed only a seed's last 8 bytes (so
+`E1ABCDEFGH` and `E2ABCDEFGH` shared every stream) and passed the same `move` values to
+every run. The probe now uses the same derivation (`run_streams` in
+`probe_throughput.py`), and Task 2A moves it to `rl/run_train/seeding.py`. Tests:
+
+- distinct seeds give distinct first draws on both streams, over 10,000 training seeds
+  and over pairs that share their last 8 characters;
+- a seed and its lower-case form give the same streams;
+- the two streams of one seed differ.
 
 ---
 
@@ -1084,26 +1625,40 @@ finish or abandon the current run, nothing half-written is renamed into place, a
 
 ### 6.1 One iteration
 
-Iteration k runs in `runs/prior_loop/iter_{k:04d}/`. `train_combat.py` hardcodes its
-paths as module globals (`DATASET`, `CHECKPOINT`, `POLICY_CHECKPOINT`,
-`rl/train_combat.py:59-64`), and `generate()`/`train()` read them at call time. The loop
-imports the module and **rebinds those three globals per iteration** before calling.
-Nothing upstream is edited.
+Iteration k runs in `runs/prior_loop/iter_{k:04d}/`. `train_combat.py` keeps its paths in
+module globals (`DATASET`, `CHECKPOINT`, `POLICY_CHECKPOINT`, `rl/train_combat.py:59-64`)
+that `generate()` and `train()` read at call time. The loop imports the module and
+rebinds them before each call, in the order below. Nothing upstream is edited.
 
-1. **Generate.** `train_combat.generate(args)` with `--encounters` = every act-1 id of
-   both regions: weak, normal, elite and boss (the `RunConstants.cs` lists, 40 distinct
-   ids). Also `--fights 150` (6,000 fights, like upstream's 6,400), `--sims 300`,
-   `--workers 2`, `--extra-cards 2,8`, `--relics 0,5`, `--ascension 8`,
-   `--seed-base 10000*k`. From k >= 1 add `--prior` with the champion's
-   `combat_policy.pt`, `--c-puct 0.2`, `--root-noise 0.25` and `--batch-fights 16`
-   (FINDINGS "Open: Iteration 2 ... --sims 300").
-2. **Merge** the last 3 iterations' datasets into `train.npz` (fight ids offset per
-   iteration to keep the by-fight split honest).
-3. **Train.** `train_combat.train(args)` with `--epochs 16 --value-lambda 0.3 --seed k`,
-   per-head checkpoints (`combat_net.pt`, `combat_policy.pt`), from scratch, as upstream.
+1. **Generate.** Rebind `POLICY_CHECKPOINT` to the champion's `combat_policy.pt`, which
+   `generate()` reads for `--prior` (`rl/train_combat.py:84, 90-91`), and `DATASET` to
+   `iter_k/generated.npz`, where `generate()` writes (`:106-126`). Then call
+   `train_combat.generate(args)` with:
+   - `--encounters` = every act-1 id of both regions: weak, normal, elite and boss (the
+     `RunConstants.cs` lists, 40 distinct ids);
+   - `--fights 150` (6,000 fights, like upstream's 6,400), `--sims 300`, `--workers 2`,
+     `--extra-cards 2,8`, `--relics 0,5`, `--seed-base 10000*k`;
+   - `--ascension` set to the configured ascension, default 0. The combat API has taken
+     an ascension since v16, so stage 3 does not wait for the run-engine branch;
+   - from k >= 1, `--prior`, `--c-puct 0.2`, `--root-noise 0.25` and `--batch-fights 16`
+     (FINDINGS "Open: Iteration 2 ... --sims 300").
+2. **Merge** the last 3 iterations' `generated.npz` into `iter_k/train.npz`, with fight ids
+   offset per iteration to keep the by-fight split honest.
+3. **Train.** Rebind `DATASET` to `iter_k/train.npz`, and `CHECKPOINT` and
+   `POLICY_CHECKPOINT` to `iter_k/combat_net.pt` and `iter_k/combat_policy.pt`.
+   `train()` saves each head's best epoch there and reads both back for its report
+   (`:383, 387, 403, 417`). Call `train_combat.train(args)` with
+   `--epochs 16 --value-lambda 0.3 --seed k`, from scratch, as upstream.
 4. **Evaluate** on the fixed fight set (6.3), paired, champion against challenger.
 5. **Promote or not** (6.4), write `manifest.json`, and update `champion.json` and
    `status.json`.
+
+Both calls can end in `SystemExit`: `generate()` raises it on a missing prior
+(`:90-91`), and `load()` on a missing dataset (`:143-144`). The loop catches
+`SystemExit` as well as `Exception`, logs it, marks the iteration failed in
+`status.json`, and retries it at the next start. `play_net.py` imports `CHECKPOINT` and
+`POLICY_CHECKPOINT` at import time (`rl/play_net.py:66`), so the loop never relies on those
+names. It builds `PolicyPrior(path)` with explicit paths for evaluation.
 
 Iteration 0 has no prior (`rl/data/` is gitignored and absent in this worktree). It
 generates with the rollout searcher and is gated against "no prior".
@@ -1137,8 +1692,9 @@ self-play (run handles) does not use it until 6.5.
 240 fights: seed i = 400..639, encounter = `POOL[(i-400) % 40]` over the 40 distinct
 act-1 ids in `RunConstants.cs` order (Overgrowth weak, normal, elite, boss, then
 Underdocks). Decks and relics follow `play_net.py`'s protocol
-(`sample_extra_cards(seed, 2, 8)`, `sample_relics(seed, 0, 5)`); A8, 60 sims, c = 0.1,
-`c_puct` = 0.2, best action by visits. The list is frozen in
+(`sample_extra_cards(seed, 2, 8)`, `sample_relics(seed, 0, 5)`). The fights are played at
+the configured ascension (default 0), with 60 sims, c = 0.1, `c_puct` = 0.2 and the best
+action chosen by visits. The list is frozen in
 `rl/prior_loop/fight_set.json`. This is FINDINGS' held-out protocol (`play_net.py`, seeds
 400+) extended to every act-1 fight, because the coach plays elites and bosses too. The
 96 Overgrowth weak and normal fights, and the 72 elite and boss fights, are also reported
@@ -1154,13 +1710,15 @@ On the fixed set, paired by fight, the challenger prior is promoted iff **both**
   difference above 0;
 - its deaths do not exceed the champion's.
 
-"Beat the death rate" is non-inferiority on purpose. The set kills a few percent of
-the time in ordinary fights and a third or more in elite and boss fights (2.3), which is
-about 30 deaths in 240 fights. A strict improvement of a few deaths cannot be resolved at
-that size, and FINDINGS warns that "7 deaths against 3 on 64 fights is nothing". Export writes the champion to
-`~/Documents/git/spire-coach/data/models/combat_prior/` as `combat_policy.pt`,
-`combat_net.pt` and `model.json` (iteration, metrics, `NATIVE_API_VERSION`, a SHA-256 of
-`combat_tokens.VOCAB`, and the train flags).
+"Beat the death rate" is non-inferiority on purpose. At A8 the set kills a few percent of
+the time in ordinary fights and a third or more in elite and boss fights (2.3), about 30
+deaths in 240 fights, and fewer at A0. A strict improvement of a few deaths cannot be
+resolved at that size, and FINDINGS warns that "7 deaths against 3 on 64 fights is
+nothing". As in stage 2, each evaluation stores its ascension and native API versions,
+and the champion is re-evaluated on the fight set when either changes. Export writes the
+champion to `~/Documents/git/spire-coach/data/models/combat_prior/` as
+`combat_policy.pt`, `combat_net.pt` and `model.json`: iteration, metrics, ascension,
+`NATIVE_API_VERSION`, a SHA-256 of `combat_tokens.VOCAB`, and the train flags.
 
 ### 6.5 Later: the prior inside stage-2 self-play (not in Tasks 2-5)
 
@@ -1179,48 +1737,75 @@ able to take `prior_fn`. It is gated by a paired run-level evaluation.
 Task 2 is split in two because the plan's Task 2 carried the whole feature contract
 plus the multiprocess runner. The other changes follow from sections 1-6:
 
-- **Departure from the Global Constraints: A8, not A0 first** (1.5.1). The run engine
-  cannot produce an A0 run.
+- **Ascension: configurable, default 0** (controller ruling). The run-engine parameter
+  comes from the `spire-coach-gaps` branch at integration. Until then `RunSession`
+  refuses anything but 8 (1.5.1), and tests that touch the run engine pass
+  `ascension=8` explicitly.
 - **Departure from the spec: the fight network trains on self-play fights, not the
   position sampler** (spec 8.1.2 names the sampler). The sampler's own docstring calls
   its relic counts and HP "a competent-player prior" and "a pure guess", and asks to
   "re-derive them from run-level self-play once a run policy exists"
   (`src/sts2_gym/position_sampler.py:18-28`). Self-play fights are that distribution.
-- **Interface change:** `combat_budget` is a `CombatBudget(normal, hard)`, and an int
-  still means a flat budget (2.7).
+- **Interface changes:**
+  - `combat_budget` is a `CombatBudget(normal, hard)`, and an int still means a flat
+    budget (2.7);
+  - `evaluate` returns per-seed results (5.6);
+  - `score_options` returns `OptionScore(option, value, p_boss, scorable)` (5.2);
+  - the live side gains `decision_from_live`, `LiveRunTracker` and two JSON Schemas
+    (3.5, 3.7).
+- **A mod field the live side needs:** `run.map_coord` on every payload (3.7), requested
+  from the mod plan. Until it lands, the coach shows "not ready" on the 35% of rooms whose
+  node it cannot infer. Optional: `map` on every payload, which would let the coach score
+  Neow (3.1).
 
 Everything else in the Global Constraints holds as written.
 
-### Task 2A: engine session, features, rules baseline
+### Task 2A: engine session, features, live contract, rules baseline
 
 **Files:**
 
 - `rl/run_train/__init__.py`: puts `rl/` and `src/` on `sys.path`; `FEATURE_VERSION = 1`.
 - `rl/run_train/engine.py`: `RunSession`, `RunCombat`, `CombatBudget`,
-  `Decision`/`Option`, and the mirrored constants.
-- `rl/run_train/vocab.py`: frozen vocabularies from `data/id_map.json`; slug tables from
-  `Generated/*.g.cs`; the boss and event tables.
-- `rl/run_train/features.py`: `RunView`, the front ends, `encode`, `apply_option`,
+  `Decision`/`Option`, `decision_of(env, ascension)` (the engine side of 3.6's decision
+  checks) and the mirrored constants.
+- `rl/run_train/seeding.py`: `run_streams(seed)` (5.10).
+- `rl/run_train/vocab.py`: frozen vocabularies from `data/id_map.json`; tables for Entry
+  slugs, relic display names, enchantments, bosses, events and rest option ids; transform
+  pools (section 4).
+- `rl/run_train/features.py`: `RunView`, both front ends, `encode`, `apply_option`,
   `encode_after_transform`, the map-ahead summary, `fight_queries`/`fight_block`,
-  `to_live_run`.
+  `to_live_run`, `decision_from_live`, `decision_to_live`, `LiveRunTracker`, and the two
+  JSON Schemas of 3.5 and 3.7 as module constants.
 - `rl/run_train/rules.py`: `RulesPolicy`, promoted from the probe and ported to
-  `Decision`.
-- `tests/python/test_run_train_engine.py`, `test_run_train_features.py`,
-  `test_run_train_rules.py`.
+  `Decision`. It also decides every `scorable=False` option.
+- `scripts/replay_full_run_trace.py`: `replay_trace(..., observer=None)`, called after
+  each replayed step (3.6).
+- `pyproject.toml`: `jsonschema` in the dev group, for the schema tests.
+- Tests: `tests/python/test_run_train_engine.py`, `test_run_train_features.py`,
+  `test_run_train_live.py`, `test_run_train_live_replay.py`, `test_run_train_rules.py`,
+  `test_run_train_seeding.py`.
 
 **Interfaces:**
 
-- `RunSession(seed: str, ascension: int = 8)`:
-  - `.phase`, `.info`, `.view() -> RunView`
+- `RunSession(seed: str, ascension: int = 0, budget: CombatBudget = CombatBudget(120, 500))`:
+  - `.phase`, `.info`, `.env`, `.view() -> RunView`
   - `.decision() -> Decision | None` (None in Combat or Complete; auto screens are
     stepped internally)
   - `.apply(option)`, `.combat() -> RunCombat`
   - `.act1_cleared`, `.died`, `.floor`
   - `.close()`
-- `features.from_run_engine(session) -> np.ndarray`; `features.from_live(live_run: dict) -> np.ndarray`
-- `features.view_from_engine(session) -> RunView`; `features.view_from_live(live_run: dict) -> RunView`
-- `features.encode(view) -> np.ndarray` (1845)
+- `features.view_from_engine(env, ascension) -> RunView`;
+  `features.view_from_live(live_run: dict) -> RunView`
+- `features.from_run_engine(env, ascension) -> np.ndarray`;
+  `features.from_live(live_run: dict) -> np.ndarray`
+- `features.decision_from_live(screen: dict, view: RunView) -> Decision`;
+  `features.decision_to_live(decision: Decision, view: RunView) -> dict`
+- `features.LiveRunTracker`: `update(payload)`, `live_run(payload) -> dict`,
+  `screen(payload) -> dict`
+- `features.encode(view) -> np.ndarray` (1843)
 - `features.apply_option(view, option) -> RunView`
+- `features.encode_after_transform(view, deck_index, upgraded) -> np.ndarray`
+- `seeding.run_streams(seed) -> (mcts_rng, explore_rng, move_base)`
 - `RulesPolicy().choose(view, decision, rng) -> int`: an index into `decision.options`.
 
 **Requirements:**
@@ -1233,20 +1818,33 @@ Everything else in the Global Constraints holds as written.
   - Shop: removal first (a curse, then a Strike, then a Defend), then a card of tier >= 4, then leave.
   - Rest: heal below 55% HP, else smith (Bash first, then the best tier).
   - Event: option 0 on the first page, the last non-leave option afterwards.
-  - Selections: remove/transform the curse > Strike > Defend > lowest tier; upgrade the best.
+  - Selections: remove/transform the curse > Strike > Defend > lowest tier; upgrade the best; enchant the best-tier card listed.
   - Bundle: bundle 0.
   - Anything unknown: the lowest legal action, counted.
 - Tests:
   - the constants mirror `RunConstants.cs`;
   - `features.py` never reads state lists 11-13 (grep);
-  - the synthetic and fixture front-end agreement tests of 3.6;
-  - encoding is order-invariant and deterministic;
-  - every `apply_option` row of section 4, one assertion each;
+  - the four agreement tests of 3.6: synthetic view and decision round trips, the replay
+    agreement test over all 32 fixtures, name matching, order invariance;
+  - both schemas are valid Draft 2020-12, every fixture screen validates against 3.7's,
+    and every live-run object built from a fixture screen that carries `player.deck`
+    against 3.5's;
+  - `view_from_live` raises `NotReadyError` without a cached map or a known position, and
+    `decision_from_live` marks every kind 3.7 lists as not buildable `scorable=False`
+    without raising;
+  - `LiveRunTracker` counts event pages as 3.7 defines them (Abyssal Baths' "Linger"
+    pages from a fixture-shaped sequence, and the captured Slippery Bridge visits, whose
+    pages differ only in their descriptions), and sets `source` for a selection opened by an
+    event and by a relic pickup;
+  - every `apply_option` row of section 4, one assertion each, and the transform EV (its
+    pool equals `TransformOptionsFor`'s rule for a Strike, a curse and an Ancient card;
+    block D is the mean over outcome decks);
   - the map-ahead summary matches a brute-force path enumeration on 5 generated maps;
   - enumerating a flattened option (3.4) leaves the parent run's phase, mask and
     observation unchanged;
-  - `RunCombat.done` flips exactly when the phase leaves Combat, and `won()` is right
-    for a won and a lost fight;
+  - `RunCombat.done` flips exactly when the phase leaves Combat, and `won()` is right for
+    a won and a lost fight;
+  - the seeding tests of 5.10;
   - a `RunSession` driven by `RulesPolicy` finishes 3 seeds at 5 sims with no unknown decision.
 
 Commit `feat(train): run session, feature contract and rules baseline`.
@@ -1257,34 +1855,47 @@ Commit `feat(train): run session, feature contract and rules baseline`.
 
 - `rl/run_train/selfplay.py`
 - `rl/run_train/shards.py`: the RunRecord schema and atomic writes.
-- `rl/run_train/runner.py`
-- `rl/run_train/evaluate.py`
-- `rl/run_train/eval_seeds.json`
+- `rl/run_train/runner.py`: the process model of 5.8.
+- `rl/run_train/evaluate.py`: `EvalResult`, `SeedResult`, `EvalMeta`, and the comparisons
+  of 5.6.
+- `rl/run_train/eval_seeds.json` (200), `rl/run_train/test_seeds.json` (500)
 - `.gitignore` (`runs/`)
 - `tests/python/test_run_train_selfplay.py`, `test_run_train_runner.py`, `test_run_train_evaluate.py`
 
-**Interfaces (the plan's):**
+**Interfaces (the plan's, extended):**
 
-- `selfplay.play_run(seed: str, policy, combat_budget: CombatBudget | int) -> RunRecord`
-  (`CombatBudget(normal=120, hard=500)` is the default, and an int n means n/n; 2.7)
+- `selfplay.play_run(seed: str, policy, combat_budget: CombatBudget | int, ascension: int = 0) -> RunRecord`
 - `runner.generate(n_runs, workers, policy_spec, out_dir) -> list[Path]`
-- `evaluate.evaluate(policy_spec, seeds) -> EvalResult`, with mean_floor, ci95, boss_kill_rate, wilson95 and n.
+- `evaluate.evaluate(policy_spec, seeds, config) -> EvalResult`, holding one
+  `SeedResult` per seed and an `EvalMeta` (5.6);
+  `EvalResult.summary(seeds=None)` gives n, mean_floor, ci95, boss_kill_rate, wilson95 and
+  mean_value over any subset; `evaluate.compare(challenger, champion) -> Comparison` does
+  S, the CI rule, the boss-kill guard and the rollback test.
 - `policy_spec` is a picklable dict:
-  `{"kind": "rules"}` or `{"kind": "lookahead", "npz": path, "tau": float, "eps": float}`.
+  `{"kind": "rules"}` or `{"kind": "lookahead", "npz": path, "tau": float, "eps": float, "W": float}`.
 
 **Requirements:**
 
-- Workers use `multiprocessing` spawn, `os.nice(10)`, one run per task, one shard per 25
-  runs, with the crash handling and quarantine of 5.7.
+- Workers follow 5.8: `spawn`, `os.nice(10)`, one seed per worker at a time over a
+  private pipe, the parent as the only shard writer, retry once and then quarantine.
+  Evaluations and the final test run through the same runner.
 - Tests:
   - a policy that raises once is restarted and every seed lands exactly once;
   - a worker killed by a signal (a test policy calls `os.kill(os.getpid(), SIGABRT)`, as
     the native abort of 1.5.7 does) is replaced; its seed is retried once and then
     quarantined, and the generation still completes;
   - killing the runner mid-generation and restarting leaves no duplicate or missing seed;
+  - **a seed that aborts only under the challenger** is `aborted` in the challenger's
+    `EvalResult`, excluded from S on both sides, and listed in `excluded_eval_seeds`, and
+    the comparison runs on the remaining seeds with the champion re-scored from its stored
+    results;
+  - the CI rule and the boss-kill guard on synthetic per-seed results, including a case
+    where the CI rule passes and the guard fails;
   - the CI math on synthetic records.
-- Run the rules baseline on the 200 eval seeds at the default budget and record it in
-  this file's section 2.
+- Run the rules baseline on the 200 eval seeds at the default budget and the configured
+  ascension (8 until the `spire-coach-gaps` branch is integrated), record it in this
+  file's section 2, and store it as the initial champion's `eval.json`. The switch to
+  ascension 0 makes that `EvalMeta` stale, so the champion is re-evaluated (5.6).
 
 Commit `feat(train): self-play workers, shards and evaluation harness`.
 
@@ -1297,11 +1908,13 @@ Commit `feat(train): self-play workers, shards and evaluation harness`.
 
 - `train.fit(shards, prev_checkpoint) -> checkpoint`, which trains FightNet then V (5.3)
   and writes `.pt` and `.npz`.
-- `policy.LookaheadPolicy(checkpoint, temperature, eps=0.02)`, with the selfplay policy
-  interface.
-- `policy.score_options(decision, live_run_or_session) -> list[tuple[Option, float]]`:
-  E[floor] per option, best first. An option `apply_option` cannot handle gets `None` and
-  falls back to rules.
+- `policy.LookaheadPolicy(checkpoint, temperature, eps=0.02, W=26.0)`, with the selfplay
+  policy interface. It samples with the run's `explore_rng` and hands every
+  `scorable=False` option to `RulesPolicy`.
+- `policy.score_options(decision, view) -> list[OptionScore]` with
+  `OptionScore(option, value, p_boss, scorable)`: `V_W` and `p_18` per scorable option
+  (None for the others), best first. The coach passes `view_from_live(...)` and the
+  engine side `view_from_engine(...)`.
 
 **Requirements:**
 
@@ -1309,39 +1922,54 @@ Commit `feat(train): self-play workers, shards and evaluation harness`.
   - a training step reduces loss on a tiny synthetic set;
   - numpy and torch agree within 1e-5;
   - a checkpoint round-trips;
-  - `score_options` returns one value per option, best first, identical for the engine
+  - `score_options` returns one entry per option, best first, identical for the engine
     and live front ends on the same state;
+  - `V_W` and `p_boss` from a hand-built distribution, and W changes the ranking only
+    through p_18;
   - the bootstrap target of 5.2 is assembled correctly (hand-computed example).
 
 Commit `feat(train): value models, training step and lookahead policy`.
 
-### Task 4: generation loop (as planned)
+### Task 4: generation loop (as planned, with 5.6-5.7)
 
 **Files:** `rl/run_train/loop.py`, `rl/run_train/cli.py`, `rl/run_train/__main__.py`,
 and tests.
 
 **Behaviour:**
 
-- `python -m rl.run_train {start,status,stop,export}`, following 5.5-5.7.
-- `start` detaches (`start_new_session=True`, stdio to `loop.log`) and writes `loop.pid`.
-- `export` copies the champion `.npz` and `.pt` plus `model.json` (feature_version,
-  vocab SHA-256, generation, eval metrics, combat budget, ascension 8) to
-  `~/Documents/git/spire-coach/data/models/strategy/`.
+- `python -m rl.run_train {start,status,stop,export,final-test}`, following 5.5-5.8.
+- `start` takes each default of 5.9 as an option (`--workers`, `--combat-budget`,
+  `--ascension`, `--W`, ...) and writes the effective config to `config.json`. It then
+  detaches (`start_new_session=True`, stdio to `loop.log`), writes `loop.pid`, and resumes
+  by the phase table of 5.7.
+- Promotion by 5.6: the CI rule plus the boss-kill guard on the seeds both completed, the
+  champion re-evaluated when its `EvalMeta` is stale, and rollback.
+- `export` copies the champion `.npz` and `.pt` plus `model.json` to
+  `~/Documents/git/spire-coach/data/models/strategy/`. `model.json` holds the feature
+  version, the vocab SHA-256, the generation, eval metrics (including the eval and
+  self-play boss-kill rates), W, the combat budget, the ascension and the native API
+  versions.
+- `final-test` runs 5.6's final test and writes `final_test.json`.
 
-**Tests (the plan's four):**
+**Tests:**
 
-- resume after a simulated kill;
-- no promotion when the challenger is worse;
-- `status` reads a running job;
-- `stop` terminates the workers cleanly.
+- the plan's four: resume after a simulated kill; no promotion when the challenger is
+  worse; `status` reads a running job; `stop` terminates the workers cleanly;
+- resume at each row of 5.7's phase table, including a crash between `champion.json`
+  and `promotion.json`;
+- no promotion when the boss-kill guard fails even though the CI rule passes;
+- the champion is re-evaluated when `EvalMeta` changes (budget, ascension, native API
+  version, feature version or W).
 
 **Also:**
 
-- Promotion by the rule in 5.6, including rollback.
 - Launch for real with the defaults (8 workers, the section 2 budget, 2,000 runs per
-  generation) and report generation 1, including the measured runs/hour against section
-  2.5's extrapolation. This is the first multi-process measurement, and it checks the 0.6
-  planning factor.
+  generation, ascension 0) and report generation 1. If the `spire-coach-gaps` branch is
+  not integrated yet, launch with `--ascension 8` and switch to 0 when it lands; the
+  switch starts a new data era (5.7) and re-evaluates the champion (5.6). Include the
+  measured runs/hour against section 2.5's extrapolation: that is the first
+  multi-process measurement, and it checks the 0.6 planning factor.
+- Run the budget recheck of 2.7 (boss kills first) and record its outcome.
 
 Commit `feat(train): resumable generation loop with champion promotion`.
 
@@ -1352,12 +1980,17 @@ Commit `feat(train): resumable generation loop with champion promotion`.
 
 **Behaviour:**
 
-- Resumable per iteration (a manifest marks an iteration complete), 2 workers, the gate
-  of 6.4, export of 6.4.
+- Resumable per iteration (a manifest marks an iteration complete), 2 workers, the
+  rebinding order and `SystemExit` handling of 6.1, the gate and export of 6.4, and the
+  configured ascension.
 
 **Tests:**
 
-- the global rebinding points `train_combat` at the iteration directory;
+- the rebinding order: during `generate()` the globals name the champion's policy and
+  `iter_k/generated.npz`; during `train()` they name `iter_k/train.npz` and the
+  iteration's two checkpoints;
+- a `SystemExit` from `generate()` or `train()` marks the iteration failed without
+  killing the loop;
 - resume after a kill;
 - no promotion on a worse or equal challenger (synthetic eval results);
 - the fixed fight set is stable (hash).
