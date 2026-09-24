@@ -139,7 +139,10 @@ class RunGenerationChecks(_TestCaseIfChecking):
         cls.save = verify_run_generation.load_save(cls.path)
         cls.act = cls.save["acts"][cls.save["current_act_index"]]
         cls.seed = cls.save["rng"]["seed"]
-        cls.emu = verify_run_generation.emulator_generation(cls.seed)
+        cls.emu = verify_run_generation.emulator_generation(
+            cls.seed,
+            cls.save["ascension"],
+        )
         cls.names = verify_run_generation.encounter_names()
 
     def test_fixture_carries_no_profile_data(self):

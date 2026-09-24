@@ -520,14 +520,28 @@ def compare_combat_boundary(
     return diffs
 
 
+def trace_ascension(reference: list[dict[str, Any]]) -> int:
+    """Return the ascension the trace was captured at, off its opening snapshot.
+
+    Every committed capture records it, and all of them were taken at 8. A synthetic
+    trace that records none is replayed at the run env's own default.
+    """
+    opening = (reference[0].get("summary") or {}) if reference else {}
+    return int((opening.get("run") or {}).get("ascension", 0))
+
+
 def replay_trace(
     reference_payload: dict[str, Any],
     *,
     emulator_seed: int | str,
     max_steps: int | None = None,
+    ascension: int | None = None,
 ) -> ReplayResult:
     reference = compare_traces.load_trace_from_payload(reference_payload)
-    env = Sts2RunEnv(seed=emulator_seed)
+    env = Sts2RunEnv(
+        seed=emulator_seed,
+        ascension=trace_ascension(reference) if ascension is None else ascension,
+    )
     try:
         obs, info = env.reset()
         emulator_trace = [

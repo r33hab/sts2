@@ -709,14 +709,18 @@ public static class CombatEngine
         // before the end-of-turn effects a card in hand would otherwise see. It is the
         // price of the extra turn granted at the enemy-side seam below, and its guard is
         // the same one, so the two always agree.
+        //
+        // A snapshot, exhausted one `CardCmd.Exhaust` at a time, and each card leaves the
+        // hand as it goes -- so a card a hook puts INTO the hand meanwhile (Burning Sticks'
+        // copy, Dark Embrace's draw) stays there for the rest of the turn end. Clearing the
+        // hand afterwards deleted those from the combat.
         if (Effects.RelicEffects.ShouldExhaustHandForPaelsEye(state))
         {
             foreach (var handCard in state.Hand.ToList())
             {
+                state.Hand.Remove(handCard);
                 Effects.CardEffects.ExhaustCard(state, handCard, rng: rng);
             }
-
-            state.Hand.Clear();
         }
 
         TickTheBomb(state);
@@ -868,10 +872,9 @@ public static class CombatEngine
             Effects.CardEffects.DealDamageToPlayer(state, disintegration);
         }
 
-        // Move hand to discard, exhausting ethereal cards unless a retain-hand effect is active.
         // `RingingTriangle.ShouldFlush` is false on turn one, so the whole opening hand
         // is kept rather than discarded -- a stronger thing than RetainHand, which the
-        // loop below already honours, because it is not spent.
+        // flush below already honours, because it is not spent.
         int retainHand = BuffSystem.Get(state.PlayerBuffs, BuffId.RetainHand);
         if (Effects.RelicEffects.SkipsHandFlush(state, state.Turn + 1))
         {
@@ -879,44 +882,80 @@ public static class CombatEngine
         }
         // `Regret.BeforeSideTurnEnd` snapshots `Pile.Cards.Count` and spends it in its own
         // turn-end hook, so its damage is the hand as this sequence BEGAN rather than
-        // whatever is left by the time the loop reaches it.
+        // whatever is left by the time the Regret fires.
         int handAtTurnEnd = state.Hand.Count;
+
+        // `CombatManager.DoTurnEnd` sorts the hand AS IT STANDS into two lists before
+        // anything runs -- the cards with a turn-end effect and, `else if`, the Ethereal
+        // ones -- exhausts every Ethereal card, and only then runs each turn-end card. Both
+        // passes walk those lists and never `state.Hand`, because a hook fired from inside
+        // them can put cards INTO the hand: walking the live hand under that threw
+        // "Collection was modified" on seed PRB00058, where a Beckon's HP loss was Centennial
+        // Puzzle's first of the combat and drew three. A card that arrives mid-pass is in
+        // neither list, so it is not exhausted and does not fire; the flush picks it up.
+        // Those hooks only ever ADD to the hand, so each listed card is still there, as
+        // listed, when its turn comes.
+        //
+        // Ethereal is the KEYWORD, which `IsEtherealForPowers` reads whole. Three cards drop
+        // it when upgraded (this was `def.Id == 159`, Echo Form, and said nothing about
+        // Apparition or Void Form). `GhostSeed.AfterCardEnteredCombat` grants it to every
+        // BASIC Strike and Defend -- read here rather than baked onto the instance, because
+        // a keyword the relic gave is one it takes back if the relic ever leaves. And
+        // `HexPower` afflicts every card the player owns with `Hexed`, which
+        // `TryModifyKeywordsInCombat` makes Ethereal, so while the Spectral Knight's Hex is up
+        // the whole hand burns off at end of turn; the emulator once tracked Hex as a bare
+        // counter, and the Knights fight diverged on hands from the turn it landed.
+        var turnEndCards = new List<CardInstance>();
+        var etherealCards = new List<CardInstance>();
+        foreach (var card in state.Hand)
+        {
+            if (GeneratedData.Cards.Get(card.DefId).TurnEndInHand)
+            {
+                turnEndCards.Add(card);
+            }
+            else if (IsEtherealForPowers(state, card))
+            {
+                etherealCards.Add(card);
+            }
+        }
+
+        foreach (var card in etherealCards)
+        {
+            // `CardCmd.Exhaust` moves the card out of the hand before its hooks run.
+            state.Hand.Remove(card);
+            Effects.CardEffects.ExhaustCard(state, card, causedByEthereal: true, rng: rng);
+        }
+
+        foreach (var card in turnEndCards)
+        {
+            // `OnTurnEndInHandWrapper`: into the Play pile, `OnTurnEndInHand`, then Exhaust
+            // if the card is Ethereal and Discard if not. So a turn-end card never stays in
+            // hand, whatever keeps the rest of it: retaining is `ShouldFlush`, and only the
+            // flush asks. Eleven cards have the hook; it was a hand-kept list of four "burn
+            // the holder" statuses plus Beckon, and three of the missing six do something
+            // other than damage.
+            state.Hand.Remove(card);
+            Effects.CardEffects.ApplyTurnEndInHand(
+                state,
+                GeneratedData.Cards.Get(card.DefId),
+                handAtTurnEnd,
+                rng
+            );
+            if (IsEtherealForPowers(state, card))
+            {
+                Effects.CardEffects.ExhaustCard(state, card, causedByEthereal: true, rng: rng);
+            }
+            else
+            {
+                state.DiscardPile.Add(DiscardedAtTurnEnd(card));
+            }
+        }
+
+        // `FlushPlayerHand`: the hand as it stands NOW, cards the passes above drew
+        // included, is discarded or kept. No hook fires in here.
         var nextHand = new List<CardInstance>();
         foreach (var card in state.Hand)
         {
-            var def = GeneratedData.Cards.Get(card.DefId);
-            // Three cards drop Ethereal when upgraded, not one: this was `def.Id == 159`,
-            // which is Echo Form, and said nothing about Apparition or Void Form.
-            // `GhostSeed.AfterCardEnteredCombat` gives Ethereal to every BASIC Strike or
-            // Defend. Read here rather than baked onto the instance because the relic
-            // grants the KEYWORD, and a keyword the relic gave is one it takes back if the
-            // relic ever leaves.
-            bool ghostSeeded =
-                Effects.RelicEffects.MakesBasicsEthereal(state) && IsBasicStrikeOrDefend(card);
-            // `HexPower.TryModifyKeywordsInCombat` grants Ethereal to every card afflicted
-            // with `Hexed`, and `AfterApplied` afflicts EVERY card the player owns in
-            // combat (`AfterCardEnteredCombat` catches the ones made later). So while the
-            // Spectral Knight's Hex is up the whole hand is Ethereal and burns off at end
-            // of turn. The emulator tracked `BuffId.Hex` as a debuff counter and did
-            // nothing with it, so the Knights fight diverged on hands from the turn the
-            // Hex landed and never came back.
-            bool hexed = BuffSystem.Get(state.PlayerBuffs, BuffId.Hex) > 0;
-            if (card.IsEthereal() || ghostSeeded || hexed)
-            {
-                Effects.CardEffects.ExhaustCard(state, card, causedByEthereal: true, rng: rng);
-                continue;
-            }
-
-            // `CardModel.OnTurnEndInHand`, for the eleven cards that have one. This was a
-            // hand-kept list of four "burn the holder" statuses plus Beckon beside it; six
-            // were missing, and three of those do something other than damage.
-            Effects.CardEffects.ApplyTurnEndInHand(state, def, handAtTurnEnd, rng);
-
-            // Hand Trick's Sly lasts a single TURN, so a card that survives into the
-            // next hand does not carry the grant with it. Note this cleanup does NOT go
-            // through DiscardMovedCards: the end-of-turn discard is not a
-            // `CardCmd.Discard` in the game and does not trigger Sly, so holding a
-            // Tactician to the end of the turn buys nothing.
             // `PhantomBladesPower.AfterCardEnteredCombat` gives the Retain KEYWORD to
             // every Shiv the player owns, so a Shiv in hand survives the turn while the
             // power is up.
@@ -942,14 +981,7 @@ public static class CombatEngine
             }
             else
             {
-                state.DiscardPile.Add(
-                    card with
-                    {
-                        FreeThisTurn = false,
-                        SlyThisTurn = false,
-                        CostThisTurn = int.MinValue,
-                    }
-                );
+                state.DiscardPile.Add(DiscardedAtTurnEnd(card));
             }
         }
         state.Hand.Clear();
@@ -3937,6 +3969,24 @@ public static class CombatEngine
         // card is Ethereal -- Spirit of Ash, Veilpiercer -- has to see it too.
         || BuffSystem.Get(state.PlayerBuffs, BuffId.Hex) > 0;
 
+    /// <summary>
+    /// A card sent to the discard pile as the player's turn ends, flushed or after its own
+    /// turn-end effect, with its single-turn grants taken off.
+    /// </summary>
+    /// <remarks>
+    /// Hand Trick's Sly lasts a single TURN, so the grant does not ride into the pile. This
+    /// is NOT `DiscardMovedCards`: the end-of-turn discard is a `CardPileCmd.Add`, not a
+    /// `CardCmd.Discard`, and does not trigger Sly -- holding a Tactician to the end of the
+    /// turn buys nothing.
+    /// </remarks>
+    private static CardInstance DiscardedAtTurnEnd(CardInstance card) =>
+        card with
+        {
+            FreeThisTurn = false,
+            SlyThisTurn = false,
+            CostThisTurn = int.MinValue,
+        };
+
     private static bool IsBasicStrikeOrDefend(CardInstance card)
     {
         var def = GeneratedData.Cards.Get(card.DefId);
@@ -4731,7 +4781,9 @@ public static class CombatEngine
         Random rng,
         Intent intent,
         bool stunned = false,
-        int ascension = Ascension.DefaultLevel,
+        // Null is the fight's own level -- a Wriggler passed none, and took the combat
+        // layer's A8 default whatever the fight ran at.
+        int? ascension = null,
         int moveIndex = 0,
         // The combat, so the HP roll uses the stream the game uses. Without it the roll
         // falls back to the combat rng with no unique-HP rule.
@@ -4739,7 +4791,7 @@ public static class CombatEngine
     )
     {
         var def = GeneratedData.Enemies.Get(defId);
-        var band = def.HpBand(ascension);
+        var band = def.HpBand(ascension ?? state?.AscensionLevel ?? Ascension.DefaultLevel);
         int hp = EnemyAI.RollSummonedHp(band.Min, band.Max, state, rng);
         var enemy = new EnemyState
         {

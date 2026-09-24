@@ -264,7 +264,7 @@ def compare(save: dict[str, Any]) -> dict[str, bool]:
     """Run every section comparison the verifier does, without its report."""
     seed = str(save["rng"]["seed"])
     act = save["acts"][save["current_act_index"]]
-    emu = verify_run_generation.emulator_generation(seed)
+    emu = verify_run_generation.emulator_generation(seed, int(save["ascension"]))
     names = verify_run_generation.encounter_names()
     normalize = verify_run_generation.normalize
 

@@ -23,7 +23,9 @@ MaskableEnv = Sts2CombatEnv | Sts2RunEnv
 def make_env(rank: int, use_run_env: bool):
     def _init():
         base_env: MaskableEnv = (
-            Sts2RunEnv(seed=rank) if use_run_env else Sts2CombatEnv(seed=rank)
+            Sts2RunEnv(seed=rank, ascension=8)
+            if use_run_env
+            else Sts2CombatEnv(seed=rank)
         )
         return ActionMasker(base_env, lambda e: cast("MaskableEnv", e).action_masks())
 
@@ -51,7 +53,9 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.check:
-        env: MaskableEnv = Sts2RunEnv(seed=0) if args.run_env else Sts2CombatEnv(seed=0)
+        env: MaskableEnv = (
+            Sts2RunEnv(seed=0, ascension=8) if args.run_env else Sts2CombatEnv(seed=0)
+        )
         check_env(env, warn=True, skip_render_check=True)
         print("Env check passed.")
         env.close()

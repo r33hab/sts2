@@ -57,7 +57,12 @@ def rollout(env, rng, limit: int):
 
 def section_spaces(args, rng) -> None:
     print("\n── spaces ──")
-    env = Sts2RunEnv(seed="PROBE00001", max_floors=64, max_episode_steps=4000)
+    env = Sts2RunEnv(
+        seed="PROBE00001",
+        max_floors=64,
+        max_episode_steps=4000,
+        ascension=8,
+    )
     obs, _info = env.reset()
     print(f"  observation : {obs.shape[0]} ints, dtype {obs.dtype}")
     print(f"  actions     : {native.RUN_MAX_ACTIONS} discrete, masked")
@@ -77,7 +82,12 @@ def section_observation(args, rng) -> None:
     print("\n── observation use ──")
     used = np.zeros(native.RUN_OBS_SIZE, dtype=bool)
     for trial in range(args.runs):
-        env = Sts2RunEnv(seed=f"PROBE{trial:05d}", max_floors=64, max_episode_steps=4000)
+        env = Sts2RunEnv(
+            seed=f"PROBE{trial:05d}",
+            max_floors=64,
+            max_episode_steps=4000,
+            ascension=8,
+        )
         for _phase, _mask, obs, _info in rollout(env, rng, args.steps):
             used |= obs != 0
         env.close()
@@ -108,7 +118,12 @@ def section_actions(args, rng) -> None:
     per_phase: dict[int, Counter] = defaultdict(Counter)
     widths: dict[int, list[int]] = defaultdict(list)
     for trial in range(args.runs):
-        env = Sts2RunEnv(seed=f"PROBE{trial:05d}", max_floors=64, max_episode_steps=4000)
+        env = Sts2RunEnv(
+            seed=f"PROBE{trial:05d}",
+            max_floors=64,
+            max_episode_steps=4000,
+            ascension=8,
+        )
         for phase, mask, _obs, _info in rollout(env, rng, args.steps):
             legal = np.flatnonzero(mask)
             widths[phase].append(legal.size)
@@ -151,7 +166,12 @@ def section_throughput(args, rng) -> None:
     print("\n── throughput (per step, by phase) ──")
     cost: dict[int, list[float]] = defaultdict(list)
     for trial in range(max(4, args.runs // 3)):
-        env = Sts2RunEnv(seed=f"PERF{trial:06d}", max_floors=64, max_episode_steps=4000)
+        env = Sts2RunEnv(
+            seed=f"PERF{trial:06d}",
+            max_floors=64,
+            max_episode_steps=4000,
+            ascension=8,
+        )
         _obs, info = env.reset()
         for _ in range(args.steps):
             legal = np.flatnonzero(env.action_masks())
@@ -180,7 +200,17 @@ def section_throughput(args, rng) -> None:
     mean = total_t / max(1, total_n)
     print(f"\n  overall: {mean:.0f} us/step -> {1e6 / mean:,.0f} steps/s (one env)")
 
-    env = Sts2RunEnv(seed="PROBE00001", max_floors=64, max_episode_steps=4000)
+    env = Sts2RunEnv(
+
+        seed="PROBE00001",
+
+        max_floors=64,
+
+        max_episode_steps=4000,
+
+        ascension=8,
+
+    )
     env.reset()
     handle = env._run_handle
     buf = (ctypes.c_int * native.RUN_OBS_SIZE)()

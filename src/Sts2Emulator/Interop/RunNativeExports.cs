@@ -15,7 +15,9 @@ public static class RunNativeExports
     // v18: state list 21 reports where on the map the run is standing.
     // v19: the observation no longer carries the encounter behind a map choice, so the
     // layout is one number shorter and every offset after the map's node types moves.
-    public const int RUN_NATIVE_API_VERSION = 19;
+    // v20: Sts2Run_Reset takes the run's ascension level, which the engine no longer
+    // hardcodes at 8.
+    public const int RUN_NATIVE_API_VERSION = 20;
     private static readonly RunEngine?[] _pool = new RunEngine?[256];
 
     public static int Sts2Run_NativeApiVersion() => RUN_NATIVE_API_VERSION;
@@ -117,15 +119,32 @@ public static class RunNativeExports
         return -1;
     }
 
-    public static unsafe int Sts2Run_Reset(int handle, byte* seedPtr, int seedLen, int* obsBuf)
+    /// <summary>Start a new run on this handle at the given ascension level.</summary>
+    /// <returns>
+    /// 0, -1 for an unknown handle, or -2 for a level the run engine does not model (see
+    /// <see cref="Ascension.MaxRunLevel" />). Checked here rather than left to
+    /// <see cref="RunEngine.Reset" />'s exception, which would abort the host process.
+    /// </returns>
+    public static unsafe int Sts2Run_Reset(
+        int handle,
+        byte* seedPtr,
+        int seedLen,
+        int ascension,
+        int* obsBuf
+    )
     {
         if (!TryGet(handle, out var run))
         {
             return -1;
         }
 
+        if (ascension is < 0 or > Ascension.MaxRunLevel)
+        {
+            return -2;
+        }
+
         string seed = Encoding.UTF8.GetString(new ReadOnlySpan<byte>(seedPtr, seedLen));
-        run.Reset(seed);
+        run.Reset(seed, ascension);
         run.WriteObservation(new Span<int>(obsBuf, RunConstants.RunObsSize));
         return 0;
     }
