@@ -259,12 +259,9 @@ public static class PotionEffects
 
                 break;
             case 24: // Flex Potion: FlexPotion.cs -- PowerVar<StrengthPower>(5) via
-                // FlexPotionPower, a TemporaryStrengthPower: Strength now, paired with
-                // TemporaryStrength so CombatEngine's end-of-player-turn unwind (the same
-                // one Shackling Potion's enemy side relies on) takes it back. Goes through
-                // the Ruined Helmet chokepoint like every other grant of player Strength.
-                RelicEffects.GainPlayerStrength(state, 5);
-                BuffSystem.Apply(state.PlayerBuffs, BuffId.TemporaryStrength, 5);
+                // FlexPotionPower, a TemporaryStrengthPower: Strength now, taken back by
+                // CombatEngine's end-of-player-turn unwind.
+                RelicEffects.GainTemporaryPlayerStrength(state, 5);
                 break;
             case 25: // Focus Potion: FocusPotion.cs -- PowerVar<FocusPower>(2), always on
                 // the owner regardless of the (unused) target parameter.

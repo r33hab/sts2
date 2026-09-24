@@ -569,13 +569,9 @@ public static class CardEffects
             }
 
             case IC.SetupStrike: // 1-cost, 7/9 dmg + 2/3 temporary Strength
-            {
                 DealDamage(state, Dmg(state, def, upgraded, card));
-                int strength = upgraded ? 3 : 2;
-                RelicEffects.GainPlayerStrength(state, strength);
-                BuffSystem.Apply(state.PlayerBuffs, BuffId.TemporaryStrength, strength);
+                RelicEffects.GainTemporaryPlayerStrength(state, upgraded ? 3 : 2);
                 break;
-            }
 
             case IC.Spite: // 0-cost, 5 dmg; 2/3 hits if the player lost HP this turn
                 DealDamageMultiHit(
@@ -7937,8 +7933,7 @@ public static class CardEffects
                 // upgrading by 2 -- so FIVE Strength, or seven, and it is TAKEN BACK at the
                 // end of the turn. It was in a stack giving permanent Strength 1 or 2:
                 // wrong number and wrong duration, in opposite directions.
-                RelicEffects.GainPlayerStrength(state, upgraded ? 7 : 5);
-                BuffSystem.Apply(state.PlayerBuffs, BuffId.TemporaryStrength, upgraded ? 7 : 5);
+                RelicEffects.GainTemporaryPlayerStrength(state, upgraded ? 7 : 5);
                 break;
 
             case "NoEscape":
@@ -7970,8 +7965,7 @@ public static class CardEffects
                 // OnUpgrade +3 — temporary Strength for an ally, which is the player in
                 // singleplayer. It was grouped with the retain-hand cards, which is a
                 // different effect entirely.
-                RelicEffects.GainPlayerStrength(state, upgraded ? 8 : 5);
-                BuffSystem.Apply(state.PlayerBuffs, BuffId.TemporaryStrength, upgraded ? 8 : 5);
+                RelicEffects.GainTemporaryPlayerStrength(state, upgraded ? 8 : 5);
                 break;
             case "CorrosiveWave":
                 ApplyAllEnemyDebuff(state, BuffId.Poison, upgraded ? 5 : 3, rng);

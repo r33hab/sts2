@@ -2237,6 +2237,26 @@ public static class RelicEffects
     }
 
     /// <summary>
+    /// A `TemporaryStrengthPower` subclass applied to the player at <paramref name="amount"/>
+    /// (Flex Potion, Reptile Trinket, Setup Strike, Feeding Frenzy, Coordinate): Strength
+    /// now, and `amount` taken back when the player's side turn ends.
+    /// </summary>
+    /// <remarks>
+    /// `PowerCmd.Apply` hands `ModifyPowerAmountReceived` the power being applied, which is
+    /// the temporary power and not a `StrengthPower`, so Ruined Helmet passes it by and its
+    /// Amount stays at `amount`. The power's `BeforeApplied` then applies `amount` of
+    /// `StrengthPower`, and that application is the one the helmet doubles.
+    /// `AfterSideTurnEnd` applies -Amount. So a grant that is the combat's first Strength
+    /// under an unspent helmet gives twice `amount` and leaves `amount` behind. That
+    /// leftover is the game's; taking back the doubled figure would diverge from it.
+    /// </remarks>
+    internal static void GainTemporaryPlayerStrength(CombatState state, int amount)
+    {
+        GainPlayerStrength(state, amount);
+        BuffSystem.Apply(state.PlayerBuffs, BuffId.TemporaryStrength, amount);
+    }
+
+    /// <summary>
     /// `Bookmark.AfterFlush`: ONE of the cards that survived the flush, chosen at random
     /// off `Rng.CombatCardSelection`, costs one less until it is played.
     /// </summary>
@@ -3004,10 +3024,7 @@ public static class RelicEffects
     {
         if (HasRelic(state, ReptileTrinket))
         {
-            // The player's restore is `Strength += -TemporaryStrength`, so a grant that
-            // should expire records the SAME sign it was given at, not the opposite.
-            GainPlayerStrength(state, 3);
-            BuffSystem.Apply(state.PlayerBuffs, BuffId.TemporaryStrength, 3);
+            GainTemporaryPlayerStrength(state, 3);
         }
     }
 }
