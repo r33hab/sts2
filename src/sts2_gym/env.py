@@ -154,7 +154,9 @@ class Sts2CombatEnv(gym.Env):
         # does not reproduce the live game. See Core/Run/EncounterRng.cs.
         self._total_floor = total_floor
         # The run's ascension level. Enemy damage and buff amounts are read from it, so
-        # a capture at A10 is only comparable to an emulator told it is at A10.
+        # a capture at A10 is only comparable to an emulator told it is at A10. With an
+        # encounter and a total_floor it also sets the player's start -- HP, belt and
+        # Ascender's Bane -- as a run at that level has it (native.reset_encounter).
         self._ascension = ascension
         self._elapsed_steps = 0
         self._handle: int | None = None

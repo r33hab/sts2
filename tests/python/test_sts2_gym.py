@@ -576,6 +576,29 @@ class RunAscensionTests(unittest.TestCase):
             env.close()
 
 
+class CombatAscensionTests(unittest.TestCase):
+    """The combat API's synthetic start is the one a run at the given level deals."""
+
+    def test_the_synthetic_start_follows_the_level(self):
+        # Neow heals what is missing, times 0.8 under WearyTraveler (A2); TightBelt (A4)
+        # takes a potion slot; AscendersBane (A5) adds the curse to the starting deck.
+        piles = ("draw", "hand", "discard", "exhaust")
+        for ascension, hp, deck_size, potion_slots in ((0, 80, 10, 3), (8, 64, 11, 2)):
+            env = Sts2CombatEnv(
+                seed=0, encounter="cultists", total_floor=1, ascension=ascension
+            )
+            try:
+                obs, _ = env.reset()
+                self.assertEqual((hp, 80), (int(obs[0]), int(obs[1])))
+                deck = [card for pile in piles for card, _ in env.get_pile(pile)]
+                self.assertEqual(deck_size, len(deck))
+                self.assertEqual(deck_size - 10, deck.count(ASCENDERS_BANE_OBS_ID))
+                state = native.get_state_json(env._handle)
+                self.assertEqual(potion_slots, state["potions"]["max_slots"])
+            finally:
+                env.close()
+
+
 class CommittedRunTraceTests(unittest.TestCase):
     """The full-run capture replays end to end against the emulator.
 

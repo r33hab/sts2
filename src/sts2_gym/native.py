@@ -718,8 +718,11 @@ def reset_encounter(
 
     ascension is an input to enemy data, not a difficulty label: the game picks monster
     damage with GetValueIfAscension(level, high, low), so the same enemy hits for
-    different amounts at A8 and A10. It only reaches the emulator through the
-    floor-aware reset, so a call without total_floor keeps the default.
+    different amounts at A8 and A10. It also sets the player's start, by the run's own
+    rules at that level: 80/80 HP below WearyTraveler (A2) and 64/80 from it, three
+    potion slots below TightBelt (A4) and two from it, and Ascender's Bane in the deck
+    only from AscendersBane (A5). It only reaches the emulator through the floor-aware
+    reset, so a call without total_floor keeps the default (A8's start).
     """
     if total_floor is not None:
         _lib.Sts2_ResetEncounterAtFloor(
@@ -798,7 +801,8 @@ def reset_encounter_with_extra_cards(
 
     For captures that must reach a state the starter deck cannot: a Phrog Parasite's
     Wrigglers only spawn when it dies. The live side adds the same cards with
-    debug_add_card, and both sides append before shuffling.
+    debug_add_card, and both sides append before shuffling. The starter deck, HP and belt
+    are the level's, as in reset_encounter.
     """
     extra_buf = (ctypes.c_int * len(extra_card_ids))(*extra_card_ids)
     _lib.Sts2_ResetEncounterAtFloorWithExtraCards(

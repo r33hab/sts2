@@ -202,6 +202,10 @@ public static class NativeExports
         // rosters and Corpse Slug starting moves are rolled from that stream, so
         // without a floor the direct combat env cannot reproduce them — see
         // Core/Run/EncounterRng.cs.
+        //
+        // The player starts where a run at `ascension` starts: the opening HP Neow leaves
+        // and the belt TightBelt leaves, from the same rules `RunEngine.Reset` applies.
+        // The caller deals the deck, from `RunConstants.StartingDeckIds` at the same level.
         public void ResetAtFloor(
             ReadOnlySpan<int> deckIds,
             int encounterId,
@@ -211,6 +215,11 @@ public static class NativeExports
         )
         {
             State.AscensionLevel = ascension;
+            // Set BEFORE the reset, for the reason the run engine gives where it hands a
+            // fight its belt: `ApplyCombatStart` procures into the first free slot.
+            State.MaxPotionSlots = Sts2Emulator.Core.Run.RunConstants.StartingPotionSlots(
+                ascension
+            );
             SeedStreams();
             int? encounterRngSeed = Sts2Emulator.Core.Run.EncounterRng.SeedFor(
                 Seed,
@@ -223,8 +232,13 @@ public static class NativeExports
                 Rng,
                 deckIds,
                 encounterId,
-                completedCombatRooms,
-                encounterRngSeed
+                relicIds: [],
+                playerHp: Sts2Emulator.Core.Run.RunEngine.StartingHp(ascension),
+                playerMaxHp: Sts2Emulator.Core.Run.RunConstants.StartingMaxHp,
+                potionIds: [],
+                playerGold: 0,
+                encounterRngSeed: encounterRngSeed,
+                completedCombatRoomsBeforeCurrent: completedCombatRooms
             );
             CombatEngine.ResolvePrePlayPhase(State, Rng);
         }
@@ -292,6 +306,10 @@ public static class NativeExports
             }
 
             State.AscensionLevel = ascension;
+            // The arena takes its potions as a list and has no belt size to follow, so it
+            // keeps the three slots it has always had -- set rather than inherited, or a
+            // floor reset earlier on this handle would leave it TightBelt's two.
+            State.MaxPotionSlots = Sts2Emulator.Core.Run.RunConstants.InitialPotionSlots;
             SeedStreams();
             // -1 means "no forced encounter": the factory rolls the seeded first combat.
             // It has to become null rather than travel as -1, which would be looked up as
@@ -594,6 +612,9 @@ public static class NativeExports
     // Like Sts2_ResetEncounterWeak but also passing the run's TotalFloor, which is what
     // seeds the per-encounter RNG (EncounterModel.Rng). Required for any encounter that
     // rolls its own composition — Slimes rosters, Corpse Slug starting moves.
+    //
+    // The start is the one a run at `ascension` deals: its starting deck, HP and belt. It
+    // used to be A8's -- 64 HP and Ascender's Bane -- whatever level was asked for.
     [UnmanagedCallersOnly(EntryPoint = "Sts2_ResetEncounterAtFloor")]
     public static unsafe void Sts2_ResetEncounterAtFloor(
         int handle,
@@ -606,7 +627,7 @@ public static class NativeExports
     {
         var combat = _pool[handle]!;
         combat.ResetAtFloor(
-            StarterDeckIds,
+            Sts2Emulator.Core.Run.RunConstants.StartingDeckIds(ascension),
             encounterId,
             completedCombatRooms,
             totalFloor,
@@ -635,10 +656,12 @@ public static class NativeExports
     {
         // Appended to the starter deck rather than replacing it, and appended HERE so
         // the starter deck keeps one definition: the live side adds the same cards to
-        // the same run deck, and both sides have to shuffle the same list.
-        var deck = new int[StarterDeckIds.Length + extraLen];
-        StarterDeckIds.CopyTo(deck);
-        new ReadOnlySpan<int>(extraCardIds, extraLen).CopyTo(deck.AsSpan(StarterDeckIds.Length));
+        // the same run deck, and both sides have to shuffle the same list. The starter
+        // deck is the level's, so below AscendersBane it carries no curse.
+        int[] starter = Sts2Emulator.Core.Run.RunConstants.StartingDeckIds(ascension);
+        var deck = new int[starter.Length + extraLen];
+        starter.CopyTo(deck, 0);
+        new ReadOnlySpan<int>(extraCardIds, extraLen).CopyTo(deck.AsSpan(starter.Length));
 
         var combat = _pool[handle]!;
         combat.ResetAtFloor(deck, encounterId, completedCombatRooms, totalFloor, ascension);
