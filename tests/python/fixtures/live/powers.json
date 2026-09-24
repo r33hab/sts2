@@ -48,9 +48,12 @@
         {"id": "MANGLE_POWER", "amount": 10},
         {"id": "THIEVERY_POWER", "amount": 20}
       ],
-      "intents": [{"type": "ATTACK", "damage": 0, "base_damage": 7, "hits": 2}],
-      "move_id": "GIMME_MOVE",
-      "state_log": ["GIMME_MOVE"],
+      "intents": [
+        {"type": "ATTACK", "damage": 0, "base_damage": 6, "hits": 2},
+        {"type": "DEBUFF", "damage": null, "base_damage": null, "hits": null}
+      ],
+      "move_id": "DOUBLE_SMASH_MOVE",
+      "state_log": ["GIMME_MOVE", "DOUBLE_SMASH_MOVE"],
       "ai_fields": {}
     },
     {

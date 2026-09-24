@@ -40,9 +40,7 @@ sys.path.insert(0, str(ROOT / "src"))
 names = importlib.import_module("sts2_gym.names")
 native = importlib.import_module("sts2_gym.native")
 env = importlib.import_module("sts2_gym.env")
-live = importlib.import_module("sts2_gym.live")
 enemy_ai = importlib.import_module("sts2_gym.live.enemy_ai")
-convert = importlib.import_module("sts2_gym.live.convert")
 ids = importlib.import_module("sts2_gym.live.ids")
 powers = importlib.import_module("sts2_gym.live.powers")
 
@@ -1278,6 +1276,51 @@ class FallbackTests(unittest.TestCase):
         self.assertEqual(intent, emu_intent("Buff", 0))
         self.assertEqual(len(warnings), 1)
         self.assertIn("not a walk", warnings[0])
+
+    def test_logs_the_game_rules_out_are_flagged_not_rebuilt(self) -> None:
+        # Each breaks a rule of the monster's decompiled machine that the emulator's
+        # SelectIntent mirrors. None repeats a move: the replay reads a repeat it could not
+        # choose afresh as a move resumed after a stun, which the game logs twice.
+        forbidden = (
+            # FRAIL_SPORES is on a cooldown of 2 (decompiled Flyconid.cs; EnemyAI.cs:
+            # 1315-1329).
+            ("FLYCONID", ["FRAIL_SPORES_MOVE", "SMASH_MOVE", "FRAIL_SPORES_MOVE"]),
+            # ROAR is UseOnlyOnce (decompiled Mawler.cs; EnemyAI.cs:1168-1177).
+            ("MAWLER", ["CLAW_MOVE", "ROAR_MOVE", "RIP_AND_TEAR_MOVE", "ROAR_MOVE"]),
+            # SCREECH is on a cooldown of 3 (decompiled TwoTailedRat.cs; EnemyAI.cs:
+            # 3244-3248).
+            ("TWO_TAILED_RAT", ["SCREECH_MOVE", "SCRATCH_MOVE", "SCREECH_MOVE"]),
+            # No summon while TurnsUntilSummonable is above 0 (EnemyAI.cs:3238-3242).
+            ("TWO_TAILED_RAT", ["SCRATCH_MOVE", "CALL_FOR_BACKUP_MOVE"]),
+            # LATCH opens (decompiled FossilStalker.cs).
+            ("FOSSIL_STALKER", ["TACKLE_MOVE", "LATCH_MOVE"]),
+            # WHIRLWIND leads back to JAB (decompiled Inklet.cs).
+            ("INKLET", ["JAB_MOVE", "WHIRLWIND_MOVE", "PIERCING_GAZE_MOVE"]),
+            # SWIPE_RANDOM leads to HEADBUTT (decompiled Fogmog.cs).
+            (
+                "FOGMOG",
+                ["ILLUSION_MOVE", "SWIPE_MOVE", "SWIPE_RANDOM_MOVE", "SWIPE_MOVE"],
+            ),
+            # CONSTRICT follows every rolled attack (decompiled SlitheringStrangler.cs).
+            ("SLITHERING_STRANGLER", ["CONSTRICT", "THWACK", "LASH"]),
+            # STICKY_SHOT opens (decompiled TwigSlimeM.cs).
+            ("TWIG_SLIME_M", ["POKEY_POUNCE_MOVE", "STICKY_SHOT_MOVE"]),
+            # OIL_SPRAY opens (decompiled SludgeSpinner.cs).
+            ("SLUDGE_SPINNER", ["SLAM_MOVE", "RAGE_MOVE"]),
+        )
+        for entry, log in forbidden:
+            with self.subTest(monster=entry, log=log):
+                live = enemy(
+                    entry,
+                    log,
+                    log[-1],
+                    ai_fields={"_starterMoveIndex": 2, "_callForBackupCount": 0},
+                )
+                warnings = to_ai(live, turn=len(log) - 1)[2]
+                self.assertTrue(
+                    any("not a walk" in w for w in warnings),
+                    warnings,
+                )
 
     def test_an_unknown_move_warns_and_falls_back(self) -> None:
         live = enemy(

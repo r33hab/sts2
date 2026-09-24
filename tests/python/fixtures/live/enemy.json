@@ -43,8 +43,8 @@
       "powers": [{"id": "STRENGTH_POWER", "amount": 2}],
       "intents": [{"type": "ATTACK", "damage": 5, "base_damage": 3, "hits": 2}],
       "move_id": "WHIP_SLAP_MOVE",
-      "state_log": ["GLOMP_MOVE", "WHIP_SLAP_MOVE"],
-      "ai_fields": {}
+      "state_log": ["GOOP_MOVE", "WHIP_SLAP_MOVE"],
+      "ai_fields": {"_starterMoveIdx": 2, "_isRavenous": false}
     },
     {
       "entity_id": "TWO_TAILED_RAT_1",
@@ -57,7 +57,11 @@
       "intents": [{"type": "DEBUFF", "damage": null, "base_damage": null, "hits": null}],
       "move_id": "SCREECH_MOVE",
       "state_log": ["SCRATCH_MOVE", "RAND", "SCREECH_MOVE"],
-      "ai_fields": {}
+      "ai_fields": {
+        "_starterMoveIndex": 0,
+        "_turnsUntilSummonable": 1,
+        "_callForBackupCount": 0
+      }
     }
   ],
   "history": {},

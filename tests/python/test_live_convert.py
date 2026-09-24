@@ -36,6 +36,7 @@ powers = importlib.import_module("sts2_gym.live.powers")
 relics = importlib.import_module("sts2_gym.live.relics")
 cards = importlib.import_module("sts2_gym.live.cards")
 potions = importlib.import_module("sts2_gym.live.potions")
+enemy_ai = importlib.import_module("sts2_gym.live.enemy_ai")
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "live"
 DECOMPILED = ROOT / "decompiled"
@@ -456,10 +457,11 @@ class PowersFixtureTests(unittest.TestCase):
         )
 
     def test_intents_carry_base_per_hit_damage(self) -> None:
-        # Displayed 0 (Strength -16 floors it); the emulator gets the base 7 per hit.
+        # Displayed 0 (Strength -16 floors it); the emulator gets the base 6 per hit --
+        # DOUBLE_SMASH's ToughEnemies(7, 6) twice at A0 (EnemyAI.cs:1204-1228).
         self.assertEqual(
             self.doc["enemies"][0]["intent"],
-            {"type": 0, "magnitude": 7, "hits": 2, "carries_damage": False},
+            {"type": 0, "magnitude": 6, "hits": 2, "carries_damage": False},
         )
         # An EscapeIntent maps to the emulator's Unknown (IntentType.Unknown = 4).
         self.assertEqual(
@@ -584,7 +586,7 @@ class CardsFixtureTests(unittest.TestCase):
 
 
 class EnemyFixtureTests(unittest.TestCase):
-    """Enemy id, slot, HP, buffs, a generic intent and the generic AI block."""
+    """Enemy id, slot, HP, buffs, and the AI block and intent from the move tables."""
 
     def setUp(self) -> None:
         self.result = convert.convert(load("enemy"))
@@ -607,31 +609,52 @@ class EnemyFixtureTests(unittest.TestCase):
             {"type": 0, "magnitude": 3, "hits": 2, "carries_damage": False},
         )
 
-    def test_generic_ai_counts_logged_moves(self) -> None:
+    def test_ai_state_comes_from_the_move_tables(self) -> None:
         slug, rat = self.enemies
-        self.assertEqual(slug["ai"]["move_index"], 1)
-        self.assertEqual(slug["ai"]["last_move"], -1)
-        self.assertEqual(slug["ai"]["move_history"], [])
-        self.assertEqual(slug["ai"]["last_branch"], -1)
-        # RAND is a RandomBranchState (decompiled TwoTailedRat.cs), not a move: two moves.
-        self.assertEqual(rat["ai"]["move_index"], 1)
+        # GOOP opens the slug on MoveIndex 2 (StarterMoveIdx 2, CombatFactory.cs:
+        # 1752-1778); one turn on, WHIP_SLAP is 3 (EnemyAI.cs:3285-3301).
+        self.assertEqual(slug["ai"], {**enemy_ai.ai_defaults(), "move_index": 3})
+        # A starter rat on StarterMoveIndex 0, SCRATCH then SCREECH (EnemyAI.cs:3203-3283);
+        # RAND is a RandomBranchState (decompiled TwoTailedRat.cs), not a move.
+        self.assertEqual(
+            {k: rat["ai"][k] for k in ("move_index", "last_move", "move_history")},
+            {"move_index": 1, "last_move": 2, "move_history": [0, 2]},
+        )
+        # TurnsUntilSummonable 1 is the emulator's SummonCooldown companion.
+        self.assertEqual(rat["buffs"], [buff("SummonCooldown", 1)])
 
-    def test_debuff_intent_has_no_magnitude(self) -> None:
+    def test_a_debuff_intent_takes_its_magnitude_from_the_table(self) -> None:
         rat = self.enemies[1]
         self.assertEqual(
             (rat["def_id"], rat["slot"], rat["block"]),
             (TWO_TAILED_RAT, 1, 4),
         )
+        # SCREECH announces Debuff 1 (EnemyAI.cs:3278), the Frail it applies from
+        # CurrentIntent.Magnitude (EnemyAI.cs:4058-4061); the live readout has no number.
         self.assertEqual(
             rat["intent"],
-            {"type": 3, "magnitude": 0, "hits": 1, "carries_damage": False},
+            {"type": 3, "magnitude": 1, "hits": 1, "carries_damage": False},
         )
 
-    def test_an_unverified_ai_block_is_flagged_per_enemy(self) -> None:
-        self.assertEqual(len(self.result.warnings), 2)
-        self.assertIn("CORPSE_SLUG", self.result.warnings[0])
-        self.assertIn("TWO_TAILED_RAT", self.result.warnings[1])
-        self.assertFalse(self.result.reliable)
+    def test_verified_ai_blocks_raise_no_warning(self) -> None:
+        self.assertEqual(self.result.warnings, [])
+        self.assertTrue(self.result.reliable)
+
+    def test_a_monster_without_a_table_is_flagged(self) -> None:
+        # The Chomper is Hive's (Act 2), outside the tables.
+        doc = load("enemy")
+        doc["enemies"][1].update(
+            id="CHOMPER",
+            entity_id="CHOMPER_1",
+            move_id="SCREECH_MOVE",
+            state_log=["CLAMP_MOVE", "SCREECH_MOVE"],
+            ai_fields={},
+        )
+        result = convert.convert(doc)
+        self.assertEqual(len(result.warnings), 1)
+        self.assertIn("CHOMPER", result.warnings[0])
+        self.assertFalse(result.reliable)
+        self.assertEqual(result.doc["enemies"][1]["ai"]["move_index"], 1)
 
 
 def names_enum(table: dict[int, str]) -> dict[str, int]:
@@ -853,8 +876,25 @@ class WarningTests(unittest.TestCase):
         doc["hand"][0]["cost"] = 0
         self.assertEqual(len(convert.convert(doc).warnings), 1)
 
-    def test_missing_base_damage_uses_the_display_and_warns(self) -> None:
+    def test_missing_base_damage_comes_from_the_move_table(self) -> None:
+        # WHIP_SLAP is 3 twice (EnemyAI.cs:3285-3301); the table knows it exactly.
         doc = load("enemy")
+        doc["enemies"][0]["intents"][0]["base_damage"] = None
+        result = convert.convert(doc)
+        self.assertEqual(result.doc["enemies"][0]["intent"]["magnitude"], 3)
+        self.assertEqual(result.warnings, [])
+
+    def test_missing_base_damage_without_a_table_uses_the_display_and_warns(
+        self,
+    ) -> None:
+        doc = load("enemy")
+        doc["enemies"][0].update(
+            id="CHOMPER",
+            entity_id="CHOMPER_0",
+            move_id="CLAMP_MOVE",
+            state_log=["CLAMP_MOVE"],
+            ai_fields={},
+        )
         doc["enemies"][0]["intents"][0]["base_damage"] = None
         result = convert.convert(doc)
         self.assertEqual(result.doc["enemies"][0]["intent"]["magnitude"], 5)

@@ -2,8 +2,8 @@
 
 `convert` walks the live document once, refusing any key the live schema does not define
 and any id the emulator does not know, and assembles the emulator document from the
-per-area translators: `powers`, `relics`, `cards`, and -- for enemy AI state -- `generic_ai`,
-the stub a per-monster table will replace.
+per-area translators: `powers`, `relics`, `cards`, and `enemy_ai` for each enemy's AI state
+and intent.
 
 What it could not carry faithfully goes into `ConversionResult.warnings`, and any warning
 makes the result unreliable: each one names content the emulator's copy of the position
@@ -12,18 +12,18 @@ may not match.
 
 from __future__ import annotations
 
-import copy
 from dataclasses import dataclass
 from typing import Any, cast
 
-from sts2_gym.live import ConversionError, cards, ids, potions, powers, relics
+from sts2_gym.live import ConversionError, cards, enemy_ai, ids, potions, powers, relics
+from sts2_gym.live.enemy_ai import BRANCH_STATE_IDS
 
 __all__ = [
+    "BRANCH_STATE_IDS",
     "ConversionError",
     "ConversionResult",
     "convert",
     "counter_names",
-    "generic_ai",
 ]
 
 LIVE_SCHEMA = "sts2-live-snapshot/1"
@@ -80,58 +80,6 @@ _ATTACK_OR_SKILL_PARTS = (
 # Whispering Earring's turn-one auto-play is behind this flag (CombatState.cs:394); a
 # loaded position is always past the point where it would run.
 _ALWAYS = {"whispering_earring_spent": True}
-
-# Every `RandomBranchState` / `ConditionalBranchState` id in the game's monster machines
-# (decompiled MegaCrit.Sts2.Core.Models.Monsters; no id doubles as a MoveState id). The
-# game's StateLog skips them (`ShouldAppearInLogs => false`, MonsterMoveStateMachine.cs:
-# 30-32 and :75-80), but the live schema allows a log that includes them, so the generic
-# move count excludes them. Checked against the decompiled source by the test suite.
-BRANCH_STATE_IDS = frozenset(
-    {
-        "BRANCH",
-        "BURN_BRIGHT_FOR_ME_BRANCH",
-        "CurseOfKnowledgeBranch",
-        "HALF_HEALTH",
-        "INITIAL",
-        "INIT_MOVE",
-        "INIT_RAND",
-        "POST_HEADBUTT",
-        "RAND",
-        "RAND_ATTACK_MOVE",
-        "RAND_MOVE",
-        "REVIVE_BRANCH",
-        "SHIELD_SLAM_BRANCH",
-        "SLEEP_BRANCH",
-        "SNORE_NEXT",
-        "SUMMON_BRANCH_STATE",
-        "YOURE_MINE_NOW_BRANCH",
-        "fabricateBranch",
-        "rand",
-    },
-)
-
-# `EnemyState`'s defaults (Enemy.cs:72-229): LastMove and LastBranch start at -1.
-_AI_DEFAULTS: dict[str, Any] = {
-    "move_index": 0,
-    "last_move": -1,
-    "last_move_repeats": 0,
-    "once_only_move_used": False,
-    "move_history": [],
-    "starts_on_branch": False,
-    "rolls_next_move": False,
-    "last_branch": -1,
-    "repeat_streak": 0,
-    "branch_cooldown": 0,
-    "starter_move": 0,
-    "off_balance": False,
-    "nemesis_intangible_on": False,
-    "escaped": False,
-    "last_spawned_def_id": 0,
-    "stolen_gold": 0,
-    "heist_gold": 0,
-    "powered_hits_this_turn": 0,
-    "stolen_card": None,
-}
 
 
 @dataclass
@@ -494,61 +442,10 @@ def _enemy_shape(value: object, path: str) -> dict[str, Any]:
     return enemy
 
 
-def generic_ai(
-    enemy: dict[str, Any],
-    *,
-    roster: list[dict[str, Any]],
-    turn: int,
-) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
-    """Best-effort AI block and intent for a validated live enemy: (ai, intent, warnings).
-
-    With no per-monster table, `move_index` is the number of moves in `state_log` less one
-    -- at display time the emulator's `MoveIndex` is the index `SelectIntent` used, and the
-    log already holds the displayed move -- and every other field is `EnemyState`'s
-    default. The intent is `intents[0]`, with the BASE per-hit damage the emulator's
-    `Intent.Magnitude` holds (Enemy.cs:32-49); secondary intents are left to the emulator.
-    `roster` and `turn` are unused here: they are what a per-monster table needs.
-    """
-    label = f"enemy {enemy['entity_id']} ({enemy['id']})"
-    warnings: list[str] = []
-    moves = [state for state in enemy["state_log"] if state not in BRANCH_STATE_IDS]
-    ai = copy.deepcopy(_AI_DEFAULTS)
-    ai["move_index"] = max(len(moves) - 1, 0)
-
-    intent: dict[str, Any] = {
-        "type": ids.intent_type("UNKNOWN"),
-        "magnitude": 0,
-        "hits": 1,
-        "carries_damage": False,
-    }
-    if enemy["intents"]:
-        first = enemy["intents"][0]
-        per_hit = first["base_damage"]
-        if per_hit is None and first["damage"] is not None:
-            per_hit = first["damage"]
-            warnings.append(
-                f"{label}: intent base_damage is null, so the displayed {per_hit} (with "
-                "the modifiers in view already applied) stands in for the base",
-            )
-        intent = {
-            "type": ids.intent_type(first["type"]),
-            "magnitude": per_hit or 0,
-            "hits": first["hits"] or 1,
-            # A non-attack readout whose number is still damage (Enemy.cs:44-48).
-            "carries_damage": per_hit is not None
-            and first["type"] not in ids.ATTACK_INTENTS,
-        }
-
-    warnings.append(
-        f"{label}: AI state is generic (move_index from the move log, no move history); "
-        "no per-monster table has verified it",
-    )
-    return ai, intent, warnings
-
-
 def _enemies(
     live: dict[str, Any],
     turn: int,
+    ascension: int,
     warnings: list[str],
 ) -> list[dict[str, Any]]:
     listed = _list(live["enemies"], "enemies")
@@ -568,7 +465,15 @@ def _enemies(
             path=f"{where}.powers",
             warnings=warnings,
         )
-        ai, intent, ai_warnings = generic_ai(enemy, roster=roster, turn=turn)
+        # The per-monster tables rebuild the AI block and the intent, and set the
+        # emulator-only BuffIds that carry AI state on `buffs`.
+        ai, intent, ai_warnings = enemy_ai.to_ai(
+            enemy,
+            roster=roster,
+            turn=turn,
+            ascension=ascension,
+            buffs=buffs,
+        )
         warnings.extend(ai_warnings)
         ai.update(powers.to_ai_fields(enemy["powers"]))
         out.append(
@@ -750,7 +655,7 @@ def convert(live: dict[str, Any]) -> ConversionResult:
             "draw": _draw(top, warnings, corruption),
         },
         "incoming": {"return_to_hand": [], "copies_to_hand": []},
-        "enemies": _enemies(top, turn, warnings),
+        "enemies": _enemies(top, turn, ascension, warnings),
         "counters": {**history, **power_counters, **relic_state.counters, **_ALWAYS},
         "pending_selection": None,
     }
