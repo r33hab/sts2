@@ -1,6 +1,7 @@
 """ctypes bindings to the NativeAOT-compiled Sts2Emulator native library."""
 
 import ctypes
+import json
 import os
 import platform
 import sys
@@ -209,6 +210,27 @@ _lib.Sts2_Clone.argtypes = [
     ctypes.c_int,
     ctypes.c_int,
     ctypes.POINTER(ctypes.c_int),
+]
+
+_lib.Sts2_LoadCombatSnapshot.restype = ctypes.c_int
+_lib.Sts2_LoadCombatSnapshot.argtypes = [
+    ctypes.POINTER(ctypes.c_ubyte),
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+]
+
+_lib.Sts2_GetStateJson.restype = ctypes.c_int
+_lib.Sts2_GetStateJson.argtypes = [
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_ubyte),
+    ctypes.c_int,
+]
+
+_lib.Sts2_GetLastError.restype = ctypes.c_int
+_lib.Sts2_GetLastError.argtypes = [
+    ctypes.POINTER(ctypes.c_ubyte),
+    ctypes.c_int,
 ]
 
 _lib.Sts2_Reset.restype = None
@@ -620,6 +642,56 @@ def clone(
     return handle_out
 
 
+class SnapshotError(Exception):
+    """Raised when `Sts2_LoadCombatSnapshot` refuses an `sts2-emu-snapshot/1` document.
+
+    The message is `Sts2_GetLastError`'s text: the JSON path of the field at fault, e.g.
+    ``piles.hand[0].def_id: unknown card id 999999``. See
+    docs/superpowers/specs/2026-09-24-snapshot-schemas.md Sec 2.
+    """
+
+
+def _get_last_error() -> str:
+    """`Sts2_GetLastError`'s text (size-and-retry). Empty after a successful load."""
+    capacity = 256
+    while True:
+        buf = (ctypes.c_ubyte * capacity)()
+        length = int(_lib.Sts2_GetLastError(buf, capacity))
+        if length <= capacity:
+            return bytes(buf[:length]).decode("utf-8")
+        capacity = length
+
+
+def load_combat_snapshot(doc: dict | str | bytes, seed: int) -> int:
+    """Build a combat from an `sts2-emu-snapshot/1` document.
+
+    So search can start from a live game position instead of from a reset. `doc` is a
+    dict (JSON-encoded here), a JSON string, or already-encoded UTF-8 bytes.
+    `seed` seeds every stream and orders the unknown middle of the draw pile -- the same
+    role it plays for `create`.
+
+    Raises:
+        SnapshotError: if the document is refused. The message names the field, per
+            `Sts2_GetLastError`.
+        RuntimeError: if the handle pool is full.
+
+    """
+    if isinstance(doc, dict):
+        json_bytes = json.dumps(doc).encode("utf-8")
+    elif isinstance(doc, str):
+        json_bytes = doc.encode("utf-8")
+    else:
+        json_bytes = bytes(doc)
+
+    buf = (ctypes.c_ubyte * len(json_bytes))(*json_bytes) if json_bytes else None
+    handle = int(_lib.Sts2_LoadCombatSnapshot(buf, len(json_bytes), seed, None))
+    if handle == -1:
+        raise SnapshotError(_get_last_error())
+    if handle == -2:
+        raise RuntimeError("Sts2_LoadCombatSnapshot failed: the handle pool is full.")
+    return handle
+
+
 def reset(handle: int, obs_buf: ctypes.Array) -> None:
     _lib.Sts2_Reset(handle, obs_buf)
 
@@ -965,6 +1037,28 @@ def get_executed(handle: int) -> list[int]:
         if count <= capacity:
             return [buf[i] for i in range(count)]
         capacity = count
+
+
+def get_state_json(handle: int) -> dict:
+    """Export a combat as an `sts2-emu-snapshot/1` document (size-and-retry).
+
+    The counterpart to `load_combat_snapshot`: `get_state_json(load_combat_snapshot(doc,
+    seed))` round-trips `doc`, modulo the unordered draw-pile middle, which is a multiset
+    (docs/superpowers/specs/2026-09-24-snapshot-schemas.md Sec 2.1).
+
+    Raises:
+        RuntimeError: if the handle is unknown.
+
+    """
+    capacity = 4096
+    while True:
+        buf = (ctypes.c_ubyte * capacity)()
+        length = int(_lib.Sts2_GetStateJson(handle, buf, capacity))
+        if length < 0:
+            raise RuntimeError(f"Sts2_GetStateJson failed: unknown handle {handle}.")
+        if length <= capacity:
+            return json.loads(bytes(buf[:length]))
+        capacity = length
 
 
 def player_won(handle: int) -> bool:
