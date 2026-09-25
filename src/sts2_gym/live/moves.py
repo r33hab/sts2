@@ -631,10 +631,13 @@ def _draw_candidates(
     found: list[int | None] = [None] * (len(known) + len(named))
     taken: set[int] = set()
     for action, place, card in known:
+        # Past the observation's last slot nothing shows the card to hold it to; a known
+        # place still maps by the live card at that position.
         if action < len(offered) and offered[action][:2] != _emu_face(card)[:2]:
             raise MappingError(
-                f"the emulator offers card {offered[action][0]} at draw-pile place "
-                f"{place}, where the live pile holds {card['id']}",
+                f"the emulator offers {_shown_name(offered[action])} at draw-pile "
+                f"place {place}, where the live pile holds "
+                f"{card['id']}{'+' if card['upgraded'] else ''}",
             )
         found[action] = _claim(card, screen, taken)
     shown = _middle_shown(offered, first, named, draw_order, (top, top + middle))
@@ -721,6 +724,12 @@ def _claim_shown(
         return None
     taken.add(alike[0])
     return alike[0]
+
+
+def _shown_name(shown: Shown) -> str:
+    """Name a card the emulator shows by its live id, with a + when it is upgraded."""
+    entry = ids.card_entries().get(shown[0]) or names.card_name(shown[0])
+    return entry + ("+" if shown[1] else "")
 
 
 def _emu_face(card: Mapping[str, Any]) -> Shown:

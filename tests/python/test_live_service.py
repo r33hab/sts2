@@ -51,6 +51,7 @@ SELECTIONS = sorted((FIXTURES / "selection").glob("*.json"))
 
 STRIKE = ids.card_id("STRIKE_IRONCLAD")
 DEFEND = ids.card_id("DEFEND_IRONCLAD")
+SHRUG_IT_OFF = ids.card_id("SHRUG_IT_OFF")
 
 MOVE_FIELDS = {
     "kind",
@@ -645,13 +646,73 @@ class SelectMoveTests(unittest.TestCase):
         position = mapped(live)
         self.assertEqual(position.offered[0][:2], (STRIKE, False))
         wrong = [(DEFEND, False, 0, 0), *position.offered[1:]]
-        with self.assertRaisesRegex(moves.MappingError, "place 0"):
+        with self.assertRaisesRegex(
+            moves.MappingError,
+            "offers DEFEND_IRONCLAD at draw-pile place 0, where the live pile holds "
+            "STRIKE_IRONCLAD$",
+        ):
             moves.index_maps(
                 live,
                 position.doc,
                 offered=wrong,
                 draw_order=position.draw,
             )
+
+    def test_a_middle_pick_past_the_observation_is_placed_by_the_draw_pile(
+        self,
+    ) -> None:
+        # Secret Technique offers every Skill: twelve in the middle, two past the
+        # observation's ten slots. Every copy of each is offered, so the draw pile says
+        # which of its cards the candidates are, the last two included.
+        live = load("selection_past_ten/secret_technique_every_skill")
+        screen = live["pending_selection"]["candidates"]
+        skills = {(DEFEND, False), (SHRUG_IT_OFF, False)}
+        tails = set()
+        for seed in range(8):
+            position = mapped(live, seed)
+            in_pile = [tuple(card) for card in position.draw if tuple(card) in skills]
+            tails.add(tuple(in_pile[10:]))
+            with self.subTest(seed=seed):
+                self.assertEqual((len(screen), len(position.offered)), (12, 10))
+                self.assertEqual(sorted(position.maps.candidates), list(range(12)))
+                for k, found in enumerate(position.maps.candidates):
+                    card = screen[found]
+                    self.assertEqual(
+                        (ids.card_id(card["id"]), card["upgraded"]),
+                        in_pile[k],
+                    )
+                # Without the draw pile, the last two show nothing and are not found.
+                shown_only = moves.index_maps(
+                    live,
+                    position.doc,
+                    offered=position.offered,
+                )
+                self.assertEqual(shown_only.candidates[10:], (None, None))
+        self.assertGreater(len(tails), 1, "the last two never changed; vacuous")
+
+    def test_a_partial_middle_past_the_observation_is_not_found(self) -> None:
+        # Seeker Strike's grid, made to offer twelve cards: nine of the middle's ten
+        # Defends among them. The pile cannot say which Defend is left out, so it cannot
+        # place the last two candidates either, and they stay unmapped.
+        live = load("selection_past_ten/seeker_strike_partial")
+        screen = live["pending_selection"]["candidates"]
+        for seed in range(4):
+            position = mapped(live, seed)
+            with self.subTest(seed=seed):
+                self.assertEqual(len(position.offered), 10)
+                self.assertEqual(position.maps.candidates[10:], (None, None))
+                self.assertNotIn(None, position.maps.candidates[:10])
+                unfound = set(range(len(screen))) - set(position.maps.candidates)
+                self.assertEqual(len(unfound), 2)
+                for index in sorted(unfound):
+                    pick = moves.Move(
+                        kind="select",
+                        select_index=index,
+                        card_uid=screen[index]["uid"],
+                        label="Choose",
+                    )
+                    with self.assertRaises(moves.UnmappedSelectionError):
+                        moves.to_action(pick, live, position.doc, maps=position.maps)
 
     def test_a_merged_pick_covers_every_identical_candidate(self) -> None:
         # The two Strikes: c6 on top (screen index 2) and c5 in the middle (screen 1).
@@ -838,10 +899,12 @@ class ToActionTests(unittest.TestCase):
                 )
 
     def test_a_draw_pile_pick_maps_back_under_every_shuffle(self) -> None:
-        # The whole draw pile offered, and one of two middle twins offered.
+        # The whole draw pile offered, one of two middle twins offered, and twelve Skills,
+        # the last two placed by the draw pile.
         for position, count in (
             (load("selection/droplet_of_precognition"), 3),
             (seeker_strike_with_a_twin(), 2),
+            (load("selection_past_ten/secret_technique_every_skill"), 12),
         ):
             for seed in range(8):
                 self.assert_round_trip(
@@ -2067,6 +2130,24 @@ class AnalyzeTests(unittest.TestCase):
                     )
                 covered = [i for _, stat in picks for i in stat["select_indices"]]
                 self.assertEqual(len(covered), len(set(covered)))
+
+    def test_picks_past_the_observation_are_named_where_the_draw_pile_can_say(
+        self,
+    ) -> None:
+        # Twelve candidates each: the search knows the last two only by index. Where every
+        # copy of each offered card is offered, the draw pile names them; where one is
+        # left out, it cannot, and the two picks are counted, not guessed.
+        every = self.analyze(load("selection_past_ten/secret_technique_every_skill"))
+        self.assertEqual(every["select_mapping_failures"], 0)
+        covered = [
+            index
+            for stat in every["moves"]
+            if stat["kind"] == "select"
+            for index in stat["select_indices"]
+        ]
+        self.assertEqual(sorted(covered), list(range(12)))
+        partial = self.analyze(load("selection_past_ten/seeker_strike_partial"))
+        self.assertEqual(partial["select_mapping_failures"], 2)
 
     def test_an_unreliable_position_still_gets_a_best_effort_analysis(self) -> None:
         for name in ("selection/toolbox", "powers"):
