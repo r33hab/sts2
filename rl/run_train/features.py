@@ -13,13 +13,14 @@ state after an option, so training and serving share every line that touches a f
   `LIVE_SCREEN_SCHEMA`: DESIGN.md 3.5 and 3.7).
 - Shared: `encode` (the 1843-wide base vector, 3.2), `map_ahead`, `deck_aggregates`,
   `apply_option` / `encode_after_transform` / `encode_afterstate` (section 4), and the
-  fight-block layout (`fight_queries`, `fight_block`, 3.3).
+  fight-block layout (`fight_queries`, `fight_blocks` and its one-row `fight_block`,
+  3.3).
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from typing import Any, TypeVar
@@ -938,28 +939,43 @@ def fight_queries(view: RunView) -> list[FightQuery]:
     return queries
 
 
-def fight_block(outcomes: Iterable[tuple[FightQuery, float, float]]) -> np.ndarray:
-    """Build H from (query, E[HP lost], P(death)) rows.
+def fight_blocks(
+    queries: Sequence[FightQuery],
+    losses: np.ndarray,
+    deaths: np.ndarray,
+) -> np.ndarray:
+    """Build H for a batch: (rows, queries) E[HP lost] and P(death) -> (rows, 8).
 
     The uniform mean over each pool, laid out [weak E/100, weak P, normal E/100, normal P,
-    elite ..., boss ...].
+    elite ..., boss ...]. The policy and training compute H through this one function.
 
     Raises:
-        ValueError: If a pool has no outcome.
+        ValueError: If a pool has no query.
 
     """
-    losses: dict[str, list[float]] = {pool: [] for pool in FIGHT_POOLS}
-    deaths: dict[str, list[float]] = {pool: [] for pool in FIGHT_POOLS}
-    for query, loss, death in outcomes:
-        losses[query.pool].append(float(loss))
-        deaths[query.pool].append(float(death))
-    block = np.zeros(FIGHT_BLOCK_SIZE, dtype=np.float32)
+    losses = np.atleast_2d(np.asarray(losses, dtype=np.float64))
+    deaths = np.atleast_2d(np.asarray(deaths, dtype=np.float64))
+    pools = [query.pool for query in queries]
+    block = np.zeros((losses.shape[0], FIGHT_BLOCK_SIZE), dtype=np.float32)
     for slot, pool in enumerate(FIGHT_POOLS):
-        if not losses[pool]:
+        columns = [j for j, name in enumerate(pools) if name == pool]
+        if not columns:
             raise ValueError(f"no fight outcome for the {pool} pool")
-        block[2 * slot] = float(np.mean(losses[pool])) / 100
-        block[2 * slot + 1] = float(np.mean(deaths[pool]))
+        block[:, 2 * slot] = losses[:, columns].mean(axis=1) / 100
+        block[:, 2 * slot + 1] = deaths[:, columns].mean(axis=1)
     return block
+
+
+def fight_block(outcomes: Iterable[tuple[FightQuery, float, float]]) -> np.ndarray:
+    """Build H from (query, E[HP lost], P(death)) rows: `fight_blocks` for one state.
+
+    A pool with no outcome raises `ValueError`.
+    """
+    rows = list(outcomes)
+    queries = [query for query, _, _ in rows]
+    losses = [[loss for _, loss, _ in rows]]
+    deaths = [[death for _, _, death in rows]]
+    return fight_blocks(queries, np.array(losses), np.array(deaths))[0]
 
 
 # --------------------------------------------------------------------------------------

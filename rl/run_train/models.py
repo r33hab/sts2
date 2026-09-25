@@ -77,7 +77,6 @@ __all__ = [
     "fight_class",
     "fight_inputs",
     "fight_state_inputs",
-    "fight_summary",
     "floor_class",
     "load_numpy",
     "load_torch",
@@ -267,33 +266,6 @@ def value_inputs(rows: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return dense, _counts(rows)
 
 
-def fight_summary(
-    losses: np.ndarray,
-    deaths: np.ndarray,
-    queries: Sequence[FightQuery],
-) -> np.ndarray:
-    """Return H for a batch: E[HP lost] and P(death) per query, averaged per pool.
-
-    `losses` and `deaths` are (rows, queries). The layout is `features.fight_block`'s,
-    which owns it (3.3); this is the batched form the policy and training share.
-
-    Raises:
-        ValueError: If a pool has no query.
-
-    """
-    losses = np.asarray(losses, dtype=np.float64)
-    deaths = np.asarray(deaths, dtype=np.float64)
-    pools = [query.pool for query in queries]
-    block = np.zeros((losses.shape[0], FIGHT_BLOCK_SIZE), dtype=np.float32)
-    for slot, pool in enumerate(features.FIGHT_POOLS):
-        columns = [j for j, name in enumerate(pools) if name == pool]
-        if not columns:
-            raise ValueError(f"no fight outcome for the {pool} pool")
-        block[:, 2 * slot] = losses[:, columns].mean(axis=1) / 100
-        block[:, 2 * slot + 1] = deaths[:, columns].mean(axis=1)
-    return block
-
-
 # --------------------------------------------------------------------------------------
 # Numpy inference (the checkpoint's .npz export)
 # --------------------------------------------------------------------------------------
@@ -381,7 +353,7 @@ class NumpyFightNet:
             probs = softmax(self.query_logits(chunk, encounters, weak))
             hp = np.minimum(chunk[:, A_OFFSET + 1] * 100, HP_BOUND)
             losses = expected_loss(probs, hp[:, None])
-            blocks.append(fight_summary(losses, probs[..., 0], queries))
+            blocks.append(features.fight_blocks(queries, losses, probs[..., 0]))
         if not blocks:
             return np.zeros((0, FIGHT_BLOCK_SIZE), dtype=np.float32)
         return np.concatenate(blocks)

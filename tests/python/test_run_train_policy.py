@@ -5,6 +5,7 @@ find the exported champion, honour `decision.view` (erratum E3), agree between t
 and live front ends, and show the win chance only once self-play wins 5% of runs (E7).
 """
 
+import dataclasses
 import json
 import os
 import subprocess
@@ -41,10 +42,12 @@ from rl.run_train import (  # noqa: E402
     features,
     models,
     policy,
+    runner,
     selfplay,
     shards,
     train,
 )
+from rl.run_train.engine import CombatBudget  # noqa: E402
 from rl.run_train.features import CardRef, Decision, Option  # noqa: E402
 
 A9 = 9
@@ -167,7 +170,11 @@ class ScoreOptionsTests(unittest.TestCase):
     def test_w_moves_values_only_through_the_boss_kill_chance(self):
         view = make_view()
         at_26 = policy.score_options(REWARD, view, self.model)
-        at_18 = policy.score_options(REWARD, view, policy.load(self.champion, w=18.0))
+        at_18 = policy.score_options(
+            REWARD,
+            view,
+            dataclasses.replace(self.model, W=18.0),
+        )
         low = {s.option: s for s in at_18}
         for score in at_26:
             other = low[score.option]
@@ -183,7 +190,12 @@ class ScoreOptionsTests(unittest.TestCase):
 
         class Comparing:
             def __init__(self) -> None:
-                self.inner = policy.LookaheadPolicy(ScoreOptionsTests.npz, 0.0, eps=0.0)
+                self.inner = policy.LookaheadPolicy(
+                    ScoreOptionsTests.npz,
+                    0.0,
+                    eps=0.0,
+                    W=26.0,
+                )
 
             def describe(self) -> dict:
                 return self.inner.describe()
@@ -201,6 +213,10 @@ class ScoreOptionsTests(unittest.TestCase):
                     values = [s.value for s in scores if s.value is not None]
                     assert values == sorted(values, reverse=True), scores
                 assert len(engine) == len(decision.options)
+                # The same options, in the same order: the coach ranks what self-play
+                # ranks.
+                engine_order = [s.option for s in engine]
+                assert [s.option for s in live] == engine_order, (engine, live)
                 both = {s.option: s for s in live if s.scorable}
                 for score in engine:
                     twin = both.get(score.option)
@@ -252,7 +268,8 @@ class WinChanceGateTests(unittest.TestCase):
 
     def test_no_recorded_rate_shows_no_win_chance(self):
         self.assertTrue(all(s.p_boss is None for s in self.scores("none")))
-        bare = policy.score_options(REWARD, make_view(), self.npz)
+        unexported = policy.Model(models.load_numpy(self.npz), W=26.0)
+        bare = policy.score_options(REWARD, make_view(), unexported)
         self.assertTrue(all(s.p_boss is None for s in bare))
 
 
@@ -312,7 +329,7 @@ class ChampionTests(unittest.TestCase):
         # `run_train.policy` imported lazily, then `score_options(d, d.view or view)` with
         # the champion under ~/Documents/git/spire-coach/data/models/strategy.
         home = self.dir / "home"
-        export(
+        champion = export(
             home / "Documents" / "git" / "spire-coach" / "data" / "models" / "strategy",
             self.first,
             selfplay_boss_kill_rate=0.07,
@@ -349,7 +366,7 @@ print(json.dumps({
         self.assertEqual(done.returncode, 0, done.stderr)
         answer = json.loads(done.stdout)
         self.assertFalse(answer["torch"])
-        expected = policy.score_options(REWARD, view, policy.load(self.first))
+        expected = policy.score_options(REWARD, view, champion)
         self.assertEqual(len(answer["scored"]), len(expected))
         for (kind, value, p_boss), score in zip(
             answer["scored"],
@@ -377,7 +394,7 @@ class LookaheadPolicyTests(unittest.TestCase):
         return np.array([by_hand(nets, view, o, 26.0)[0] for o in REWARD.options])
 
     def test_argmax_takes_the_best_option_and_draws_nothing(self):
-        player = policy.LookaheadPolicy(self.npz, 0.0, eps=0.0)
+        player = policy.LookaheadPolicy(self.npz, 0.0, eps=0.0, W=26.0)
         rng = np.random.default_rng(3)
         before = rng.bit_generator.state
         pick = player.pick(make_view(), REWARD, rng)
@@ -408,7 +425,7 @@ class LookaheadPolicyTests(unittest.TestCase):
         values = self.values()
         soft = np.exp((values - values.max()) / tau)
         pi = (1 - eps) * soft / soft.sum() + eps / len(values)
-        player = policy.LookaheadPolicy(self.npz, tau, eps=eps)
+        player = policy.LookaheadPolicy(self.npz, tau, eps=eps, W=26.0)
         rng = np.random.default_rng(11)
         counts = np.zeros(len(values))
         for _ in range(3000):
@@ -426,7 +443,7 @@ class LookaheadPolicyTests(unittest.TestCase):
                 for i in range(len(view.deck))
             ),
         )
-        player = policy.LookaheadPolicy(self.npz, 0.6)
+        player = policy.LookaheadPolicy(self.npz, 0.6, W=26.0)
         rng = np.random.default_rng(0)
         pick = player.pick(view, enchant, rng)
         expected = selfplay.RulesPolicy().choose(view, enchant, rng)
@@ -447,7 +464,7 @@ class LookaheadPolicyTests(unittest.TestCase):
         # matched nothing live, so only the rules can take it.
         relic = Option("reward.relic", 0, scorable=False)
         leave = Option("reward.proceed", 3)
-        player = policy.LookaheadPolicy(self.npz, 0.0, eps=0.0)
+        player = policy.LookaheadPolicy(self.npz, 0.0, eps=0.0, W=26.0)
         pick = player.pick(view, Decision("rewards", (relic, leave)), None)
         self.assertEqual((pick.index, pick.p_floor), (0, None))
         # When the rules take a scorable option (the potion, the lowest action), the
@@ -474,7 +491,13 @@ class LookaheadPolicyTests(unittest.TestCase):
         assert isinstance(player, policy.LookaheadPolicy)
         self.assertEqual(
             player.describe(),
-            {"kind": "lookahead", "checkpoint": str(self.npz), "tau": 0.4, "eps": 0.05},
+            {
+                "kind": "lookahead",
+                "checkpoint": str(self.npz),
+                "tau": 0.4,
+                "eps": 0.05,
+                "W": 30.0,
+            },
         )
         self.assertEqual(player.W, 30.0)
         argmax = selfplay.make_policy(evaluate.argmax_spec(spec))
@@ -482,6 +505,13 @@ class LookaheadPolicyTests(unittest.TestCase):
         self.assertEqual((argmax.tau, argmax.eps), (0.0, 0.0))
         with self.assertRaisesRegex(ValueError, "unknown policy kind"):
             selfplay.make_policy({"kind": "oracle"})
+
+    def test_a_lookahead_spec_names_its_w(self):
+        # One source of truth for W: the job's config, which the runner writes into the
+        # spec; a spec never falls back on a default.
+        spec = {"kind": "lookahead", "npz": str(self.npz), "tau": 0.4, "eps": 0.05}
+        with self.assertRaisesRegex(ValueError, "W"):
+            selfplay.make_policy(spec)
 
     def test_the_temperature_schedule(self):
         # tau_g = max(0.10, 0.60 * 0.85^g) (5.5).
@@ -492,7 +522,7 @@ class LookaheadPolicyTests(unittest.TestCase):
         self.assertEqual(policy.temperature(40), 0.10)
 
     def test_a_self_play_run_records_what_training_bootstraps_from(self):
-        player = policy.LookaheadPolicy(self.npz, 0.6, eps=0.02)
+        player = policy.LookaheadPolicy(self.npz, 0.6, eps=0.02, W=26.0)
         record = selfplay.play_run("LOOKAHD1", player, 3, A9, generation=2)
         VALIDATOR.validate(record)
         self.assertEqual(record["policy"]["kind"], "lookahead")
@@ -510,6 +540,94 @@ class LookaheadPolicyTests(unittest.TestCase):
         final = models.floor_class(record["outcome"]["final_floor"])
         self.assertEqual(targets[last][final], 1.0)
         self.assertTrue(any(t[final] < 1.0 for i, t in targets.items() if i != last))
+
+
+class OneWTests(unittest.TestCase):
+    """W, the value of a boss kill (5.2), comes from one place and is recorded where used.
+
+    A job's config names it; the runner writes it into every lookahead spec it hands out;
+    the policy plays with it and records it in the run's policy block; `EvalMeta` records
+    the same number. An exported model carries its own in model.json.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.dir = Path(cls.tmp.name)
+        cls.npz = save_checkpoint(cls.dir)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.tmp.cleanup()
+
+    def test_the_record_carries_the_w_the_policy_played_with(self):
+        player = policy.LookaheadPolicy(self.npz, 0.5, eps=0.02, W=30.0)
+        record = selfplay.play_run("ONEW0001", player, 3, A9)
+        VALIDATOR.validate(record)
+        self.assertEqual(record["policy"]["W"], 30.0)
+        scored = [d for d in record["decisions"] if d["p_floor"] is not None]
+        self.assertGreater(len(scored), 3)
+        for entry in scored:
+            self.assertAlmostEqual(
+                float(models.expected_floors(np.array(entry["p_floor"]), 30.0)),
+                entry["values"][entry["chosen"]],
+                places=4,
+            )
+
+    def test_a_folder_gives_its_w_and_a_bare_checkpoint_needs_one(self):
+        champion = export(self.dir / "w40", self.npz, W=40.0)
+        self.assertEqual(policy.LookaheadPolicy(champion, 0.5).W, 40.0)
+        self.assertEqual(policy.LookaheadPolicy(champion, 0.5, W=40.0).W, 40.0)
+        with self.assertRaisesRegex(ValueError, "W=26.0 .* W=40.0"):
+            policy.LookaheadPolicy(champion, 0.5, W=26.0)
+        with self.assertRaisesRegex(ValueError, "W"):
+            policy.LookaheadPolicy(self.npz, 0.5)
+        self.assertEqual(policy.LookaheadPolicy(self.npz, 0.5, W=26.0).W, 26.0)
+        # An export always says what a boss kill is worth, and a bare checkpoint never
+        # does, so neither is scored with a default.
+        silent = self.dir / "silent"
+        silent.mkdir()
+        (silent / "model.npz").write_bytes(self.npz.read_bytes())
+        (silent / "model.json").write_text('{"generation": 1}', encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "names no W"):
+            policy.load(silent)
+        with self.assertRaisesRegex(ValueError, "W"):
+            policy.score_options(REWARD, make_view(), self.npz)
+
+    def test_evaluation_and_self_play_play_with_the_configs_w(self):
+        spec = {"kind": "lookahead", "npz": str(self.npz), "tau": 0.5, "eps": 0.02}
+        config = runner.JobConfig(
+            workers=1,
+            combat_budget=CombatBudget(2, 2),
+            ascension=A9,
+            W=30.0,
+        )
+        played: list[float] = []
+        scored = evaluate._seed_result
+
+        def spy(record: dict, w: float) -> evaluate.SeedResult:
+            played.append(record["policy"]["W"])
+            return scored(record, w)
+
+        with mock.patch.object(evaluate, "_seed_result", spy):
+            result = evaluate.evaluate(spec, ["ONEW0002", "ONEW0003"], config)
+        self.assertEqual(result.meta.W, 30.0)
+        self.assertEqual(played, [30.0, 30.0])
+        # A spec naming another W than the job's is refused before any seed is played.
+        with self.assertRaisesRegex(ValueError, "W=18.0 .* W=30.0"):
+            evaluate.evaluate({**spec, "W": 18.0}, ["ONEW0002"], config)
+        generation = self.dir / "gen_0003"
+        paths = runner.generate(1, 1, spec, generation, config=config)
+        manifest = json.loads(
+            (generation / "manifest.json").read_text(encoding="utf-8"),
+        )
+        self.assertEqual(manifest["policy"]["W"], 30.0)
+        self.assertEqual(shards.read_shard(paths[0])[0]["policy"]["W"], 30.0)
+        # The rules policy values nothing and gets no W.
+        self.assertEqual(
+            runner.playing_spec({"kind": "rules"}, config),
+            {"kind": "rules"},
+        )
 
 
 if __name__ == "__main__":

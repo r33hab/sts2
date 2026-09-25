@@ -741,9 +741,11 @@ travel is ignored. Exact integer arithmetic, deterministic.
 `fight_queries(view) -> list[FightQuery]` lists the (view, encounter id, weak flag, pool
 label) rows to evaluate. The pools are the region's weak, normal and elite lists
 (`RunConstants.cs` Overgrowth/Underdocks `*Encounters`: 4/12/3 and 4/10/3 ids), plus the
-known boss. `fight_block(outcomes) -> np.ndarray[8]` takes the uniform mean of E[HP lost]
-and P(death) over each pool. Both functions live in `features.py`, so the layout has one
-owner. `policy.py` runs `FightNet` on the queries. FightNet reads encoded blocks (A, D, E,
+known boss. `fight_blocks(queries, losses, deaths) -> np.ndarray[rows, 8]` takes the
+uniform mean of E[HP lost] and P(death) over each pool, for a batch of states, and
+`fight_block(outcomes) -> np.ndarray[8]` is its one-state form. They live in
+`features.py`, so the layout has one owner and one implementation. `policy.py` runs
+`FightNet` on the queries, and training computes H through the same call. FightNet reads encoded blocks (A, D, E,
 F and G, 5.1), so it is defined for any encoded afterstate, including the fractional
 transform EV (section 4). Training fits FightNet first and then computes H for every V
 row with it (5.3), so V never sees an empty H block. Generation 0 is played by the rules
@@ -1500,9 +1502,12 @@ numpy FightNet the policy runs (`NumpyFightNet.summary`), so train and serve agr
 - **Final floor**: the floor the run ended on (1-17), or class 18 if the Act 1 boss died.
   V's floor head is a distribution `p_1 .. p_18` over these.
 - **The value.** `V_W = sum_{k=1..17} k * p_k + W * p_18`, in expected-floor units, with
-  **W = 26**. W is a policy and export parameter: it is written to `model.json`, and the
-  coach and the loop read it from there. `V_W` is what the policy maximizes and what the
-  coach shows, as differences from the best option.
+  **W = 26**. W is a policy and export parameter with one source. A job's config names
+  it; the runner writes it into every lookahead spec (`runner.playing_spec`; a spec never
+  falls back on a default, and one naming another W is refused); the policy records it in
+  the run's policy block; `EvalMeta` records the same number; and the export writes it to
+  `model.json`, which must carry it and from which the coach reads it. `V_W` is what the
+  policy maximizes and what the coach shows, as differences from the best option.
 - **Why W = 26.** A death at the boss ends the run, and a kill does not. The spec's
   currency is the expected final floor of the whole run, so W is the floor a run that
   clears Act 1 can be expected to reach. The floor counter continues across acts
@@ -1546,9 +1551,11 @@ numpy FightNet the policy runs (`NumpyFightNet.summary`), so train and serve agr
   head.
 - FightNet: cross-entropy against the one-hot class.
 - AdamW, lr 1e-3, weight decay 1e-4, batch 1024, cosine schedule, at most 30 epochs,
-  early stopping with patience 3 on validation loss. Validation is 10% of **runs**
-  (FightNet: 10% of fights), split by run id, never by decision: decisions within a run
-  share an outcome (FINDINGS: "split by FIGHT, not by position").
+  early stopping with patience 3 on validation loss. Validation is 10% of **runs**,
+  split by run seed, never by decision: decisions within a run share an outcome
+  (FINDINGS: "split by FIGHT, not by position"). FightNet holds out the fights of the
+  same runs, so V's held-out runs never get an H from a FightNet that trained on their
+  own fights.
 - `torch.manual_seed(generation)`. Warm start from the previous learner. The fight
   network is trained first; then V's H block is computed with the new fight network for
   every training row.
@@ -1568,7 +1575,8 @@ numpy FightNet the policy runs (`NumpyFightNet.summary`), so train and serve agr
   are always rebuilt from views. A `FEATURE_VERSION` change nonetheless starts a new data
   era (erratum E6), like a budget or ascension change: both buffers keep only records at
   the current budget, ascension and version (`train.load_buffers`), and never a
-  truncated run.
+  truncated run. A shard holding a run of an eval or final-test seed (5.6) is refused
+  outright: that is a leak, whatever its era.
 
 ### 5.5 Exploration
 
@@ -1673,11 +1681,11 @@ final_test.json            the last final-test report
 ```
 
 RunRecord (one JSON line): schema, feature_version, seed, generation, policy
-{kind, checkpoint, tau, eps}, combat {budget: "120/500", c, crn_fraction}, ascension,
-outcome {final_floor, boss_killed, died, end_hp, end_max_hp, truncated},
-maps [{region, boss, nodes}], decisions [{i, type, floor, state (RunView without the map),
-options, chosen, values, p_chosen, fallback, p_floor}], fights [{floor, node_type,
-encounter, weak, sims, state, hp_before, hp_after, won, decisions, seconds}],
+{kind, checkpoint, tau, eps, W (lookahead only)}, combat {budget: "120/500", c,
+crn_fraction}, ascension, outcome {final_floor, boss_killed, died, end_hp, end_max_hp,
+truncated}, maps [{region, boss, nodes}], decisions [{i, type, floor, state (RunView
+without the map), options, chosen, values, p_chosen, fallback, p_floor}], fights [{floor,
+node_type, encounter, weak, sims, state, hp_before, hp_after, won, decisions, seconds}],
 stats {unknown_decisions, forced_skips, potion_left_full_belt, steps, seconds}.
 `shards.RUN_RECORD_SCHEMA` is the exact layout (JSON Schema, Draft 2020-12), and
 `shards.state_view` / `shards.entry_decision` rebuild a state's `RunView` and its
@@ -2106,12 +2114,14 @@ checkpoint files), `rl/run_train/train.py`, `rl/run_train/policy.py`, and tests.
   ascension and `FEATURE_VERSION`), trains FightNet then V (5.3), and writes `out` (the
   `.pt`) and its `.npz` beside it, last. `prev_checkpoint` is the `.pt` to warm-start
   from, or None.
-- `policy.LookaheadPolicy(checkpoint, temperature, eps=0.02, W=26.0)`, `checkpoint`
-  being the `.npz`, with the selfplay policy interface. It samples with the run's
-  `explore_rng`, hands every `scorable=False` option to `RulesPolicy`, and records each
-  option's `V_W` and the chosen afterstate's `p_floor`. `selfplay.make_policy` builds it
-  from `{"kind": "lookahead", "npz", "tau", "eps", "W"}`; `policy.temperature(g)` is
-  5.5's `tau_g`.
+- `policy.LookaheadPolicy(checkpoint, temperature, eps=0.02, W=None)`, `checkpoint`
+  being the `.npz` (or an export's folder), with the selfplay policy interface. It
+  samples with the run's `explore_rng`, hands every `scorable=False` option to
+  `RulesPolicy`, and records each option's `V_W`, the chosen afterstate's `p_floor`, and
+  its W in the policy block. W is the job config's, which `selfplay.make_policy` takes
+  from `{"kind": "lookahead", "npz", "tau", "eps", "W"}`; a folder supplies its
+  model.json's instead, and a bare `.npz` without W is refused. `policy.temperature(g)`
+  is 5.5's `tau_g`.
 - `policy.score_options(decision, view, model=None) -> list[OptionScore]` with
   `OptionScore(option, value, p_boss, scorable)`: `V_W` and `p_18` per scorable option
   (None for the others, and `p_boss` None below E7's gate), best first. It reads

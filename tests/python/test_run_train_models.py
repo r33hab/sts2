@@ -333,22 +333,8 @@ class FightOutcomeTests(unittest.TestCase):
         self.assertEqual(models.LOSS_CENTRES[2], 2.5)
         self.assertEqual(models.LOSS_CENTRES[20], 74.5)
 
-    def test_the_summary_is_the_fight_blocks_layout(self):
-        # features.fight_block owns H's layout (3.3); the batched summary must match it.
-        view = make_view()
-        queries = features.fight_queries(view)
-        rng = np.random.default_rng(1)
-        losses = rng.uniform(0, 60, (3, len(queries)))
-        deaths = rng.uniform(0, 1, (3, len(queries)))
-        got = models.fight_summary(losses, deaths, queries)
-        self.assertEqual(got.shape, (3, features.FIGHT_BLOCK_SIZE))
-        for i in range(3):
-            expected = features.fight_block(
-                (q, losses[i, j], deaths[i, j]) for j, q in enumerate(queries)
-            )
-            np.testing.assert_allclose(got[i], expected, rtol=0, atol=1e-6)
-
     def test_the_summary_of_a_net_is_its_query_outcomes(self):
+        # H's layout is `features.fight_blocks` (3.3); the net only supplies the outcomes.
         _, numpy_net = fight_pair()
         rows = bases()
         queries = features.fight_queries(make_view())
@@ -365,7 +351,7 @@ class FightOutcomeTests(unittest.TestCase):
         self.assertEqual(summary.shape, (len(rows), features.FIGHT_BLOCK_SIZE))
         np.testing.assert_allclose(
             summary,
-            models.fight_summary(losses, probs[..., 0], queries),
+            features.fight_blocks(queries, losses, probs[..., 0]),
             rtol=0,
             atol=1e-6,
         )

@@ -14,11 +14,17 @@ torch.
 
 `LookaheadPolicy` is the learned self-play policy: it picks by the same values, with the
 softmax-and-epsilon exploration of 5.5, and hands every unscorable option to the rules.
+
+**W has one source.** A job's config names the value of a boss kill; the runner writes it
+into every lookahead spec (`runner.playing_spec`), the policy records it in the run's
+policy block, and `EvalMeta` records the same number. An exported model carries its own in
+`model.json`. Nothing here falls back on a default.
 """
 
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -38,7 +44,6 @@ if TYPE_CHECKING:
 __all__ = [
     "STRATEGY_MODEL_DIR",
     "WIN_CHANCE_SELFPLAY_RATE",
-    "W_DEFAULT",
     "LookaheadPolicy",
     "Model",
     "OptionScore",
@@ -48,8 +53,6 @@ __all__ = [
     "temperature",
 ]
 
-# The value of a boss kill, in floors (5.2). An exported model.json carries its own.
-W_DEFAULT = 26.0
 # Erratum E7 (spec 8.1): the win chance is shown once self-play wins at least 5% of runs,
 # read from the recorded self-play boss-kill rate, never the eval rate.
 WIN_CHANCE_SELFPLAY_RATE = 0.05
@@ -77,29 +80,43 @@ class OptionScore:
 
 @dataclass(frozen=True)
 class Model:
-    """A strategy model loaded for scoring: its nets, W, and whether its win chance shows."""
+    """A strategy model loaded for scoring: its nets, W, and whether its win chance shows.
+
+    `W` is None for a bare checkpoint, which does not say what a boss kill is worth.
+    """
 
     nets: models.NumpyNets
-    W: float = W_DEFAULT
+    W: float | None = None
     win_chance: bool = False
     info: dict[str, Any] = field(default_factory=dict)  # an export's model.json
 
 
-def load(source: str | Path, w: float | None = None) -> Model:
+def load(source: str | Path) -> Model:
     """Load a strategy model: an exported champion's folder, or a checkpoint's `.npz`.
 
     A folder holds `model.json` and its weights: the `.npz` that model.json names under
-    `npz`, or else the folder's only `.npz`. model.json gives W (default 26) and
+    `npz`, or else the folder's only `.npz`. model.json gives W and
     `selfplay_boss_kill_rate`, the recorded self-play boss-kill rate that opens the win
-    chance at 5% (erratum E7). A bare `.npz` takes W = 26 and shows no win chance. `w`
-    overrides W. A folder without model.json raises `FileNotFoundError`.
+    chance at 5% (erratum E7). A bare `.npz` has no W and shows no win chance. A folder
+    without model.json raises `FileNotFoundError`.
+
+    Raises:
+        ValueError: If model.json names no W: an export always says what a boss kill is
+            worth (DESIGN.md 5.2), and no default stands in for it.
+
     """
     path = Path(source).expanduser()
     info: dict[str, Any] = {}
     npz = path
+    w: float | None = None
     if path.is_dir():
         info = json.loads((path / MODEL_JSON).read_text(encoding="utf-8"))
         npz = _weights(path, info)
+        if not isinstance(info.get("W"), int | float):
+            raise ValueError(
+                f"{path / MODEL_JSON} names no W, the value of a boss kill (DESIGN.md 5.2)",
+            )
+        w = float(info["W"])
     stat = npz.stat()
     nets = _nets(
         str(npz.resolve()),
@@ -110,7 +127,7 @@ def load(source: str | Path, w: float | None = None) -> Model:
     rate = info.get("selfplay_boss_kill_rate")
     return Model(
         nets,
-        W=float(w if w is not None else info.get("W", W_DEFAULT)),
+        W=w,
         win_chance=isinstance(rate, int | float) and rate >= WIN_CHANCE_SELFPLAY_RATE,
         info=info,
     )
@@ -175,9 +192,19 @@ def score_options(
     others, which come last in their screen order. The options index `decision.view or
     view` (erratum E3). `model` is a loaded `Model`, a folder or `.npz` for `load`, or None
     for the champion exported to `STRATEGY_MODEL_DIR`.
+
+    Raises:
+        ValueError: If the model does not say what a boss kill is worth: a bare `.npz`
+            is scored through a `Model` given its W.
+
     """
     view = decision.view or view
     scorer = _model(model)
+    if scorer.W is None:
+        raise ValueError(
+            "this model does not say what a boss kill is worth: score an export (its "
+            "model.json carries W) or a Model given W (DESIGN.md 5.2)",
+        )
     scorable = [option for option in decision.options if option.scorable]
     probs = floor_probs(scorer.nets, view, scorable)
     valued = zip(
@@ -215,6 +242,9 @@ class LookaheadPolicy:
     an unscorable option on a mixed screen, it is taken. The pick records every option's
     `V_W` and the chosen afterstate's floor distribution, which the previous decision's
     training row bootstraps from (5.2).
+
+    `W` is the job config's; a model folder supplies its model.json's instead, and a bare
+    checkpoint needs it given.
     """
 
     def __init__(
@@ -222,25 +252,39 @@ class LookaheadPolicy:
         checkpoint: str | Path,
         temperature: float,
         eps: float = 0.02,
-        W: float = W_DEFAULT,  # noqa: N803 -- DESIGN.md 7's name for the parameter
+        W: float | None = None,  # noqa: N803 -- DESIGN.md 7's name for the parameter
     ):
         if temperature < 0:
             raise ValueError(f"a temperature is never negative, not {temperature}")
         if not 0.0 <= eps <= 1.0:
             raise ValueError(f"eps must be in [0, 1], not {eps}")
+        model = load(checkpoint)
+        if model.W is not None and W is not None and not math.isclose(W, model.W):
+            raise ValueError(
+                f"W={float(W)} disagrees with the W={model.W} in {checkpoint}'s "
+                f"{MODEL_JSON}: W has one source",
+            )
+        worth = W if W is not None else model.W
+        if worth is None:
+            raise ValueError(
+                f"{checkpoint} does not say what a boss kill is worth: pass W, the job "
+                "config's (DESIGN.md 5.2)",
+            )
         self.checkpoint = str(checkpoint)
-        self.nets = load(checkpoint).nets
+        self.nets = model.nets
         self.tau = float(temperature)
         self.eps = float(eps)
-        self.W = float(W)
+        self.W = float(worth)
         self.rules = RulesPolicy()
 
     def describe(self) -> dict[str, Any]:
+        """Return the record's policy block, with the W the options were valued at."""
         return {
             "kind": "lookahead",
             "checkpoint": self.checkpoint,
             "tau": self.tau,
             "eps": self.eps,
+            "W": self.W,
         }
 
     def pick(

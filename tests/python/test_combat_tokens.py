@@ -114,5 +114,71 @@ class SignTests(unittest.TestCase):
         self.assertEqual(magnitudes, [-2 / 20.0])
 
 
+def buff_magnitudes(
+    tokens: combat_tokens.Tokens,
+    token_type: int,
+    buff: str,
+) -> list[tuple[int, float]]:
+    """Return (owner, magnitude) of every token of `token_type` for the buff named."""
+    index = combat_tokens.VOCAB.buff[BUFFS[buff]]
+    return [
+        (
+            int(tokens.owners[i]),
+            round(float(tokens.feats[i][combat_tokens.F_MAGNITUDE]), 6),
+        )
+        for i, kind in enumerate(tokens.types)
+        if kind == token_type and tokens.ids[i] == index
+    ]
+
+
+class StrengthTests(unittest.TestCase):
+    """Strength is buff id 0, the id an empty slot also reads as (`BuffId.Strength`).
+
+    An empty slot is (0, 0); a Strength slot never has magnitude 0, because
+    `BuffSystem.Apply` removes a buff that reaches 0. Skipping every id 0 hid Strength
+    from the combat network, positive and negative, on both sides.
+    """
+
+    def test_the_players_strength_reaches_the_tokens_either_sign(self):
+        self.assertEqual(BUFFS["Strength"], 0)
+        for amount in (3, -2):
+            with self.subTest(amount=amount):
+
+                def strong(doc: dict, amount: int = amount) -> None:
+                    doc["player"]["buffs"] = [
+                        {"id": BUFFS["Strength"], "amount": amount},
+                        {"id": BUFFS["Dexterity"], "amount": 1},
+                    ]
+
+                tokens = giant_tokens(strong)
+                self.assertEqual(
+                    buff_magnitudes(tokens, combat_tokens.TYPE_BUFF, "Strength"),
+                    [(combat_tokens.OWNER_PLAYER, round(amount / 20.0, 6))],
+                )
+                self.assertEqual(
+                    buff_magnitudes(tokens, combat_tokens.TYPE_BUFF, "Dexterity"),
+                    [(combat_tokens.OWNER_PLAYER, 0.05)],
+                )
+
+    def test_an_enemys_strength_reaches_the_tokens(self):
+        def ritualist(doc: dict) -> None:
+            doc["enemies"][0]["buffs"] = [{"id": BUFFS["Strength"], "amount": 4}]
+
+        tokens = giant_tokens(ritualist)
+        self.assertEqual(
+            buff_magnitudes(tokens, combat_tokens.TYPE_ENEMY_BUFF, "Strength"),
+            [(1, 0.2)],  # the giant, in slot 0, is owner 1
+        )
+
+    def test_empty_slots_still_give_no_token(self):
+        tokens = giant_tokens(lambda _doc: None)
+        buffs = [
+            kind
+            for kind in tokens.types
+            if kind in {combat_tokens.TYPE_BUFF, combat_tokens.TYPE_ENEMY_BUFF}
+        ]
+        self.assertEqual(buffs, [])
+
+
 if __name__ == "__main__":
     unittest.main()

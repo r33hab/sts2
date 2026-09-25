@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import multiprocessing
 import os
 import re
@@ -277,6 +278,27 @@ class _SigtermFlag:
 # --------------------------------------------------------------------------------------
 
 
+def playing_spec(policy_spec: dict[str, Any], config: JobConfig) -> dict[str, Any]:
+    """Return the spec a job's workers play: a lookahead spec carries the job's W.
+
+    W, the value of a boss kill (5.2), has one source: the job's config, which `EvalMeta`
+    also records. A lookahead spec gets it here; the rules policy values nothing and gets
+    none.
+
+    Raises:
+        ValueError: If a lookahead spec already names another W.
+
+    """
+    if policy_spec.get("kind") != "lookahead":
+        return policy_spec
+    if "W" in policy_spec and not math.isclose(policy_spec["W"], config.W):
+        raise ValueError(
+            f"the spec's W={float(policy_spec['W'])} disagrees with the job's "
+            f"W={config.W}: W has one source, the job's config (DESIGN.md 5.2)",
+        )
+    return {**policy_spec, "W": config.W}
+
+
 def run_seeds(
     seeds: Sequence[str],
     policy_spec: dict[str, Any],
@@ -293,12 +315,16 @@ def run_seeds(
     `on_quarantine(failure)` after its second failure. `play(task, report_fight)` is the
     per-seed function a worker runs: `selfplay.play_task` unless a test swaps it.
 
+    A lookahead spec is played with the job's W (`playing_spec`), and one naming another
+    W raises `ValueError` before any seed runs.
+
     Raises:
         Stopped: When SIGTERM arrives; the workers are ended first.
         ValueError: If a seed is listed twice, or the run engine cannot play
             `config.ascension` (checked before any seed runs, for the default play).
 
     """
+    policy_spec = playing_spec(policy_spec, config)
     queue = deque(seeds)
     if len(set(queue)) != len(queue):
         raise ValueError("a seed is listed twice")
@@ -522,6 +548,7 @@ def generate(
             )
         generation = int(match.group(1))
     config = replace(config or JobConfig(), workers=workers)
+    policy_spec = playing_spec(policy_spec, config)  # as played, for the manifest
     manifest_path = out_dir / "manifest.json"
     shard_dir = out_dir / "shards"
     if manifest_path.exists():

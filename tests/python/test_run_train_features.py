@@ -777,6 +777,29 @@ class FightBlockTests(unittest.TestCase):
                 5,
             )
 
+    def test_the_batched_block_lays_out_every_row_alike(self):
+        # One layout, one owner: the batch the policy and training compute H with is
+        # `fight_blocks`, and `fight_block` is its one-row form.
+        queries = features.fight_queries(make_view())
+        n = len(queries)
+        losses = np.array([[10.0 * (i + 1) for i in range(n)], [0.0] * n])
+        deaths = np.array([[0.01 * (i + 1) for i in range(n)], [1.0] * n])
+        blocks = features.fight_blocks(queries, losses, deaths)
+        self.assertEqual(blocks.shape, (2, features.FIGHT_BLOCK_SIZE))
+        for row in range(2):
+            np.testing.assert_array_equal(
+                blocks[row],
+                features.fight_block(
+                    zip(queries, losses[row], deaths[row], strict=True),
+                ),
+            )
+        # The second row: nothing lost, certain death, in every pool.
+        np.testing.assert_array_equal(blocks[1], [0.0, 1.0] * 4)
+        with self.assertRaisesRegex(ValueError, "boss pool"):
+            features.fight_blocks(queries[:-1], losses[:, :-1], deaths[:, :-1])
+        with self.assertRaisesRegex(ValueError, "weak pool"):
+            features.fight_block([])
+
 
 class HiddenInformationTests(unittest.TestCase):
     """DESIGN.md 1.1: the feature code reads only what the game shows the player.

@@ -48,7 +48,8 @@ __all__ = [
     "write_shard",
 ]
 
-# Bumped whenever the record's layout changes. 2: decisions carry `p_floor` (Task 3).
+# Bumped whenever the record's layout changes. 2 (Task 3): decisions carry `p_floor`, and
+# a lookahead policy block its `W`.
 SCHEMA_VERSION = 2
 # A floor distribution: final floors 1-17 and the Act 1 boss kill (`models.FLOOR_CLASSES`,
 # which imports this module; a test holds the two equal).
@@ -395,8 +396,12 @@ RUN_RECORD_SCHEMA: dict[str, Any] = {
                 "checkpoint": {"type": ["string", "null"]},
                 "tau": {"type": ["number", "null"]},
                 "eps": {"type": "number", "minimum": 0, "maximum": 1},
+                "W": _NUMBER,
             },
             "additionalProperties": False,
+            # A policy that values options records the W it valued them with (5.2).
+            "if": {"properties": {"kind": {"const": "lookahead"}}},
+            "then": {"required": ["W"]},
         },
         "combat": {
             "type": "object",

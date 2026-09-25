@@ -21,6 +21,7 @@ from test_run_train_shards import synthetic_record  # noqa: E402
 
 from rl.run_train import (  # noqa: E402
     FEATURE_VERSION,
+    evaluate,
     features,
     models,
     selfplay,
@@ -204,8 +205,13 @@ class BufferTests(unittest.TestCase):
 
     @staticmethod
     def hps(data) -> list[int]:
+        return sorted(BufferTests.row_hps(data).tolist())
+
+    @staticmethod
+    def row_hps(data) -> np.ndarray:
+        """Return each row's HP, which names the record it came from."""
         rows = data.bases.take(np.arange(len(data.bases)))
-        return sorted(round(float(h) * 100) for h in rows[:, features.A_OFFSET + 1])
+        return np.rint(rows[:, features.A_OFFSET + 1] * 100).astype(int)
 
     def test_v_keeps_the_last_eight_generations_and_fights_keep_all(self):
         records = [self.record(10 + g, g) for g in range(10)]
@@ -217,6 +223,18 @@ class BufferTests(unittest.TestCase):
         records = [self.record(10 + g, g) for g in (3, 1, 2, 0)]
         fights, _ = self.load(records, generation=3, fight_cap=2)
         self.assertEqual(self.hps(fights), [12, 13])
+
+    def test_a_held_out_seed_is_refused(self):
+        # The eval and final-test seeds are never trained on (DESIGN.md 5.6); a shard
+        # holding one is a leak, whatever its era, and the seed is read as the game folds
+        # it (`sts2_gym.seeds.canonicalize`).
+        for path in (evaluate.EVAL_SEEDS, evaluate.TEST_SEEDS):
+            seed = evaluate.load_seeds(path)[7]
+            for changes in ({}, {"ascension": 8}):
+                with self.subTest(file=path.name, **changes):
+                    leak = self.record(21, 0, seed=seed.lower(), **changes)
+                    with self.assertRaisesRegex(ValueError, f"{seed}.*{path.name}"):
+                        self.load([self.record(20, 0), leak], generation=0)
 
     def test_the_cap_keeps_a_runs_latest_fights(self):
         run = self.record(30, 5)
@@ -246,15 +264,35 @@ class BufferTests(unittest.TestCase):
         self.assertEqual(self.hps(fights), [20])
         self.assertEqual(self.hps(values), [20])
 
-    def test_validation_is_a_tenth_of_runs_and_a_tenth_of_fights(self):
+    def test_validation_holds_out_a_tenth_of_runs_whole(self):
+        # DESIGN.md 5.3: split by run, never by decision. FightNet holds out the fights of
+        # the same runs, so V's held-out runs never get an H from a FightNet that trained
+        # on their own fights.
         records = [
             self.record(10 + i % 50, 0, seed=f"T0000R{i:04d}") for i in range(200)
         ]
-        fights, values = self.load(records, generation=0)
-        # Split by run: every row of a run lands on one side (DESIGN.md 5.3).
+        # Runs of four decisions and three fights each, told apart by HP 60-99.
+        long_runs = []
+        for hp in range(60, 100):
+            run = self.record(hp, 0, seed=f"T0000R{hp + 1000:04d}")
+            run["decisions"] = [entry(TAKE, i % 2, hp=hp) for i in range(4)]
+            run["fights"] = [dict(run["fights"][0]) for _ in range(3)]
+            long_runs.append(run)
+        fights, values = self.load(records + long_runs, generation=0)
         self.assertTrue(0.04 < values.validation.mean() < 0.18)
         self.assertTrue(0.04 < fights.validation.mean() < 0.18)
-        again, _ = self.load(records, generation=0)
+        value_hps, fight_hps = self.row_hps(values), self.row_hps(fights)
+        sides = set()
+        for hp in range(60, 100):
+            with self.subTest(hp=hp):
+                side = values.validation[value_hps == hp]
+                self.assertEqual(len(side), 4)
+                self.assertEqual(len(set(side.tolist())), 1)
+                fought = fights.validation[fight_hps == hp]
+                self.assertEqual(fought.tolist(), [bool(side[0])] * 3)
+                sides.add(bool(side[0]))
+        self.assertEqual(sides, {True, False})
+        again, _ = self.load(records + long_runs, generation=0)
         np.testing.assert_array_equal(again.validation, fights.validation)
 
 

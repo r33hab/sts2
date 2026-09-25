@@ -181,6 +181,22 @@ class SchemaTests(unittest.TestCase):
         bad_kind["decisions"][0]["options"][0]["kind"] = "card.steal"
         self.assertFalse(validator.is_valid(bad_kind))
 
+    def test_a_lookahead_policy_block_names_its_w(self):
+        # The W the policy valued options with (5.2); the rules policy values none.
+        validator = jsonschema.Draft202012Validator(shards.RUN_RECORD_SCHEMA)
+        lookahead = {
+            "kind": "lookahead",
+            "checkpoint": "gen_0003/learner.npz",
+            "tau": 0.36,
+            "eps": 0.02,
+            "W": 26.0,
+        }
+        record = synthetic_record(policy=lookahead)
+        validator.validate(record)
+        del record["policy"]["W"]
+        self.assertFalse(validator.is_valid(record))
+        validator.validate(synthetic_record())
+
     def test_a_decision_carries_null_or_a_whole_floor_distribution(self):
         # The generating network's distribution for the chosen afterstate (5.2).
         validator = jsonschema.Draft202012Validator(shards.RUN_RECORD_SCHEMA)

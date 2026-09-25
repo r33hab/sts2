@@ -438,10 +438,14 @@ def encode(handle: int, obs, encounter_id: int) -> Tokens:
             F_MAGNITUDE=counter / 20.0,
         )
 
+    # An empty buff slot reads (0, 0). Id 0 alone is not empty: it is Strength
+    # (`BuffId.Strength`), whose magnitude is never 0 in the list, because
+    # `BuffSystem.Apply` removes a buff that reaches 0. Skipping every id 0 hid Strength,
+    # positive and negative, from the network.
     for slot in range(MAX_PLAYER_BUFFS):
         base = PLAYER_BUFF_OFFSET + slot * 2
         buff_id, magnitude = obs[base], obs[base + 1]
-        if buff_id == 0:
+        if buff_id == 0 and magnitude == 0:
             continue
         push(
             TYPE_BUFF,
@@ -492,7 +496,7 @@ def encode(handle: int, obs, encounter_id: int) -> Tokens:
             )
         for buff_slot in range(MAX_ENEMY_BUFFS):
             b = base + 5 + buff_slot * 2
-            if obs[b] == 0:
+            if obs[b] == 0 and obs[b + 1] == 0:  # empty; id 0 is Strength (above)
                 continue
             push(
                 TYPE_ENEMY_BUFF,

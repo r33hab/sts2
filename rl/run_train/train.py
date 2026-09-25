@@ -28,6 +28,7 @@ import math
 import operator
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass
+from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -35,8 +36,11 @@ import numpy as np
 import torch
 from torch.nn import functional
 
+from sts2_gym.seeds import canonicalize
+
 from . import FEATURE_VERSION, features, models
 from .engine import CombatBudget
+from .evaluate import EVAL_SEEDS, TEST_SEEDS, load_seeds
 from .shards import RunRecord, entry_decision, read_shard, state_view
 
 if TYPE_CHECKING:
@@ -72,7 +76,7 @@ class TrainConfig:
     batch: int = 1024
     epochs: int = 30
     patience: int = 3  # epochs without a better validation loss before stopping
-    validation: float = 0.1  # of runs for V, of fights for FightNet
+    validation: float = 0.1  # of runs, held out whole: their decisions and fights
     threads: int = 2
 
 
@@ -251,7 +255,7 @@ class FightData:
     encounters: np.ndarray  # int64
     weak: np.ndarray  # float32
     labels: np.ndarray  # int64, `models.fight_class`
-    validation: np.ndarray  # bool: the held-out tenth of fights
+    validation: np.ndarray  # bool: the fights of the held-out tenth of runs
 
 
 @dataclass
@@ -316,6 +320,16 @@ def _held_out(hashes: np.ndarray, fraction: float) -> np.ndarray:
     return held
 
 
+@cache
+def _reserved_seeds() -> dict[str, str]:
+    """Return every held-out seed, canonical, and the file that reserves it (5.6)."""
+    return {
+        canonicalize(seed): path.name
+        for path in (EVAL_SEEDS, TEST_SEEDS)
+        for seed in load_seeds(path)
+    }
+
+
 def _in_era(record: RunRecord, budget: str, ascension: int) -> bool:
     """Whether a record was played in the current data era (5.4, 5.7, erratum E6).
 
@@ -342,12 +356,24 @@ def load_buffers(
     before, and never a truncated run (1.4). V keeps the decisions of the last
     `value_generations` generations; FightNet keeps every fight, capped at the newest
     `fight_cap` (newest by generation, then by the order the shards are given in).
+
+    Raises:
+        ValueError: If any record, of any era, is a run of an eval or final-test seed:
+            those are never trained on (5.6), so a shard holding one is a leak.
+
     """
     budget = str(CombatBudget.of(combat_budget))
+    reserved = _reserved_seeds()
     fights: list[_FightChunk] = []
     value = _ValueBuilder()
     for order, path in enumerate(shards):
         for line, record in enumerate(read_shard(Path(path))):
+            seed = canonicalize(record["seed"])
+            if seed in reserved:
+                raise ValueError(
+                    f"{path}: run {record['seed']!r} is seed {seed} of {reserved[seed]}, "
+                    "which is held out of training (DESIGN.md 5.6)",
+                )
             played = record.get("generation")
             if (
                 played is None
@@ -373,7 +399,7 @@ class _FightChunk:
     encounters: np.ndarray
     weak: np.ndarray
     labels: np.ndarray
-    hashes: np.ndarray  # each fight's validation hash
+    hashes: np.ndarray  # each fight's validation hash: its run's
 
     @classmethod
     def of(cls, key: tuple[int, int, int], seed: str, rows: list) -> _FightChunk:
@@ -383,7 +409,8 @@ class _FightChunk:
             np.array([row[1] for row in rows], dtype=np.int64),
             np.array([row[2] for row in rows], dtype=np.float32),
             np.array([row[3] for row in rows], dtype=np.int64),
-            np.array([_unit_hash(f"{seed}#{i}") for i in range(len(rows))]),
+            # By run: the fights of V's held-out runs are FightNet's held-out fights.
+            np.full(len(rows), _unit_hash(seed)),
         )
 
     def last(self, count: int) -> _FightChunk:
@@ -400,7 +427,7 @@ class _FightChunk:
 
 
 def _fight_data(chunks: list[_FightChunk], config: TrainConfig) -> FightData:
-    """Keep the newest `fight_cap` fights, oldest first, and hold out a tenth of them."""
+    """Keep the newest `fight_cap` fights, oldest first; hold out those of held-out runs."""
     kept: list[_FightChunk] = []
     room = config.fight_cap
     for chunk in sorted(chunks, key=operator.attrgetter("key"), reverse=True):
@@ -606,7 +633,8 @@ def fit(
     `out` is the `.pt` checkpoint, and its `.npz` export is written beside it, last.
     `prev_checkpoint` (a `.pt`) is the learner to warm-start from, or None for fresh
     weights. Torch is seeded with the generation and runs on `config.threads` threads,
-    restored afterwards. Returns `out`.
+    restored afterwards. Returns `out`. A shard holding a run of an eval or final-test
+    seed raises `ValueError` (`load_buffers`).
 
     Raises:
         ValueError: If either buffer is empty: no record of this era, generation window and
