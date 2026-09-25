@@ -327,14 +327,6 @@ SOURCES: dict[tuple[str, str], Opens] = {
     ),
 }
 
-# The kinds whose answer moves a card to hand. With the hand full, the game sends that
-# card to the discard pile instead (decompiled CardPileCmd.cs:420-423). The emulator
-# leaves a draw-pile card where it is (CombatEngine.cs:2608-2616), creates no generated
-# card (:2828-2834) and adds a discard card past the cap (:2687-2696).
-TO_HAND_KINDS = frozenset(
-    {"DiscardToHandFree", "DrawPileToHand", "GeneratedCardToHand"},
-)
-
 # What the game still does for a card's play once its selection closes, and the emulator
 # did before it asked (CombatEngine.PlayCard after CardEffects.Apply, CombatEngine.cs:
 # 226-685): a loaded post-play position never does it for this play. Keyed by family:
@@ -554,13 +546,6 @@ def to_pending(
         )
         return None
     warnings.extend(f"pending_selection: {note}" for note in notes)
-    kind = names.card_selection_kinds()[result["kind"]]
-    if kind in TO_HAND_KINDS and len(hand) >= MAX_HAND:
-        warnings.append(
-            f"pending_selection: the {kind} answer sends its card to a hand that holds "
-            f"{MAX_HAND} already, and the game puts it in the discard pile instead "
-            "(decompiled CardPileCmd.cs:420-423), which the emulator does not",
-        )
     return result
 
 
@@ -969,16 +954,13 @@ def land_played_card(
 
 
 def _result_pile(card: Mapping[str, Any], *, corruption: bool) -> str | None:
-    """Pick the pile a played card lands in, as the game does and the emulator mostly does.
+    """Pick the pile a played card lands in, as the game and the emulator do.
 
     The game decides it as the play begins (decompiled CardModel.OnPlayWrapper):
     `GetResultPileTypeForCardPlay` -- no pile for a Power, the exhaust pile for a card
     with the Exhaust keyword -- then Corruption sends a Skill to the exhaust pile. The
     keyword is the card's, less the upgrade that removes it (Card.cs `IsExhaust`), gained
-    from Goopy and lost to Souls Power (CombatEngine.cs:4352-4360, Card.cs:439-450). The
-    emulator also keeps an upgraded Purity out of the exhaust pile
-    (CombatEngine.cs:4320-4331), which the game does not: Purity's upgrade only adds picks
-    (decompiled Purity.OnUpgrade), so it lands as the game has it.
+    from Goopy and lost to Souls Power (CombatEngine.cs:4352-4360, Card.cs:439-450).
     """
     info = names.cards()[card["def_id"]]
     if info.card_type == "Power":
