@@ -286,6 +286,130 @@ public class TurnStartDeathTests
     }
 
     /// <summary>
+    /// The game rolls every move as the turn starts (CombatManager.cs:480-484), before
+    /// Inferno burns in `AfterPlayerTurnStart` (InfernoPower.cs). So when the burn kills a
+    /// Corpse Slug, `RavenousPower.AfterDeath`'s `CreatureCmd.Stun` lands on top of the
+    /// other slugs' rolled moves: each is stunned, and reads as stunned. Answered before the
+    /// roll, the stun was rolled over, and the slugs announced attacks they would not make.
+    /// </summary>
+    [Fact]
+    public void ASlugKilledAtTurnStartLeavesTheOthersStunnedNotRerolled()
+    {
+        var fight = Fight.Encounter(CombatFactory.ActOneEncounter.CorpseSlugs);
+        var slugs = fight.State.Enemies.ToList();
+        Assert.True(slugs.Count >= 2);
+        slugs[0].Hp = 5;
+        foreach (var slug in slugs.Skip(1))
+        {
+            slug.Hp = slug.MaxHp = 50;
+        }
+
+        fight.State.PlayerHp = 999;
+        fight.PlayerBuff(BuffId.Inferno, 6);
+        fight.PlayerBuff(BuffId.InfernoSelfDamage, 1);
+
+        fight.EndTurn();
+
+        Assert.DoesNotContain(slugs[0], fight.State.Enemies);
+        Assert.Equal(slugs.Count - 1, fight.State.Enemies.Count);
+        Assert.All(
+            fight.State.Enemies,
+            slug =>
+            {
+                Assert.Equal(1, BuffSystem.Get(slug.Buffs, BuffId.Stunned));
+                Assert.Equal(IntentType.Unknown, slug.CurrentIntent.Type);
+            }
+        );
+    }
+
+    /// <summary>
+    /// Rolling Boulder hits in `AfterPlayerTurnStart`, after the hand draw, and the kill is
+    /// answered there: Gremlin Horn draws the next card. Mayhem plays the top of the pile
+    /// only in the auto-pre-play phase after that (CombatManager.cs:614-620), so it plays
+    /// the card after the Horn's. It used to play the Horn's card, and the Horn drew the one
+    /// Mayhem should have played.
+    /// </summary>
+    [Fact]
+    public void GremlinHornsTurnStartDrawComesBeforeMayhemsAutoPlay()
+    {
+        var fight = Fight
+            .Hand()
+            .Draw(
+                Card(IC.PommelStrike),
+                Card(IC.PommelStrike),
+                Card(IC.PommelStrike),
+                Card(IC.PommelStrike),
+                Card(IC.PommelStrike),
+                Card(IC.DefendIronclad),
+                Card(IC.StrikeIronclad),
+                Card(IC.Bash)
+            )
+            .Enemy(hp: 5, intent: new Intent(IntentType.Defend, 0))
+            .Enemy(hp: 50, intent: new Intent(IntentType.Defend, 0));
+        fight.State.Relics.Add(new RelicInstance(RelicEffects.GremlinHorn));
+        fight.PlayerBuff(BuffId.RollingBoulderPower, 5);
+        fight.PlayerBuff(BuffId.MayhemPower, 1);
+
+        fight.EndTurn();
+
+        // The five, then the Horn's Defend; Mayhem's Strike hit the survivor after the
+        // Boulder's 5.
+        Assert.Equal(
+            [
+                IC.PommelStrike,
+                IC.PommelStrike,
+                IC.PommelStrike,
+                IC.PommelStrike,
+                IC.PommelStrike,
+                IC.DefendIronclad,
+            ],
+            Fight.Ids(fight.State.Hand)
+        );
+        Assert.Equal([IC.StrikeIronclad], Fight.Ids(fight.State.DiscardPile));
+        Assert.Equal([39], fight.State.Enemies.Select(enemy => enemy.Hp));
+    }
+
+    /// <summary>
+    /// The game rolls every move before the auto-pre-play phase (CombatManager.cs:480-484),
+    /// so a monster Mayhem kills at the turn start has rolled its move by then: `monster_ai`
+    /// draws for it exactly as for one that survives. The roll used to come after Mayhem
+    /// and skip the dead, one draw short. (Sludge Spinner's roll after its opening move is
+    /// one draw over its two-move pool.)
+    /// </summary>
+    [Fact]
+    public void AMonsterMayhemKillsAtTurnStartHasAlreadyRolledItsMove()
+    {
+        static int MonsterAiDraws(int spinnerHp)
+        {
+            var fight = Fight.Encounter(CombatFactory.ActOneEncounter.SludgeSpinner);
+            fight.State.Enemies[0].Hp = spinnerHp;
+            fight.State.PlayerHp = 999;
+            fight.State.Hand = [];
+            fight.State.DiscardPile = [];
+            fight.State.DrawPile =
+            [
+                Card(IC.DefendIronclad),
+                Card(IC.DefendIronclad),
+                Card(IC.DefendIronclad),
+                Card(IC.DefendIronclad),
+                Card(IC.DefendIronclad),
+                Card(IC.StrikeIronclad),
+            ];
+            fight.PlayerBuff(BuffId.MayhemPower, 1);
+            var ai = new CountingRandom(4);
+            fight.State.AiRng = ai;
+
+            fight.EndTurn();
+
+            return ai.CallCount;
+        }
+
+        // At 3 HP Mayhem's Strike kills it, weakened or not; at 60 it survives.
+        Assert.Equal(1, MonsterAiDraws(60));
+        Assert.Equal(1, MonsterAiDraws(3));
+    }
+
+    /// <summary>
     /// The respawn is the subject's own machine and rolls nothing: answering the turn-start
     /// death draws nothing from `MonsterAi`.
     /// </summary>

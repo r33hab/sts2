@@ -127,8 +127,9 @@ public static class CombatEngine
             && BuffSystem.Get(state.PlayerBuffs, BuffId.Feral)
                 > BuffSystem.Get(state.PlayerBuffs, BuffId.FeralUsed);
 
-        // Snapshot HP before effects.
-        int playerHpBefore = state.PlayerHp;
+        // Snapshot HP before effects: by position for the effects' own death check, by
+        // reference for the reward.
+        var beforePlay = new Baseline(state);
         Span<int> enemyHpsBefore = stackalloc int[state.Enemies.Count];
         for (int i = 0; i < state.Enemies.Count; i++)
         {
@@ -689,14 +690,7 @@ public static class CombatEngine
             return EndTurn(state, rng);
         }
 
-        bool playerDead = PlayerIsDead(state);
-        bool allDead = NoPrimaryEnemyLeft(state);
-
-        return new StepResult(
-            Terminal: playerDead || allDead,
-            PlayerWon: allDead && !playerDead,
-            Reward: ComputeReward(state, playerDead, allDead, playerHpBefore, enemyHpsBefore)
-        );
+        return Settle(state, beforePlay);
     }
 
     private static StepResult EndTurn(CombatState state, Random rng)
@@ -719,16 +713,8 @@ public static class CombatEngine
 
         state.EndTurnAwaitingSelection = false;
 
-        // Snapshot HP before enemies act.
-        int playerHpBefore = state.PlayerHp;
-        Span<int> enemyHpsBefore = stackalloc int[state.Enemies.Count];
-        for (int i = 0; i < state.Enemies.Count; i++)
-        {
-            enemyHpsBefore[i] = state.Enemies[i].Hp;
-        }
-
-        // What the turn end and the enemy phase kill is answered against this, by
-        // reference, after the enemy phase.
+        // The step's baseline, by reference: what the turn end and the enemy phase kill is
+        // answered against it after the enemy phase, and the step's reward is read off it.
         var turnEndStart = new Baseline(state);
 
         // ── End of player turn ────────────────────────────────────────────────
@@ -838,7 +824,7 @@ public static class CombatEngine
             return new StepResult(
                 Terminal: true,
                 PlayerWon: true,
-                Reward: ComputeReward(state, false, true, playerHpBefore, enemyHpsBefore)
+                Reward: turnEndStart.Reward(state, playerDead: false, allDead: true)
             );
         }
 
@@ -1299,12 +1285,10 @@ public static class CombatEngine
                 return new StepResult(
                     Terminal: true,
                     PlayerWon: allDeadAfterEnemyTurn && !playerDeadAfterEnemyTurn,
-                    Reward: ComputeReward(
+                    Reward: turnEndStart.Reward(
                         state,
                         playerDeadAfterEnemyTurn,
-                        allDeadAfterEnemyTurn,
-                        playerHpBefore,
-                        enemyHpsBefore
+                        allDeadAfterEnemyTurn
                     )
                 );
             }
@@ -1414,8 +1398,8 @@ public static class CombatEngine
         // ── Start of next player turn ─────────────────────────────────────────
         // The turn start deals damage of its own -- orb passives, relics, Rolling Boulder,
         // Inferno's burn -- and plays cards (Bombardment, Mayhem). The game answers each of
-        // those deaths as it happens; here they are answered against this snapshot, where
-        // the burn lands and once the moves are rolled.
+        // those deaths as it happens; here they are answered against this snapshot, once,
+        // after the moves are rolled and before the auto-pre-play phase.
         var turnStart = new Baseline(state);
         state.Turn++;
         Effects.RelicEffects.TickPaelsLegionCooldown(state);
@@ -1482,7 +1466,7 @@ public static class CombatEngine
                 return new StepResult(
                     Terminal: true,
                     PlayerWon: false,
-                    Reward: ComputeReward(state, true, false, playerHpBefore, enemyHpsBefore)
+                    Reward: turnEndStart.Reward(state, playerDead: true, allDead: false)
                 );
             }
         }
@@ -1680,12 +1664,8 @@ public static class CombatEngine
         int infernoSelfDamage = BuffSystem.Get(state.PlayerBuffs, BuffId.InfernoSelfDamage);
         if (infernoSelfDamage > 0)
         {
+            // The burn's kills are answered with the rest of the turn start's, below.
             Effects.CardEffects.LoseHp(state, infernoSelfDamage);
-            // The burn's kills are answered where it lands, and with them any the turn start
-            // has made so far. Its own snapshot used to be taken just before the burn, so an
-            // earlier kill was swept away by this check with no death hooks at all.
-            AnswerDeathsSince(state, turnStart, rng);
-            turnStart = new Baseline(state);
         }
 
         // Plating decays by 1 at start of player turn.
@@ -1969,27 +1949,28 @@ public static class CombatEngine
             Effects.CardEffects.ApplyPoisonToAllEnemies(state, noxiousFumes, rng);
         }
 
+        // Enemies choose their next intent. The game rolls every move as the turn STARTS
+        // (CombatManager.cs:480-484), ahead of all of the turn start, so the roll comes
+        // before its kills are answered and before the auto-pre-play phase.
+        EnemyAI.ChooseIntents(state.Enemies, state.Turn, rng, state.AiRng, state.AscensionLevel);
+
+        // Every kill the turn start has made, answered once. After the roll, so a death that
+        // sets a move lands on top of the rolled one -- the Test Subject's RESPAWN_MOVE, and
+        // `RavenousPower.AfterDeath`'s `CreatureCmd.Stun`, which the roll used to overwrite
+        // with an attack. Before the auto-pre-play phase (CombatManager.cs:614-620), since
+        // the game's kills here -- Rolling Boulder and Inferno in `AfterPlayerTurnStart`, the
+        // orbs after it -- all come ahead of it: a Gremlin Horn's card is drawn before Mayhem
+        // takes the top of the pile.
+        AnswerDeathsSince(state, turnStart, rng);
+
         // `Bombardment.AfterAutoPrePlayPhaseEnteredEarly` -- EARLY, so ahead of Mayhem's
-        // hook, which is the plain `AfterAutoPrePlayPhaseEntered`.
+        // hook, which is the plain `AfterAutoPrePlayPhaseEntered`. Each card's kills are
+        // answered as it is played.
         AutoPlayBombardmentsFromExhaust(state, rng);
         AutoPlayMayhemCards(state, rng);
-
-        // Enemies choose their next intent.
-        EnemyAI.ChooseIntents(state.Enemies, state.Turn, rng, state.AiRng, state.AscensionLevel);
-        // The rest of the turn start's kills. After the roll, because the game rolls the moves
-        // as the turn STARTS (CombatManager.cs:480-484), so a death that sets one -- the Test
-        // Subject's RESPAWN_MOVE, a Ravenous slug's stun -- lands on top of it.
-        AnswerDeathsSince(state, turnStart, rng);
         Effects.RelicEffects.ApplyAfterPlayerHpChanged(state);
 
-        bool playerDead = PlayerIsDead(state);
-        bool allDead = NoPrimaryEnemyLeft(state);
-
-        return new StepResult(
-            Terminal: playerDead || allDead,
-            PlayerWon: allDead && !playerDead,
-            Reward: ComputeReward(state, playerDead, allDead, playerHpBefore, enemyHpsBefore)
-        );
+        return Settle(state, turnEndStart);
     }
 
     private static StepResult UsePotion(CombatState state, int slot, Random rng)
@@ -1997,13 +1978,6 @@ public static class CombatEngine
         if (slot < 0 || slot >= state.PotionSlots.Length || state.PotionSlots[slot] == 0)
         {
             return StepResult.Invalid;
-        }
-
-        int playerHpBefore = state.PlayerHp;
-        Span<int> enemyHpsBefore = stackalloc int[state.Enemies.Count];
-        for (int i = 0; i < state.Enemies.Count; i++)
-        {
-            enemyHpsBefore[i] = state.Enemies[i].Hp;
         }
 
         var beforeUse = new Baseline(state);
@@ -2026,18 +2000,9 @@ public static class CombatEngine
         // `UsePotionAction` is an ordinary action, so `ActionExecutor` checks the win
         // condition the moment it finishes (ActionExecutor.cs:160-171): a potion that kills
         // the last enemy -- or the player -- ends the fight on this step, not the next.
-        bool playerDead = PlayerIsDead(state);
-        bool allDead = NoPrimaryEnemyLeft(state);
-
-        return new StepResult(
-            Terminal: playerDead || allDead,
-            PlayerWon: allDead && !playerDead,
-            Reward: ComputeReward(state, playerDead, allDead, playerHpBefore, enemyHpsBefore)
-        );
+        return Settle(state, beforeUse);
     }
 
-    // Shaped reward: fraction of enemy HP dealt minus fraction of player HP lost,
-    // plus ±1 terminal bonus for win/death.
     /// <summary>FairyInABottle, looked up by name rather than pinned to an id.</summary>
     private static readonly int FairyInABottlePotionId =
         GeneratedData.Potions.FindId("FairyInABottle")
@@ -2071,35 +2036,6 @@ public static class CombatEngine
         // Thirty percent is under half, so the revive is exactly when Red Skull arms.
         Effects.RelicEffects.ApplyAfterPlayerHpChanged(state);
         return false;
-    }
-
-    private static float ComputeReward(
-        CombatState state,
-        bool playerDead,
-        bool allDead,
-        int playerHpBefore,
-        ReadOnlySpan<int> enemyHpsBefore
-    )
-    {
-        float totalMaxHp = 0f;
-        float dmgDealt = 0f;
-        for (int i = 0; i < state.Enemies.Count; i++)
-        {
-            totalMaxHp += state.Enemies[i].MaxHp;
-            if (i < enemyHpsBefore.Length)
-            {
-                dmgDealt += Math.Max(0, enemyHpsBefore[i] - state.Enemies[i].Hp);
-            }
-        }
-
-        float dmgTaken = Math.Max(0, playerHpBefore - state.PlayerHp);
-
-        float shaped =
-            (totalMaxHp > 0f ? dmgDealt / totalMaxHp : 0f) - dmgTaken / (float)state.PlayerMaxHp;
-
-        float terminal = (allDead && !playerDead) ? 1f : (playerDead ? -1f : 0f);
-
-        return shaped + terminal;
     }
 
     /// <summary>
@@ -2592,18 +2528,12 @@ public static class CombatEngine
     /// Ashes (`AfterCardExhausted`, 3 to every hittable enemy), and a draw that follows one
     /// sets off Speedster. `ActionExecutor` checks the win condition after the action like
     /// any other (ActionExecutor.cs:160-171), so the answer that kills the last enemy is the
-    /// step that ends the fight. An answer that resumed the end of the turn (Well-Laid Plans)
-    /// has settled its own deaths by the time it returns.
+    /// step that ends the fight, and a damaging answer pays the shaped reward as a potion
+    /// does. An answer that resumed the end of the turn (Well-Laid Plans) has settled its
+    /// own deaths by the time it returns; its reward, read from here, covers the same turn.
     /// </remarks>
     private static StepResult AnswerSelection(CombatState state, int action, Random rng)
     {
-        int playerHpBefore = state.PlayerHp;
-        Span<int> enemyHpsBefore = stackalloc int[state.Enemies.Count];
-        for (int i = 0; i < state.Enemies.Count; i++)
-        {
-            enemyHpsBefore[i] = state.Enemies[i].Hp;
-        }
-
         var beforeAnswer = new Baseline(state);
         var result = ResolveCardSelection(state, action, rng);
         if (result.Terminal)
@@ -2612,18 +2542,7 @@ public static class CombatEngine
         }
 
         AnswerDeathsSince(state, beforeAnswer, rng);
-        bool playerDead = PlayerIsDead(state);
-        bool allDead = NoPrimaryEnemyLeft(state);
-        if (!playerDead && !allDead)
-        {
-            return result;
-        }
-
-        return new StepResult(
-            Terminal: true,
-            PlayerWon: allDead && !playerDead,
-            Reward: ComputeReward(state, playerDead, allDead, playerHpBefore, enemyHpsBefore)
-        );
+        return Settle(state, beforeAnswer);
     }
 
     private static StepResult ResolveCardSelection(CombatState state, int action, Random rng)
@@ -3517,9 +3436,9 @@ public static class CombatEngine
     /// <summary>
     /// The combat as a stretch of the engine began, held by reference: the player's HP and
     /// every enemy in the roster with its HP then. A stretch reads what it did against it
-    /// -- which enemies died during it -- however the roster changed meanwhile. A positional
-    /// snapshot misreads a corpse swept by a nested check or a summon inserted, and both
-    /// happen inside one action.
+    /// -- which enemies died during it, and the reward it earned -- however the roster
+    /// changed meanwhile. A positional snapshot misreads a corpse swept by a death check or
+    /// a summon inserted, and both happen inside one action.
     /// </summary>
     private readonly struct Baseline
     {
@@ -3553,6 +3472,58 @@ public static class CombatEngine
 
             return true;
         }
+
+        /// <summary>
+        /// The shaped reward since the baseline: the fraction of the enemies' HP dealt, less
+        /// the fraction of the player's HP lost, plus 1 for a win and -1 for a loss.
+        /// </summary>
+        /// <remarks>
+        /// By reference, so a corpse the stretch swept still counts -- the HP it lost and the
+        /// maximum it had -- exactly as it did while corpses stayed in the roster, and a
+        /// creature that joined adds its maximum. Paired by position, the survivor behind a
+        /// swept corpse was read against the corpse's old HP: a kill paid nothing, and a lone
+        /// kill paid only the win. An enemy's HP counts down to zero and no further.
+        /// </remarks>
+        public float Reward(CombatState state, bool playerDead, bool allDead)
+        {
+            float totalMaxHp = 0f;
+            float dealt = 0f;
+            foreach (var (enemy, hp) in _roster)
+            {
+                totalMaxHp += enemy.MaxHp;
+                dealt += Math.Max(0, hp - Math.Max(0, enemy.Hp));
+            }
+
+            foreach (var enemy in state.Enemies)
+            {
+                if (!Array.Exists(_roster, entry => ReferenceEquals(entry.Enemy, enemy)))
+                {
+                    totalMaxHp += enemy.MaxHp;
+                }
+            }
+
+            float taken = Math.Max(0, PlayerHp - state.PlayerHp);
+            float shaped =
+                (totalMaxHp > 0f ? dealt / totalMaxHp : 0f) - taken / (float)state.PlayerMaxHp;
+            float terminal = allDead && !playerDead ? 1f : (playerDead ? -1f : 0f);
+            return shaped + terminal;
+        }
+    }
+
+    /// <summary>
+    /// The win check `ActionExecutor` makes once an action is done (ActionExecutor.cs:
+    /// 160-171), and the step's result: terminal once the player or the last primary enemy
+    /// is dead, with the shaped reward since <paramref name="baseline" />.
+    /// </summary>
+    private static StepResult Settle(CombatState state, in Baseline baseline)
+    {
+        bool playerDead = PlayerIsDead(state);
+        bool allDead = NoPrimaryEnemyLeft(state);
+        return new StepResult(
+            Terminal: playerDead || allDead,
+            PlayerWon: allDead && !playerDead,
+            Reward: baseline.Reward(state, playerDead, allDead)
+        );
     }
 
     /// <summary>
@@ -4166,7 +4137,10 @@ public static class CombatEngine
             // Leaving it in place while auto-playing it adds a second copy every turn, so
             // the pile grows and next turn plays two.
             RemoveFirstMatchingCard(state.ExhaustPile, card);
+            var beforePlay = new Baseline(state);
             AutoPlay(state, card, rng);
+            // A card play: its kills are answered inside it, before the next one plays.
+            AnswerDeathsSince(state, beforePlay, rng);
         }
     }
 
@@ -4185,7 +4159,10 @@ public static class CombatEngine
         {
             var card = state.DrawPile[0];
             state.RemoveFromDrawPileAt(0);
+            var beforePlay = new Baseline(state);
             AutoPlay(state, card, rng);
+            // A card play: its kills are answered inside it, before the next one plays.
+            AnswerDeathsSince(state, beforePlay, rng);
         }
     }
 
