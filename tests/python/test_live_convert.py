@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import ctypes
 import importlib
 import io
 import json
@@ -50,6 +51,7 @@ native = importlib.import_module("sts2_gym.native")
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "live"
 DECOMPILED = ROOT / "decompiled"
 BUFF = {name: ordinal for ordinal, name in names.buffs().items()}
+INTENT = {name: ordinal for ordinal, name in names.intents().items()}
 
 # Ids read off the generated tables (Cards.g.cs, Relics.g.cs, Potions.g.cs, id_map.json).
 STRIKE, DEFEND, BASH, POMMEL_STRIKE, SHRUG_IT_OFF = 472, 131, 30, 358, 433
@@ -85,6 +87,16 @@ def emu_card(def_id: int, upgraded: bool = False, **extra: Any) -> dict[str, Any
 
 def buff(name: str, amount: int) -> dict[str, int]:
     return {"id": BUFF[name], "amount": amount}
+
+
+def emu_intent(kind: str, magnitude: int, hits: int = 1) -> dict[str, Any]:
+    """Build the emulator's `Intent` (Enemy.cs), every field written."""
+    return {
+        "type": INTENT[kind],
+        "magnitude": magnitude,
+        "hits": hits,
+        "carries_damage": False,
+    }
 
 
 # ── Schema §2, structurally ──────────────────────────────────────────────────
@@ -1816,8 +1828,8 @@ class LoaderLimitTests(Refusals):
 
 LOADER_SOURCE = ROOT / "src" / "Sts2Emulator" / "Interop" / "CombatSnapshot.cs"
 
-# The fields the loader cannot do without (CombatSnapshot.cs:349-358, :380, :414-418,
-# :493-496, :529, :542-543, and the buff, relic and orb readers): each is read with no
+# The fields the loader cannot do without (CombatSnapshot.cs:359-368, :390, :424-428,
+# :522-525, :558, :571-572, and the buff, relic and orb readers): each is read with no
 # default, and a document missing one is refused.
 LOADER_REQUIRED = {
     "combat": {"schema", "ascension", "turn", "player", "enemies"},
@@ -1918,6 +1930,8 @@ class LoaderShapeTests(unittest.TestCase):
                         "selection",
                         "pending_selection",
                     )
+                    for emu in doc["pending_selection"]["candidate_cards"]:
+                        self.assert_fields(emu, "card", "a candidate card")
 
     def test_every_counter_the_converter_can_write_is_one_the_loader_reads(
         self,
@@ -1936,7 +1950,7 @@ class LoaderShapeTests(unittest.TestCase):
 def loadable(live_doc: dict[str, Any]) -> dict[str, Any]:
     """Return the live document, given a lone Nibbit on the round's move if it has no enemy.
 
-    The loader refuses an empty roster (CombatSnapshot.cs:386-389), and the piles fixture,
+    The loader refuses an empty roster (CombatSnapshot.cs:396-399), and the piles fixture,
     which is about the piles, has none.
     """
     if live_doc["enemies"]:
@@ -2021,7 +2035,8 @@ def normalized(
     """Normalize a document per schema section 2.1, so two documents compare as states.
 
     - omitted optional fields take the loader's defaults;
-    - `piles.draw.unordered` is a multiset, so it is sorted;
+    - `piles.draw.unordered` and `pending_selection.candidate_cards` are multisets, so
+      they are sorted;
     - a null `debuffs_at_round_start` becomes its derived value, which only the loader
       computes, so it is taken from `derived`, the exported document.
     """
@@ -2030,6 +2045,9 @@ def normalized(
 
     def cards(pile: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [card_defaults | item for item in pile]
+
+    def multiset(pile: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return sorted(cards(pile), key=lambda item: json.dumps(item, sort_keys=True))
 
     out = defaults["combat"] | out
     out["player"] = defaults["player"] | out["player"]
@@ -2045,10 +2063,7 @@ def normalized(
     piles["draw"] = {
         "known_top": cards(draw["known_top"]),
         "known_bottom": cards(draw["known_bottom"]),
-        "unordered": sorted(
-            cards(draw["unordered"]),
-            key=lambda item: json.dumps(item, sort_keys=True),
-        ),
+        "unordered": multiset(draw["unordered"]),
     }
     for key in ("hand", "discard", "exhaust"):
         piles[key] = cards(piles[key])
@@ -2067,6 +2082,7 @@ def normalized(
     if out.get("pending_selection") is not None:
         pending = defaults["selection"] | out["pending_selection"]
         pending["after_selection_to_hand"] = cards(pending["after_selection_to_hand"])
+        pending["candidate_cards"] = multiset(pending["candidate_cards"])
         out["pending_selection"] = pending
     return out
 
@@ -2134,6 +2150,23 @@ class EndToEndLoadTests(unittest.TestCase):
                     normalized(changed, defaults, exported),
                 )
 
+        # A draw-pile grid's cards are a multiset: their order is not compared, and the
+        # cards themselves are.
+        doc = convert.convert(load("selection/seeker_strike_middle")).doc
+        exported = round_trip(doc, 1)
+        reordered = copy.deepcopy(exported)
+        reordered["pending_selection"]["candidate_cards"].reverse()
+        self.assertEqual(
+            normalized(doc, defaults, exported),
+            normalized(reordered, defaults, exported),
+        )
+        upgraded = copy.deepcopy(exported)
+        upgraded["pending_selection"]["candidate_cards"][0]["upgraded"] = True
+        self.assertNotEqual(
+            normalized(doc, defaults, exported),
+            normalized(upgraded, defaults, exported),
+        )
+
 
 class CliTests(unittest.TestCase):
     """`python -m sts2_gym.live <live.json>` prints the document, then the warnings."""
@@ -2196,6 +2229,56 @@ class CliTests(unittest.TestCase):
         self.assertEqual(json.loads(done.stdout)["schema"], "sts2-emu-snapshot/1")
 
 
+class NativeFreeImportTests(unittest.TestCase):
+    """Converting a document, or naming a buff, never loads the emulator's library.
+
+    `sts2_gym.native` loads it on import, and checks its build is fresh and its API
+    version current, so only what steps a combat should reach for it.
+    """
+
+    @staticmethod
+    def loaded_after(code: str) -> list[str]:
+        """Run `code` in a fresh interpreter; return which native-bound modules it loaded.
+
+        Raises:
+            AssertionError: if the interpreter fails, with its stderr.
+
+        """
+        probe = (
+            f"import json, sys\n{code}\n"
+            "print(json.dumps(sorted(m for m in ('sts2_gym.native', 'sts2_gym.env', "
+            "'sts2_gym.commands') if m in sys.modules)))\n"
+        )
+        env = {
+            **os.environ,
+            "PYTHONPATH": os.pathsep.join((str(ROOT / "src"), str(ROOT / "scripts"))),
+        }
+        done = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+        if done.returncode != 0:
+            raise AssertionError(done.stderr)
+        return json.loads(done.stdout)
+
+    def test_the_converter_and_buff_map_load_no_native_library(self) -> None:
+        self.assertEqual(
+            self.loaded_after("import sts2_gym.live.convert, sts2_gym.live.__main__"),
+            [],
+        )
+        self.assertEqual(self.loaded_after("import buff_map"), [])
+
+    def test_the_package_still_exports_its_names_when_asked(self) -> None:
+        self.assertEqual(self.loaded_after("import sts2_gym"), [])
+        self.assertIn(
+            "sts2_gym.native",
+            self.loaded_after("from sts2_gym import Sts2CombatEnv, game_seed"),
+        )
+
+
 class EnemyWarningTests(unittest.TestCase):
     """What convert says about the enemies it cannot carry exactly."""
 
@@ -2209,10 +2292,9 @@ class EnemyWarningTests(unittest.TestCase):
         self.assertIn("unexpected branch state in log", result.warnings[0])
         self.assertFalse(result.reliable)
 
-    def test_a_waterfall_giant_makes_the_position_unreliable(self) -> None:
-        # The emulator does not play its forced death explosion: SteamEruptionPower.
-        # AfterDeath forces ABOUT_TO_BLOW (decompiled SteamEruptionPower.cs:19), one of the
-        # states WaterfallGiant.cs:200-204 declares.
+    def test_a_waterfall_giant_before_its_death_converts_reliably(self) -> None:
+        # The emulator plays the giant's death now (EnemyAI.cs TriggerAboutToBlow), so a
+        # giant on its ring is an exact position like any other.
         doc = load("enemy")
         doc["enemies"] = [
             {
@@ -2222,7 +2304,7 @@ class EnemyWarningTests(unittest.TestCase):
                 "hp": 250,
                 "max_hp": 250,
                 "block": 0,
-                "powers": [],
+                "powers": [{"id": "STEAM_ERUPTION_POWER", "amount": 15}],
                 "intents": [
                     {"type": "ATTACK", "damage": 15, "base_damage": 15, "hits": 1},
                 ],
@@ -2232,9 +2314,80 @@ class EnemyWarningTests(unittest.TestCase):
             },
         ]
         result = convert.convert(doc)
-        self.assertEqual(len(result.warnings), 1)
-        self.assertIn("Waterfall Giant's death", result.warnings[0])
-        self.assertFalse(result.reliable)
+        self.assertEqual(result.warnings, [])
+        self.assertTrue(result.reliable)
+        giant = result.doc["enemies"][0]
+        self.assertEqual(giant["ai"]["move_index"], 1)
+        self.assertEqual(giant["buffs"], [buff("SteamEruption", 15)])
+
+    def test_a_giant_about_to_blow_converts_reliably_and_loads(self) -> None:
+        # Killed on the player's turn at round 4, SIPHON announced, holding PRESSURIZE's
+        # 15 and STOMP's and RAM's 3 each: TriggerAboutToBlowState revived it at 999999999
+        # and forced ABOUT_TO_BLOW, logging nothing (decompiled WaterfallGiant.cs:301-313,
+        # MonsterMoveStateMachine.cs:46-49). The loaded giant spends the next enemy phase
+        # on ABOUT_TO_BLOW and EXPLODEs for the 21 in the one after, which ends the fight
+        # (EnemyAI.cs TriggerAboutToBlow, PerformAboutToBlow).
+        doc = load("enemy")
+        doc["round"] = 4
+        doc["player"].update(block=0, relics=[])
+        doc["enemies"] = [
+            {
+                "entity_id": "WATERFALL_GIANT_0",
+                "id": "WATERFALL_GIANT",
+                "slot": 0,
+                "hp": 999_999_999,
+                "max_hp": 999_999_999,
+                "block": 0,
+                "powers": [{"id": "STEAM_ERUPTION_POWER", "amount": 21}],
+                "intents": [
+                    {"type": "STUN", "damage": None, "base_damage": None, "hits": None},
+                ],
+                "move_id": "ABOUT_TO_BLOW_MOVE",
+                "state_log": [
+                    "PRESSURIZE_MOVE",
+                    "STOMP_MOVE",
+                    "RAM_MOVE",
+                    "SIPHON_MOVE",
+                ],
+                "ai_fields": {
+                    "_currentPressureGunDamage": 20,
+                    "_steamEruptionDamage": 0,
+                    "_isAboutToBlow": True,
+                    "_pressureBuildupIdx": 3,
+                },
+            },
+        ]
+        result = convert.convert(doc)
+        self.assertEqual(result.warnings, [])
+        self.assertTrue(result.reliable)
+        giant = result.doc["enemies"][0]
+        self.assertEqual((giant["hp"], giant["max_hp"]), (999_999_999, 999_999_999))
+        self.assertEqual(giant["buffs"], [buff("SteamEruption", 21)])
+        self.assertEqual(giant["intent"], emu_intent("Unknown", 0))
+        self.assertEqual(giant["ai"]["move_index"], 1000)
+
+        defaults = loader_defaults()
+        obs = (ctypes.c_int * native.OBS_SIZE)()
+        reward = (ctypes.c_float * 1)()
+        handle = native.load_combat_snapshot(result.doc, 1)
+        try:
+            exported = native.get_state_json(handle)
+            self.assertEqual(
+                normalized(result.doc, defaults, exported),
+                normalized(exported, defaults, exported),
+            )
+            # The hand is empty, so ending the turn is action 0. ABOUT_TO_BLOW deals
+            # nothing and turns the banked Steam into EXPLODE's intent.
+            self.assertFalse(native.step(handle, 0, obs, reward))
+            after = native.get_state_json(handle)
+            self.assertEqual(after["player"]["hp"], 64)
+            self.assertEqual(after["enemies"][0]["intent"], emu_intent("Attack", 21))
+            self.assertEqual(after["enemies"][0]["buffs"], [])
+            self.assertTrue(native.step(handle, 0, obs, reward))
+            self.assertEqual(native.get_state_json(handle)["player"]["hp"], 64 - 21)
+            self.assertTrue(native.player_won(handle))
+        finally:
+            native.destroy(handle)
 
 
 class PoweredHitsTests(unittest.TestCase):

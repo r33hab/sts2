@@ -84,6 +84,17 @@ class CardInfo:
         return self.target == "AnyEnemy"
 
 
+def camel_to_replay_id(name: str) -> str:
+    """Slug a C# class name the way replay traces spell ids: ``SeekerStrike`` -> ``SEEKER_STRIKE``.
+
+    Runs of capitals stay together and a digit is a word of its own, so ``BattleFriendV1``
+    is ``BATTLE_FRIEND_V_1``. Moved here from ``commands``, which still uses it, so that
+    the id readers can have it without loading the native library.
+    """
+    words = re.findall(r"[A-Z]+(?=[A-Z][a-z]|\d|$)|[A-Z]?[a-z]+|\d+", name)
+    return "_".join(word.upper() for word in words)
+
+
 def spaced(name: str) -> str:
     """Split a C# class name into words: ``SeekerStrike`` -> ``Seeker Strike``.
 
@@ -208,6 +219,22 @@ def relics() -> dict[int, str]:
 def potions() -> dict[int, str]:
     return {
         potion_id: _quoted(fields["Name"])
+        for potion_id, fields in _definitions(
+            _GENERATED / "Potions.g.cs",
+            "PotionDef",
+        ).items()
+    }
+
+
+@cache
+def potion_targets() -> dict[int, str]:
+    """`PotionDef.TargetType` by potion id: ``CardTarget.AnyEnemy`` -> ``AnyEnemy``.
+
+    The field `PotionEffects.NeedsEnemyTarget` reads; a potion that leaves it out takes
+    the C# default, ``Self`` (Potion.cs).
+    """
+    return {
+        potion_id: _member(fields, "TargetType", "Self")
         for potion_id, fields in _definitions(
             _GENERATED / "Potions.g.cs",
             "PotionDef",

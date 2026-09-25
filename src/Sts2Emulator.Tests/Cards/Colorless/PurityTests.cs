@@ -77,6 +77,31 @@ public class PurityTests
         Assert.Equal(5, fight.Pending?.Amount);
     }
 
+    /// <summary>
+    /// The upgrade only adds picks: `OnUpgrade` is `Cards.UpgradeValueBy(2m)` and nothing
+    /// else, so both canonical keywords -- Retain and Exhaust -- stand (Purity.cs). An
+    /// upgraded Purity exhausts like the base card; it used to land in the discard pile.
+    /// </summary>
+    [Fact]
+    public void UpgradedStillExhaustsItself()
+    {
+        var fight = Fight
+            .Hand(Card(CL.Purity, upgraded: true), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .Energy(1)
+            .Enemy(hp: 40);
+        fight.Play();
+
+        fight.Choose(0); // the Bash
+        int skip = fight.State.PendingSelection!.Candidates.Count;
+        CombatEngine.Step(fight.State, skip, new Random(0));
+
+        Assert.Null(fight.Pending);
+        Assert.Equal(2, fight.State.ExhaustPile.Count);
+        Assert.Contains(fight.State.ExhaustPile, card => card.DefId == CL.Purity && card.Upgraded);
+        Assert.Contains(fight.State.ExhaustPile, card => card.DefId == IC.Bash);
+        Assert.DoesNotContain(fight.State.DiscardPile, card => card.DefId == CL.Purity);
+    }
+
     [Fact]
     public void AsksNothingWithAnEmptyHand()
     {

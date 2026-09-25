@@ -19,8 +19,12 @@ A selection this cannot carry exactly maps to None, with a warning naming why:
 - a source the table does not know, or a screen other than the one it expects;
 - bounds that contradict the source;
 - a follow-up that depends on the played card's upgrade when the snapshot lacks the card;
-- candidates it cannot index, or cannot tell apart.
+- candidates it cannot find in their pile, or cannot tell apart.
 The emulator's position then has no selection, and the warning makes it unreliable.
+
+A candidate is an index into its pile, except in the draw pile's unordered middle, which
+the loader shuffles: a candidate there is named by card (`candidate_cards`), and the
+loader follows the card it names through its shuffle.
 """
 
 from __future__ import annotations
@@ -34,7 +38,7 @@ from sts2_gym import names
 from sts2_gym.live import cards, ids, powers
 
 # `CardPile.MaxCardsInHand`: the game's hand cap. The snapshot loader refuses a hand past
-# it too (NativeExports.cs:35-36; CombatSnapshot.cs:380-385, :473), which `convert` checks.
+# it too (NativeExports.cs:35-36; CombatSnapshot.cs:390-395, :491), which `convert` checks.
 MAX_HAND = 10
 
 # The "pick any number" bound, `CardSelectorPrefs(prompt, 0, 999999999)` (decompiled
@@ -323,14 +327,6 @@ SOURCES: dict[tuple[str, str], Opens] = {
     ),
 }
 
-# The kinds whose answer moves a card to hand. With the hand full, the game sends that
-# card to the discard pile instead (decompiled CardPileCmd.cs:420-423). The emulator
-# leaves a draw-pile card where it is (CombatEngine.cs:2608-2616), creates no generated
-# card (:2828-2834) and adds a discard card past the cap (:2687-2696).
-TO_HAND_KINDS = frozenset(
-    {"DiscardToHandFree", "DrawPileToHand", "GeneratedCardToHand"},
-)
-
 # What the game still does for a card's play once its selection closes, and the emulator
 # did before it asked (CombatEngine.PlayCard after CardEffects.Apply, CombatEngine.cs:
 # 226-685): a loaded post-play position never does it for this play. Keyed by family:
@@ -494,8 +490,10 @@ TURN_START_LISTENERS = frozenset(
 class Draw:
     """The live draw pile in the emulator's three regions (schema section 2, piles.draw).
 
-    The loader shuffles `middle` with its own seed (CombatSnapshot.cs:471-487), so a card
-    there has no index the converter can know; `top` and `bottom` keep theirs.
+    The loader shuffles `middle` with its own seed (CombatSnapshot.cs `ReadPiles`), so a
+    card there has no index the converter can know: a candidate there is named by card
+    instead, and the loader follows the card it names through its shuffle. `top` and
+    `bottom` keep their indices.
     """
 
     top: Sequence[Mapping[str, Any]] = ()
@@ -525,30 +523,29 @@ def to_pending(
 
     `hand`, `discard`, `exhaust` and `draw` are the live piles, validated, in the order
     the converter hands them to the emulator. A match must be exact:
-    - a HAND or GRID candidate becomes an index into its pile, in ascending order, found
-      by uid, else by its whole face, else by `(id, upgraded)` when that is unambiguous;
+    - a HAND or GRID candidate is found in its pile by uid, else by its whole face, else
+      by `(id, upgraded)` when that is unambiguous, and becomes an index into the pile, in
+      ascending order;
+    - except a draw-pile candidate in the unordered middle, which the loader shuffles: it
+      becomes the draw pile's own card in `candidate_cards` (`_draw_candidates`);
     - a CHOOSE candidate becomes a `generated_candidates` id;
     - the source decides the kind and what the answer does next.
     `selected_uids` are toggles the game has not acted on, so the emulator's screen
     starts with no pick made. Anything that cannot be carried exactly is appended to
-    `warnings` and maps to None. A candidate card id the emulator does not know is
-    refused, as `ConversionError`.
+    `warnings` and maps to None, and a choice the mapping had to guess is appended to
+    `warnings` beside the selection it made. A candidate card id the emulator does not
+    know is refused, as `ConversionError`.
     """
     screen = Screen(live_pending, hand)
-    result = _map(screen, discard, exhaust, draw or Draw())
+    notes: list[str] = []
+    result = _map(screen, discard, exhaust, draw or Draw(), notes)
     if isinstance(result, str):
         warnings.append(
             f"pending_selection: {result}; not converted, so the emulator position has no "
             "selection",
         )
         return None
-    kind = names.card_selection_kinds()[result["kind"]]
-    if kind in TO_HAND_KINDS and len(hand) >= MAX_HAND:
-        warnings.append(
-            f"pending_selection: the {kind} answer sends its card to a hand that holds "
-            f"{MAX_HAND} already, and the game puts it in the discard pile instead "
-            "(decompiled CardPileCmd.cs:420-423), which the emulator does not",
-        )
+    warnings.extend(f"pending_selection: {note}" for note in notes)
     return result
 
 
@@ -557,8 +554,12 @@ def _map(
     discard: Sequence[Mapping[str, Any]],
     exhaust: Sequence[Mapping[str, Any]],
     draw: Draw,
+    notes: list[str],
 ) -> dict[str, Any] | str:
-    """Return the emulator's pending selection, or why this selection cannot become one."""
+    """Return the emulator's pending selection, or why this selection cannot become one.
+
+    A guess a mapped selection rests on is appended to `notes`.
+    """
     live = screen.pending
     who = source(live)
     if who is None:
@@ -590,6 +591,7 @@ def _map(
 
     generated: list[int] = []
     generated_upgraded = False
+    by_card: list[dict[str, Any]] = []
     if opens.screen == "CHOOSE":
         offer = _generated(candidates)
         if isinstance(offer, str):
@@ -597,14 +599,17 @@ def _map(
         generated, generated_upgraded = offer
         indices = list(range(len(candidates)))
     else:
-        found = _candidate_indices(opens, screen, discard, exhaust, draw)
+        guesses: list[str] = []
+        found = _candidate_indices(opens, screen, discard, exhaust, draw, guesses)
         if isinstance(found, str):
             return f"{what}: {found}"
-        indices = found
+        indices, by_card = found
+        notes.extend(f"{what}: {guess}" for guess in guesses)
 
     return {
         "kind": _kind(opens.kind),
         "candidates": indices,
+        "candidate_cards": by_card,
         "source_card_def_id": (
             ids.card_id(who[1]) if opens.source_def_id is None else opens.source_def_id
         ),
@@ -704,29 +709,113 @@ def _candidate_indices(
     discard: Sequence[Mapping[str, Any]],
     exhaust: Sequence[Mapping[str, Any]],
     draw: Draw,
-) -> list[int] | str:
-    """Index a HAND or GRID screen's candidates into the pile the emulator takes them from."""
+    guesses: list[str],
+) -> tuple[list[int], list[dict[str, Any]]] | str:
+    """Place a HAND or GRID screen's candidates in the pile the emulator takes them from.
+
+    Return their indices into it, in pile order, and the draw-pile candidates the loader
+    finds by card (`_draw_candidates`, which appends to `guesses` what it had to guess).
+    """
     candidates = screen.pending["candidates"]
     if opens.screen == "HAND":
-        return _match(candidates, screen.hand, "hand")
-    if opens.pile == "DISCARD":
-        return _match(candidates, discard, "discard pile")
-    if opens.pile == "EXHAUST":
-        return _match(candidates, exhaust, "exhaust pile")
+        found = _match(candidates, screen.hand, "hand")
+    elif opens.pile == "DISCARD":
+        found = _match(candidates, discard, "discard pile")
+    elif opens.pile == "EXHAUST":
+        found = _match(candidates, exhaust, "exhaust pile")
+    else:
+        return _draw_candidates(candidates, draw, guesses)
+    return found if isinstance(found, str) else (sorted(found), [])
 
+
+def _draw_candidates(
+    candidates: Sequence[Mapping[str, Any]],
+    draw: Draw,
+    guesses: list[str],
+) -> tuple[list[int], list[dict[str, Any]]] | str:
+    """Place a draw-pile grid's candidates: by index at the known ends, by card between.
+
+    The loader shuffles the unordered middle with its seed (CombatSnapshot.cs
+    `ReadPiles`), so an index into it would name whatever card the seed put there, and
+    the loader refuses one. A candidate there is named by the draw pile's own copy of it,
+    translated as the pile is. The loader matches it in the document's list and follows
+    that card through its shuffle (`FindInUnorderedMiddle`). Only cards the grid shows are
+    named, in the order the live draw pile lists them, and the loader uses them for
+    nothing but finding the candidates.
+    """
     pile = [*draw.top, *draw.middle, *draw.bottom]
     found = _match(candidates, pile, "draw pile")
     if isinstance(found, str):
         return found
+    guesses.extend(_places_left_open(candidates, pile, found, draw))
     middle = range(len(draw.top), len(draw.top) + len(draw.middle))
-    offered = sum(index in middle for index in found)
-    if 0 < offered < len(middle):
-        return (
-            f"it offers {offered} of the {len(middle)} draw-pile cards whose order the "
-            "player does not know, and the loader shuffles those (CombatSnapshot.cs:"
-            "471-487), so which draw-pile indices they take is unknown until it loads"
+    offered_as = {index: i for i, index in enumerate(found)}
+    return (
+        [index for index in sorted(found) if index not in middle],
+        [
+            cards.to_emu_card(
+                pile[index],
+                path=f"pending_selection.candidates[{offered_as[index]}]",
+                # Said once already: `convert` translates the pile, this card included.
+                warnings=[],
+            )
+            for index in sorted(found)
+            if index in middle
+        ],
+    )
+
+
+# The draw pile's three regions in pile order, as `Draw` holds them.
+_PLACES = ("known top", "unordered middle", "known bottom")
+
+
+def _places_left_open(
+    candidates: Sequence[Mapping[str, Any]],
+    pile: Sequence[Mapping[str, Any]],
+    found: Sequence[int],
+    draw: Draw,
+) -> list[str]:
+    """Name the candidates no uid places whose copies sit in more than one region.
+
+    `_match` gives a candidate that no uid places the first copy of its face in pile
+    order. Within one region, copies with one face are the same card to the emulator: two
+    on the known top leave the same pile whichever goes, and the loader finds one in the
+    middle by card. Across regions they are not: taking a known top copy leaves a middle
+    one behind, taking a middle one leaves the known top one to be drawn next, and the
+    grid does not say which it offers. So when such candidates take only some of the
+    copies they could be, and those copies sit in more than one region, the pile the
+    emulator is given is a guess.
+    """
+    place = [
+        region
+        for region, cards_there in zip(
+            _PLACES,
+            (draw.top, draw.middle, draw.bottom),
+            strict=True,
         )
-    return found
+        for _ in cards_there
+    ]
+    uids = {card["uid"] for card in pile if card["uid"] is not None}
+    pinned = {found[i] for i, card in enumerate(candidates) if card["uid"] in uids}
+    by_face: dict[tuple[Any, ...], list[int]] = {}
+    for i, card in enumerate(candidates):
+        if card["uid"] not in uids:
+            by_face.setdefault(_face(pile[found[i]]), []).append(i)
+    notes = []
+    for face, members in by_face.items():
+        copies = [
+            j for j, held in enumerate(pile) if j not in pinned and _face(held) == face
+        ]
+        regions = [region for region in _PLACES if region in {place[j] for j in copies}]
+        if len(members) < len(copies) and len(regions) > 1:
+            card = candidates[members[0]]
+            notes.append(
+                f"candidate {card['id']} (uid {card['uid']}) matches copies in the "
+                f"{' and the '.join(regions)} of the draw pile, and taking one or another "
+                "leaves a different pile behind; the emulator is given the first in pile "
+                "order",
+            )
+    return notes
 
 
 def _match(
@@ -736,17 +825,18 @@ def _match(
 ) -> list[int] | str:
     """Find each candidate in `pile`, taking each pile card at most once.
 
-    A candidate whose uid the pile carries must be that card. The rest are matched after
-    them, so they never take a card a uid pins down, and only against cards their uid
-    cannot contradict (either side's uid missing):
+    Return each candidate's index into `pile`, in candidate order. A candidate whose uid
+    the pile carries must be that card. The rest are matched after them, so they never
+    take a card a uid pins down, and only against cards their uid cannot contradict
+    (either side's uid missing):
     - first by the whole face (`cards.FACE`), taking the first such card in pile order,
       since cards with one face are the same card to the emulator;
     - else by `(id, upgraded)`, but only when the free cards that match that way all
       share one face, so the choice among them cannot matter.
     """
     uids = {card["uid"] for card in pile if card["uid"] is not None}
-    taken: set[int] = set()
-    for card in candidates:
+    placed: dict[int, int] = {}
+    for position, card in enumerate(candidates):
         if card["uid"] not in uids:
             continue
         index = next(i for i, held in enumerate(pile) if held["uid"] == card["uid"])
@@ -756,23 +846,23 @@ def _match(
                 f"candidate uid {card['uid']} is {held['id']} in the {where}, not "
                 f"{card['id']}"
             )
-        if index in taken:
+        if index in placed.values():
             return f"candidate uid {card['uid']} is offered twice"
-        taken.add(index)
-    for card in candidates:
+        placed[position] = index
+    for position, card in enumerate(candidates):
         if card["uid"] in uids:
             continue
         free = [
             i
             for i, held in enumerate(pile)
-            if i not in taken and (card["uid"] is None or held["uid"] is None)
+            if i not in placed.values() and (card["uid"] is None or held["uid"] is None)
         ]
         same_face = [i for i in free if _face(pile[i]) == _face(card)]
         close = [i for i in free if _id_and_upgrade(pile[i]) == _id_and_upgrade(card)]
         if same_face:
-            taken.add(same_face[0])
+            placed[position] = same_face[0]
         elif close and len({_face(pile[i]) for i in close}) == 1:
-            taken.add(close[0])
+            placed[position] = close[0]
         elif close:
             return (
                 f"candidate {card['id']} (uid {card['uid']}) could be any of "
@@ -781,7 +871,7 @@ def _match(
             )
         else:
             return f"candidate {card['id']} (uid {card['uid']}) is not in the {where}"
-    return sorted(taken)
+    return [placed[position] for position in range(len(candidates))]
 
 
 # ── Finishing the play the emulator's way ────────────────────────────────────
@@ -864,16 +954,13 @@ def land_played_card(
 
 
 def _result_pile(card: Mapping[str, Any], *, corruption: bool) -> str | None:
-    """Pick the pile a played card lands in, as the game does and the emulator mostly does.
+    """Pick the pile a played card lands in, as the game and the emulator do.
 
     The game decides it as the play begins (decompiled CardModel.OnPlayWrapper):
     `GetResultPileTypeForCardPlay` -- no pile for a Power, the exhaust pile for a card
     with the Exhaust keyword -- then Corruption sends a Skill to the exhaust pile. The
     keyword is the card's, less the upgrade that removes it (Card.cs `IsExhaust`), gained
-    from Goopy and lost to Souls Power (CombatEngine.cs:4352-4360, Card.cs:439-450). The
-    emulator also keeps an upgraded Purity out of the exhaust pile
-    (CombatEngine.cs:4320-4331), which the game does not: Purity's upgrade only adds picks
-    (decompiled Purity.OnUpgrade), so it lands as the game has it.
+    from Goopy and lost to Souls Power (CombatEngine.cs:4352-4360, Card.cs:439-450).
     """
     info = names.cards()[card["def_id"]]
     if info.card_type == "Power":

@@ -75,12 +75,14 @@ public class BrandTests
     }
 
     /// <summary>
-    /// Played by Havoc it resolves inside a play that cannot stop for a screen, so the
-    /// emulator still picks for the player there, off the selection stream: one draw, and
-    /// only there. (The game asks the player even then; AGENTS.md "Card Selection".)
+    /// Played by Havoc the game still asks the player: `CardCmd.AutoPlay` pushes no
+    /// selector, and `CardSelectCmd.FromHand` rolls nothing whoever is playing
+    /// (CardSelectCmd.cs:697-736). The emulator cannot stop a nested play for a screen, so
+    /// it takes the first card for the player (AGENTS.md "Card Selection") -- and draws
+    /// nothing, where it used to draw one value the game never draws.
     /// </summary>
     [Fact]
-    public void AnAutoPlayedBrandStillPicksOffTheSelectionStream()
+    public void AnAutoPlayedBrandDrawsNothingFromTheSelectionStream()
     {
         var fight = Fight
             .Hand(Card(IC.Havoc), Card(IC.Bash), Card(IC.StrikeIronclad))
@@ -93,8 +95,9 @@ public class BrandTests
         fight.Play();
 
         Assert.Null(fight.Pending);
-        Assert.Equal(1, selectionRng.CallCount);
-        Assert.Single(fight.State.Hand);
+        Assert.Equal(0, selectionRng.CallCount);
+        Assert.Equal([IC.StrikeIronclad], Fight.Ids(fight.State.Hand));
+        Assert.Equal([IC.Bash, IC.Brand], Fight.Ids(fight.State.ExhaustPile));
     }
 
     [Fact]

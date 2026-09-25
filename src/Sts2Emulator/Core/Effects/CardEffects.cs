@@ -743,7 +743,7 @@ public static class CardEffects
                         CardSelectionKind.ExhaustFromHand,
                         state.Hand.Count,
                         def.Id,
-                        autoPick: AutoPickFromHand(state, rng)
+                        autoPick: 0
                     );
                 }
                 break;
@@ -773,7 +773,7 @@ public static class CardEffects
                         CardSelectionKind.ExhaustFromHandThenDraw,
                         state.Hand.Count,
                         def.Id,
-                        autoPick: AutoPickFromHand(state, rng),
+                        autoPick: 0,
                         amount: upgraded ? 3 : 2
                     );
                 }
@@ -949,7 +949,7 @@ public static class CardEffects
                             CardSelectionKind.ExhaustFromHand,
                             state.Hand.Count,
                             def.Id,
-                            autoPick: AutoPickFromHand(state, rng)
+                            autoPick: 0
                         );
                     }
                     else
@@ -2785,19 +2785,21 @@ public static class CardEffects
             || state.DiscardPile.Any(c => c.DefId == SovereignBladeId);
         if (!anyLive)
         {
+            // Made in hand, or at the end of the discard pile when the hand is full.
+            var landed = state.Hand.Count < MaxCardsInHand ? state.Hand : state.DiscardPile;
             AddGeneratedCardToHand(state, SovereignBladeId);
 
             // `SwordSagePower.AfterCardEnteredCombat` gives a blade its replays as it
-            // arrives, so one forged later is not short of them.
+            // arrives -- wherever it arrives -- so one forged later is not short of them.
             int sage = BuffSystem.Get(state.PlayerBuffs, BuffId.SwordSage);
-            if (sage > 0 && state.Hand.Count > 0)
+            if (sage > 0 && landed.Count > 0)
             {
-                int last = state.Hand.Count - 1;
-                if (state.Hand[last].DefId == SovereignBladeId)
+                int last = landed.Count - 1;
+                if (landed[last].DefId == SovereignBladeId)
                 {
-                    state.Hand[last] = state.Hand[last] with
+                    landed[last] = landed[last] with
                     {
-                        ReplayCount = state.Hand[last].ReplayCount + sage,
+                        ReplayCount = landed[last].ReplayCount + sage,
                     };
                 }
             }
@@ -3909,6 +3911,14 @@ public static class CardEffects
     /// the engine is already draining, with no way to hand control back mid-drain, so it
     /// falls back to <paramref name="autoPick" /> — the behaviour every one of these
     /// choices had before selection existed.
+    ///
+    /// The fallback must not roll. The game asks the player here too: `CardCmd.AutoPlay`
+    /// pushes no selector, and `CardSelectCmd` draws from no stream at all
+    /// (CardSelectCmd.cs:376-436, 697-736). So a pick the emulator makes on the player's
+    /// behalf is a fixed one -- the first candidate or card, or for Headbutt, Hologram and
+    /// Hotfix the LAST card of the discard pile, the one most recently discarded -- and a
+    /// draw from the selection stream for it moves every later reader of that stream, in
+    /// the combat and in the run it is synced back to.
     /// </summary>
     /// <summary>Also the entry point potions with a hand- or draw-pile-wide choice use
     /// (Ashwater, Droplet of Precognition): they are not cards and answer the same
@@ -4299,7 +4309,7 @@ public static class CardEffects
         var options = pool.Take(3).ToList();
         if (state.AutoPlaying)
         {
-            state.Hand.Add(new CardInstance(options[0], upgraded, FreeThisTurn: true));
+            AddToHandOrDiscard(state, new CardInstance(options[0], upgraded, FreeThisTurn: true));
             return;
         }
 
@@ -4340,11 +4350,7 @@ public static class CardEffects
 
         if (state.AutoPlaying)
         {
-            if (state.Hand.Count < MaxCardsInHand)
-            {
-                state.Hand.Add(new CardInstance(options[0], false, FreeThisTurn: true));
-            }
-
+            AddToHandOrDiscard(state, new CardInstance(options[0], false, FreeThisTurn: true));
             return;
         }
 
@@ -4427,6 +4433,32 @@ public static class CardEffects
         List<CardInstance> afterwards
     ) => OpenDiscardSelection(state, sourceCardDefId, remaining, afterwards);
 
+    /// <summary>
+    /// `CardPileCmd.Add(card, PileType.Hand)` for a card a selection picked: into the hand,
+    /// or -- when the hand already holds `CardPile.MaxCardsInHand` -- onto the end of the
+    /// DISCARD pile, which is the target the command switches to (CardPileCmd.cs:420-423).
+    /// The card is moved, or made, either way.
+    /// </summary>
+    /// <remarks>
+    /// A free-this-turn grant does not ride into the discard pile. The game's is
+    /// `SetThisTurnOrUntilPlayed`, which `EndOfTurnCleanup` strips from every card the
+    /// player owns as the turn ends (CardEnergyCost.cs:197; PlayerCombatState.cs:274-278).
+    /// `FreeThisTurn` is cleared only as a card leaves the hand, so carried into a pile it
+    /// would make the card free on whatever later turn it came back. Cleared here, the card
+    /// is the game's on every later turn; the one difference is a card fetched back to the
+    /// hand this same turn, which the game would still let the player play for free.
+    /// </remarks>
+    internal static void AddToHandOrDiscard(CombatState state, CardInstance card)
+    {
+        if (state.Hand.Count >= MaxCardsInHand)
+        {
+            state.DiscardPile.Add(card with { FreeThisTurn = false });
+            return;
+        }
+
+        state.Hand.Add(card);
+    }
+
     internal static void AddCardsToHand(CombatState state, List<CardInstance> cards)
     {
         foreach (var card in cards)
@@ -4493,7 +4525,7 @@ public static class CardEffects
             {
                 var card = state.DrawPile[index];
                 state.RemoveFromDrawPileAt(index);
-                state.Hand.Add(card);
+                AddToHandOrDiscard(state, card);
                 break;
             }
 
@@ -4509,7 +4541,7 @@ public static class CardEffects
             {
                 var picked = state.DiscardPile[index];
                 state.DiscardPile.RemoveAt(index);
-                state.Hand.Add(picked);
+                AddToHandOrDiscard(state, picked);
                 break;
             }
 
@@ -4549,22 +4581,6 @@ public static class CardEffects
 
     private static Random CardSelectionRng(CombatState state, Random rng) =>
         state.CardSelectionRng ?? rng;
-
-    /// <summary>
-    /// The fallback pick for a hand-wide selection nobody can answer: one draw from the
-    /// selection stream over the hand, taken ONLY when the selection is about to resolve on
-    /// its own, which is exactly when `OpenCardSelection` sees `CombatState.AutoPlaying`.
-    /// </summary>
-    /// <remarks>
-    /// A pick the player makes (`CardSelectCmd.FromHand`) rolls nothing in the game. Passed
-    /// as a plain argument, this pick was drawn before the opener could see that the player
-    /// was about to choose. So every Brand, Burning Pact and upgraded True Grit the player
-    /// played drew one value nobody used, and every later reader of the stream drew one
-    /// place along: in the combat, and in the rest of the run, which the stream is synced
-    /// back to.
-    /// </remarks>
-    private static int AutoPickFromHand(CombatState state, Random rng) =>
-        state.AutoPlaying ? CardSelectionRng(state, rng).Next(state.Hand.Count) : 0;
 
     /// <summary>
     /// The stream an effect draws from when it rolls up a NEW card — Stoke, Splash,
@@ -8445,7 +8461,9 @@ public static class CardEffects
                 // out of the draw pile and takes it into hand -- a tutor. The upgrade adds
                 // RETAIN. It was paying GOLD, which is not a thing this card does and not
                 // a thing a combat card generally does.
-                if (state.DrawPile.Count > 0 && state.Hand.Count < MaxCardsInHand)
+                // It asks whatever the hand holds: on a full hand the pick goes to the discard
+                // pile (`CardPileCmd.Add`, CardPileCmd.cs:420-423), and the screen still opens.
+                if (state.DrawPile.Count > 0)
                 {
                     OpenCardSelection(
                         state,
@@ -9150,21 +9168,15 @@ public static class CardEffects
 
     /// <summary>
     /// `CardPileCmd.AddGeneratedCardToCombat(card, PileType.Hand, ...)`: a generated card
-    /// goes to hand if there is room, and is dropped if there is not.
+    /// goes to hand if there is room, and to the end of the discard pile if there is not
+    /// (CardPileCmd.cs:420-423). It is generated either way, so it counts as generated.
     /// </summary>
     internal static void AddGeneratedCardToHand(CombatState state, int defId)
     {
-        if (state.Hand.Count < MaxCardsInHand)
-        {
-            state.Hand.Add(new CardInstance(defId, false));
-            NoteGeneratedCard(state);
-        }
+        AddToHandOrDiscard(state, new CardInstance(defId, false));
+        NoteGeneratedCard(state);
     }
 
-    /// <summary>
-    /// Call of the Void's card: one from the character's own combat pool, granted ETHEREAL,
-    /// into hand. Rolled on the card-generation stream, as `GetDistinctForCombat` is.
-    /// </summary>
     /// <summary>
     /// `DampenPower.AfterApplied`: every UPGRADED card its owner holds is downgraded, and
     /// the power remembers which so that losing it puts them back.
@@ -9252,7 +9264,10 @@ public static class CardEffects
         var options = pool.Take(count).ToList();
         if (state.AutoPlaying)
         {
-            state.Hand.Add(new CardInstance(options[0], false) { RetainForCombat = true });
+            AddToHandOrDiscard(
+                state,
+                new CardInstance(options[0], false) { RetainForCombat = true }
+            );
             return;
         }
 
@@ -9267,16 +9282,27 @@ public static class CardEffects
         };
     }
 
+    /// <summary>
+    /// Call of the Void's card: one from the character's own combat pool, granted Ethereal,
+    /// into hand. Rolled on the card-generation stream, as `GetDistinctForCombat` is.
+    /// </summary>
+    /// <remarks>
+    /// `CallOfTheVoidPower.BeforeHandDraw` rolls the card and adds it with
+    /// `AddGeneratedCardsToCombat(..., PileType.Hand, ...)` whatever the hand holds
+    /// (CallOfTheVoidPower.cs:39-45): on a full hand the roll is still made, and the card
+    /// lands at the end of the discard pile.
+    /// </remarks>
     internal static void AddEtherealPoolCardToHand(CombatState state, Random rng)
     {
         var pool = CombatGenerationPool(GeneratedData.CardPools.Necrobinder);
-        if (pool.Count == 0 || state.Hand.Count >= MaxCardsInHand)
+        if (pool.Count == 0)
         {
             return;
         }
 
         var stream = state.CardGenerationRng ?? rng;
-        state.Hand.Add(
+        AddToHandOrDiscard(
+            state,
             new CardInstance(pool[stream.Next(pool.Count)], false) { EtherealForCombat = true }
         );
     }

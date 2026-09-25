@@ -1,0 +1,211 @@
+{
+  "schema": "sts2-live-snapshot/1",
+  "game_version": "v0.107.1",
+  "character": "IRONCLAD",
+  "ascension": 10,
+  "act": 1,
+  "floor": 4,
+  "room_type": "monster",
+  "round": 3,
+  "player": {
+    "hp": 40,
+    "max_hp": 80,
+    "block": 0,
+    "energy": 2,
+    "max_energy": 3,
+    "gold": 117,
+    "stars": 0,
+    "osty": null,
+    "orbs": {
+      "slots": 0,
+      "list": []
+    },
+    "powers": [],
+    "relics": [
+      {
+        "id": "BURNING_BLOOD",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "LAVA_ROCK",
+        "counter": null,
+        "fields": {
+          "HasTriggered": false
+        }
+      }
+    ],
+    "potions": [
+      {
+        "slot": 0,
+        "id": "FLEX_POTION"
+      },
+      {
+        "slot": 1,
+        "id": null
+      }
+    ],
+    "max_potion_slots": 2
+  },
+  "hand": [
+    {
+      "id": "BASH",
+      "upgraded": false,
+      "uid": "BASH#0",
+      "cost": 2,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    }
+  ],
+  "draw_pile": [
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#3",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "IRON_WAVE",
+      "upgraded": false,
+      "uid": "IRON_WAVE#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#3",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    }
+  ],
+  "discard_pile": [
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#4",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    }
+  ],
+  "exhaust_pile": [
+    {
+      "id": "ASCENDERS_BANE",
+      "upgraded": false,
+      "uid": "ASCENDERS_BANE#0",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    }
+  ],
+  "known_draw_top": [],
+  "known_draw_bottom": [],
+  "enemies": [
+    {
+      "entity_id": "TOADPOLE_1",
+      "id": "TOADPOLE",
+      "slot": 0,
+      "hp": 26,
+      "max_hp": 26,
+      "block": 0,
+      "powers": [
+        {
+          "id": "THORNS_POWER",
+          "amount": 2
+        }
+      ],
+      "intents": [
+        {
+          "type": "ATTACK",
+          "damage": 4,
+          "base_damage": 4,
+          "hits": 3
+        }
+      ],
+      "move_id": "SPIKE_SPIT_MOVE",
+      "state_log": [
+        "WHIRL_MOVE",
+        "SPIKEN_MOVE",
+        "SPIKE_SPIT_MOVE"
+      ],
+      "ai_fields": {
+        "SpikeSpitDamage": 4,
+        "SpikeSpitRepeat": 3,
+        "WhirlDamage": 8,
+        "SpikenAmount": 2
+      }
+    }
+  ],
+  "history": {
+    "cards_played_this_turn": 1,
+    "cards_played_this_combat": 7,
+    "attacks_played_this_turn": 1,
+    "skills_played_this_turn": 0
+  },
+  "pending_selection": null
+}
