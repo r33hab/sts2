@@ -366,14 +366,147 @@ public class SelectionAnswerDeathTests
 }
 
 /// <summary>
-/// Two powers hold the fight open while their owner's death is unanswered
-/// (`ShouldStopCombatFromEnding`): the Waterfall Giant's Steam Eruption and the Test
-/// Subject's Adaptable. A death the emulator leaves unanswered there is a fight nobody can
-/// end, so the engine answers them before the enemies act and before any step returns,
-/// wherever the kill came from.
+/// A card's play is not over when its effect is: `CardModel.OnPlayWrapper` runs
+/// `AfterCardPlayed` after `OnPlay`, and two powers deal damage there --
+/// `StranglePower.AfterCardPlayed` (StranglePower.cs:37-42) and Panache's fifth-card
+/// burst. Their kills are answered like any other, inside the play and before the win
+/// check that follows it.
+/// </summary>
+public class AfterPlayDeathTests
+{
+    /// <summary>
+    /// `SurprisePower.AfterDeath` adds a Sneaky and a Fat Gremlin, and the power holds the
+    /// fight open meanwhile (`ShouldStopCombatFromEnding`, SurprisePower.cs:40). A Defend
+    /// played into a Strangle finishes a lone Gremlin Merc, and the fight goes on against
+    /// its reinforcements. It used to end there as a won fight.
+    /// </summary>
+    [Fact]
+    public void StrangleFinishingALoneGremlinMercLeavesTheFightToItsReinforcements()
+    {
+        var fight = Fight.Encounter(CombatFactory.ActOneEncounter.GremlinMerc);
+        var merc = fight.State.Enemies[0];
+        merc.Hp = 3;
+        merc.Block = 0;
+        BuffSystem.Apply(merc.Buffs, BuffId.Strangle, 5);
+        fight.State.Hand = [Card(IC.DefendIronclad)];
+        fight.State.Energy = 1;
+
+        var play = fight.Play();
+
+        Assert.False(play.Terminal);
+        Assert.Equal([KE.SneakyGremlin, KE.FatGremlin], fight.EnemyDefIds);
+        Assert.All(fight.State.Enemies, gremlin => Assert.True(gremlin.Hp > 0));
+    }
+
+    /// <summary>
+    /// `InfestedPower.AfterDeath` adds four stunned Wrigglers, and it holds the fight open
+    /// the same way (InfestedPower.cs:37). Panache's burst on the fifth card finishes a lone
+    /// Phrog Parasite, and the fight goes on against the Wrigglers.
+    /// </summary>
+    [Fact]
+    public void PanacheFinishingALonePhrogParasiteLeavesTheFightToItsWrigglers()
+    {
+        var fight = Fight.Encounter(CombatFactory.ActOneEncounter.PhrogParasite);
+        var phrog = fight.State.Enemies[0];
+        phrog.Hp = 5;
+        phrog.Block = 0;
+        fight.PlayerBuff(BuffId.PanachePower, 10);
+        fight.PlayerBuff(BuffId.PanacheArmed, 1);
+        fight.State.CardsPlayedSincePanacheProc = 4;
+        fight.State.Hand = [Card(IC.DefendIronclad)];
+        fight.State.Energy = 1;
+
+        var play = fight.Play();
+
+        Assert.False(play.Terminal);
+        Assert.Equal([KE.Wriggler, KE.Wriggler, KE.Wriggler, KE.Wriggler], fight.EnemyDefIds);
+    }
+
+    /// <summary>
+    /// `StockPower.AfterDeath` builds a new Axebot in the dead one's slot while stock is
+    /// left, and it holds the fight open too (StockPower.cs:28). A Strangle kill of a lone
+    /// Axebot brings it back, a stock lighter.
+    /// </summary>
+    [Fact]
+    public void AnAfterPlayKillOfAnAxebotWithStockLeftBringsItBack()
+    {
+        var fight = Fight.Encounter(CombatFactory.ActOneEncounter.Axebot);
+        var axebot = fight.State.Enemies[0];
+        axebot.Hp = 3;
+        axebot.Block = 0;
+        BuffSystem.Apply(axebot.Buffs, BuffId.Strangle, 5);
+        fight.State.Hand = [Card(IC.DefendIronclad)];
+        fight.State.Energy = 1;
+
+        var play = fight.Play();
+
+        Assert.False(play.Terminal);
+        Assert.True(axebot.Hp > 0);
+        Assert.Equal(1, BuffSystem.Get(axebot.Buffs, BuffId.Stock));
+    }
+
+    /// <summary>
+    /// With the rest of the roster standing the fight goes on either way, but the death is
+    /// still answered: Gremlin Horn pays its energy and its card, and the corpse leaves.
+    /// </summary>
+    [Fact]
+    public void AnAfterPlayKillWithOthersStandingFiresTheDeathHooks()
+    {
+        var fight = Fight
+            .Hand(Card(IC.DefendIronclad))
+            .Energy(1)
+            .Draw(Card(IC.Anger))
+            .Enemy(hp: 3, buffs: [new BuffState(BuffId.Strangle, 5)])
+            .Enemy(hp: 50);
+        fight.State.Relics.Add(new RelicInstance(RelicEffects.GremlinHorn));
+
+        var play = fight.Play();
+
+        Assert.False(play.Terminal);
+        Assert.Equal(1, fight.State.Energy);
+        Assert.Equal([IC.Anger], Fight.Ids(fight.State.Hand));
+        Assert.Equal([50], fight.State.Enemies.Select(enemy => enemy.Hp));
+    }
+}
+
+/// <summary>
+/// Five powers hold the fight open while their owner's death is unanswered
+/// (`ShouldStopCombatFromEnding`): the Waterfall Giant's Steam Eruption, the Test Subject's
+/// Adaptable, the Gremlin Merc's Surprise, the Phrog Parasite's Infested and the Axebot's
+/// Stock. A death the emulator leaves unanswered there is a fight nobody can end -- or,
+/// for the last three, a fight that ends early -- so the engine answers them before the
+/// enemies act and before any step returns, wherever the kill came from.
 /// </summary>
 public class FightHeldOpenTests
 {
+    /// <summary>
+    /// `TheBombPower.BeforeSideTurnEnd` finishes a lone Gremlin Merc as the player's turn
+    /// ends. The reinforcements arrive before the enemies act, the fight goes on, and the
+    /// death is answered once: Gremlin Horn's card is drawn once and kept, so the next hand
+    /// is its card plus five. The fight used to end at the turn end as a won one.
+    /// </summary>
+    [Fact]
+    public void ALoneGremlinMercKilledAsTheTurnEndsSendsInItsReinforcements()
+    {
+        var fight = Fight.Encounter(CombatFactory.ActOneEncounter.GremlinMerc);
+        var merc = fight.State.Enemies[0];
+        merc.Hp = 10;
+        merc.Block = 0;
+        fight.State.PlayerHp = 999;
+        fight.State.Hand = [];
+        fight.State.DiscardPile = [];
+        fight.State.DrawPile = [.. Enumerable.Range(0, 8).Select(_ => Card(IC.DefendIronclad))];
+        fight.State.Relics.Add(new RelicInstance(RelicEffects.GremlinHorn));
+        fight.PlayerBuff(BuffId.TheBombPower, 1);
+        fight.PlayerBuff(BuffId.TheBombDamage, 10);
+
+        var turn = fight.EndTurn();
+
+        Assert.False(turn.Terminal);
+        Assert.Equal([KE.SneakyGremlin, KE.FatGremlin], fight.EnemyDefIds);
+        Assert.Equal(6, fight.State.Hand.Count);
+    }
+
     /// <summary>
     /// `TheBombPower.BeforeSideTurnEnd` goes off as the player's turn ends
     /// (TheBombPower.cs). The subject it kills is on RESPAWN_MOVE the moment it dies, so it

@@ -15,17 +15,22 @@ namespace Sts2Emulator.Tests;
 /// The loadouts reach the paths that have stalled or ended late before: potions that kill
 /// (Fire Potion, Explosive Ampoule, Potion-Shaped Rock, Foul Potion, Distilled Chaos),
 /// turn-start damage and turn-start auto-plays (Rolling Boulder, Inferno, Mayhem),
-/// turn-end damage (The Bomb), queued auto-plays (Hellraiser) and nested plays (Havoc), a
-/// card's after-play damage (Panache, Strangle), exhaust damage (Charon's Ashes),
-/// selections a nested play must answer for itself (Brand, Burning Pact, True Grit+), and
-/// death hooks (Gremlin Horn). The players are sturdy, so most fights run until the
-/// enemies are dead and every one of those paths gets to kill.
+/// turn-end damage (The Bomb, Doom), queued auto-plays (Hellraiser) and nested plays
+/// (Havoc), a card's after-play damage (Panache, Strangle), exhaust damage (Charon's
+/// Ashes), selections a nested play must answer for itself (Brand, Burning Pact, True
+/// Grit+), and death hooks (Gremlin Horn). The players are sturdy, so most fights run
+/// until the enemies are dead and every one of those paths gets to kill.
 ///
-/// Beside the cap, every step is checked for the stall itself: a death that holds the
-/// fight open (`ShouldStopCombatFromEnding` -- the Test Subject's Adaptable, the Waterfall
-/// Giant's Steam Eruption) left unanswered. A sturdy player who also burns themselves --
-/// Inferno, Foul Potion -- can die out of such a fight inside the cap, so the cap alone
-/// would miss it.
+/// Five powers hold a fight open while their owner's death is unanswered
+/// (`ShouldStopCombatFromEnding`): Steam Eruption (Waterfall Giant), Adaptable (Test
+/// Subject), Surprise (Gremlin Merc), Infested (Phrog Parasite) and Stock (Axebot). Beside
+/// the cap, every step is checked against both ways such a death goes wrong:
+/// - left unanswered, it stalls the fight. A sturdy player who also burns themselves --
+///   Inferno, Foul Potion -- can die out of such a fight inside the cap, so the cap alone
+///   would miss it;
+/// - forgotten by the win check, it ends the fight early: a lone Gremlin Merc finished off
+///   by Strangle was a WIN with its reinforcements never sent in. A won step must leave no
+///   primary enemy standing and none of the five powers anywhere in the roster.
 /// </remarks>
 public class CombatWatchdogTests
 {
@@ -42,6 +47,11 @@ public class CombatWatchdogTests
     private const int AttackPotion = 2;
     private const int DropletOfPrecognition = 16;
     private const int LiquidMemories = 37;
+    private const int PotionOfDoom = 44;
+
+    private static int CardNamed(string name) =>
+        GeneratedData.Cards.FindId(name)
+        ?? throw new InvalidOperationException($"No card named {name}");
 
     private sealed record Loadout(
         string Name,
@@ -95,6 +105,22 @@ public class CombatWatchdogTests
             [RelicEffects.GremlinHorn, RelicEffects.CharonsAshes],
             400
         ),
+        // Doom kills its owner as the player's turn ends (`DoomPower.BeforeSideTurnEnd`),
+        // a kill path of its own: End of Days, Deathbringer and Negative Pulse Doom every
+        // enemy, Scourge and the potion one.
+        new(
+            "doom",
+            [
+                CardNamed("EndOfDays"),
+                CardNamed("Deathbringer"),
+                CardNamed("NegativePulse"),
+                CardNamed("Scourge"),
+                CardNamed("NegativePulse"),
+            ],
+            [PotionOfDoom, PotionOfDoom, FirePotion],
+            [RelicEffects.GremlinHorn],
+            400
+        ),
     ];
 
     /// <summary>
@@ -145,8 +171,15 @@ public class CombatWatchdogTests
                     if (!result.Terminal)
                     {
                         Assert.False(
-                            state.Enemies.Any(HoldsTheFightOpenUnanswered),
+                            state.Enemies.Any(DiedHoldingTheFightOpenUnanswered),
                             $"{fight}: a death holds the fight open unanswered after step {steps}"
+                        );
+                    }
+                    else if (result.PlayerWon)
+                    {
+                        Assert.False(
+                            state.Enemies.Any(e => HoldsTheFightOpen(e) || IsStandingPrimary(e)),
+                            $"{fight}: won at step {steps} with an enemy still able to act"
                         );
                     }
                 }
@@ -155,16 +188,33 @@ public class CombatWatchdogTests
     }
 
     /// <summary>
-    /// Dead, holding a power whose `ShouldStopCombatFromEnding` is true, and not answered:
-    /// no RESPAWN_MOVE under way (the emulator's `Reviving`) and no revive to blow.
+    /// Holding one of the five powers whose `ShouldStopCombatFromEnding` is true:
+    /// SteamEruptionPower.cs, AdaptablePower.cs, SurprisePower.cs:40, InfestedPower.cs:37
+    /// and StockPower.cs:28. Read off the buffs here rather than through the engine's own
+    /// predicate, so the check does not share the engine's blind spots.
     /// </summary>
-    private static bool HoldsTheFightOpenUnanswered(EnemyState enemy) =>
+    private static bool HoldsTheFightOpen(EnemyState enemy) =>
+        BuffSystem.Has(enemy.Buffs, BuffId.SteamEruption)
+        || BuffSystem.Get(enemy.Buffs, BuffId.Adaptable) > 0
+        || BuffSystem.Get(enemy.Buffs, BuffId.Surprise) > 0
+        || BuffSystem.Get(enemy.Buffs, BuffId.Infested) > 0
+        || BuffSystem.Get(enemy.Buffs, BuffId.Stock) > 0;
+
+    /// <summary>
+    /// Dead, holding one of those powers, and not answered: no RESPAWN_MOVE under way (the
+    /// emulator's `Reviving`). An answered death takes the power with it or stands the
+    /// creature back up -- only Adaptable stays on its corpse, and that one is reviving.
+    /// </summary>
+    private static bool DiedHoldingTheFightOpenUnanswered(EnemyState enemy) =>
         enemy.Hp <= 0
         && BuffSystem.Get(enemy.Buffs, BuffId.Reviving) <= 0
-        && (
-            BuffSystem.Get(enemy.Buffs, BuffId.Adaptable) > 0
-            || EnemyAI.DiedHoldingSteamEruption(enemy)
-        );
+        && HoldsTheFightOpen(enemy);
+
+    /// <summary>`Creature.IsPrimaryEnemy` and alive: neither a Minion nor an Illusion.</summary>
+    private static bool IsStandingPrimary(EnemyState enemy) =>
+        enemy.Hp > 0
+        && BuffSystem.Get(enemy.Buffs, BuffId.Minion) <= 0
+        && BuffSystem.Get(enemy.Buffs, BuffId.Illusion) <= 0;
 
     private static CombatState Build(int encounterId, Loadout loadout, int ascension, int seed)
     {

@@ -70,11 +70,11 @@ public static class CombatEngine
         {
             var next = state.AutoPlayQueue[0];
             state.AutoPlayQueue.RemoveAt(0);
-            var standing = StandingEnemies(state);
+            var beforePlay = new Baseline(state);
             AutoPlay(state, next, rng);
             // `CardCmd.AutoPlay` is a card play like any other: its kills are answered
             // inside it, before the next card in the queue plays.
-            AnswerDeathsAmong(state, standing, rng);
+            AnswerDeathsSince(state, beforePlay, rng);
 
             // Re-check terminality after auto-play.
             bool playerDead = PlayerIsDead(state);
@@ -375,6 +375,12 @@ public static class CombatEngine
         }
         HandleEnemyDeaths(state, enemyHpsBefore, rng);
 
+        // The play is not over, and what follows can kill too: the card's own exhaust under
+        // Charon's Ashes, Serpent Form and Haunt, `AfterCardPlayed`'s Strangle and Panache
+        // (StranglePower.cs:37-42), a draw under Speedster. So the play's second death check
+        // reads against this.
+        var afterEffects = new Baseline(state);
+
         // Rage: gain block when playing an Attack.
         if (def.Type == CardType.Attack)
         {
@@ -669,6 +675,11 @@ public static class CombatEngine
         Effects.RelicEffects.ApplyAfterHandEmptied(state, rng);
         Effects.RelicEffects.ApplyAfterPlayerHpChanged(state);
 
+        // The after-play kills, answered inside the play as the game answers every death,
+        // and before the play's win check -- or the end of the turn Void Form forces. Left
+        // unanswered, a lone Gremlin Merc finished off by Strangle was a won fight.
+        AnswerDeathsSince(state, afterEffects, rng);
+
         // `PlayerCmd.EndTurn(canBackOut: false)` called from inside Void Form's OnPlay. Run
         // once the play has fully resolved rather than mid-effect, and cleared first so a
         // card played by the enemy turn's own machinery cannot re-enter it.
@@ -715,6 +726,10 @@ public static class CombatEngine
         {
             enemyHpsBefore[i] = state.Enemies[i].Hp;
         }
+
+        // What the turn end and the enemy phase kill is answered against this, by
+        // reference, after the enemy phase.
+        var turnEndStart = new Baseline(state);
 
         // ── End of player turn ────────────────────────────────────────────────
 
@@ -1261,7 +1276,11 @@ public static class CombatEngine
             TickDurationDebuffs(state);
             EnemyAI.ToggleNemesisIntangible(state);
 
-            HandleEnemyDeaths(state, enemyHpsBefore, rng);
+            // Every death since the turn end began that is not answered yet. By reference:
+            // the held-open backstop before the enemy phase has already answered and swept
+            // its own corpses, and a walk by position would have paired the rest with the
+            // wrong enemies -- or answered the backstop's merc a second time.
+            AnswerDeathsSince(state, turnEndStart, rng, countEscapes: true, sweepAlways: true);
 
             // The combat is over the moment the enemy phase leaves nobody standing.
             // CombatManager.ExecuteEnemyTurn awaits CheckWinCondition after EVERY enemy and
@@ -1397,7 +1416,7 @@ public static class CombatEngine
         // Inferno's burn -- and plays cards (Bombardment, Mayhem). The game answers each of
         // those deaths as it happens; here they are answered against this snapshot, where
         // the burn lands and once the moves are rolled.
-        var standingAtTurnStart = StandingEnemies(state);
+        var turnStart = new Baseline(state);
         state.Turn++;
         Effects.RelicEffects.TickPaelsLegionCooldown(state);
         // `PollinousCore.BeforeSideTurnStart` bumps its counter; the hand draw below reads
@@ -1665,8 +1684,8 @@ public static class CombatEngine
             // The burn's kills are answered where it lands, and with them any the turn start
             // has made so far. Its own snapshot used to be taken just before the burn, so an
             // earlier kill was swept away by this check with no death hooks at all.
-            AnswerDeathsAmong(state, standingAtTurnStart, rng);
-            standingAtTurnStart = StandingEnemies(state);
+            AnswerDeathsSince(state, turnStart, rng);
+            turnStart = new Baseline(state);
         }
 
         // Plating decays by 1 at start of player turn.
@@ -1960,7 +1979,7 @@ public static class CombatEngine
         // The rest of the turn start's kills. After the roll, because the game rolls the moves
         // as the turn STARTS (CombatManager.cs:480-484), so a death that sets one -- the Test
         // Subject's RESPAWN_MOVE, a Ravenous slug's stun -- lands on top of it.
-        AnswerDeathsAmong(state, standingAtTurnStart, rng);
+        AnswerDeathsSince(state, turnStart, rng);
         Effects.RelicEffects.ApplyAfterPlayerHpChanged(state);
 
         bool playerDead = PlayerIsDead(state);
@@ -1987,7 +2006,7 @@ public static class CombatEngine
             enemyHpsBefore[i] = state.Enemies[i].Hp;
         }
 
-        var standing = StandingEnemies(state);
+        var beforeUse = new Baseline(state);
 
         // `PotionModel.OnUseWrapper` calls `RemoveBeforeUse()` before `OnUse`, so the
         // potion's own slot is already free while its effect runs -- Entropic Brew fills it.
@@ -1997,7 +2016,7 @@ public static class CombatEngine
         // The potion's kills -- Fire Potion, Explosive Ampoule, Potion-Shaped Rock, Foul
         // Potion, an orb Essence of Darkness evicts, a card Distilled Chaos plays -- are
         // answered inside its `OnUse`, before `AfterPotionUsed` (PotionModel.cs:291-342).
-        AnswerDeathsAmong(state, standing, rng);
+        AnswerDeathsSince(state, beforeUse, rng);
         // `ReptileTrinket.AfterPotionUsed`, and it is AFTER: a potion that grants Strength
         // of its own has already landed, so the two stack rather than one replacing it.
         Effects.RelicEffects.ApplyAfterPotionUsed(state);
@@ -2585,14 +2604,14 @@ public static class CombatEngine
             enemyHpsBefore[i] = state.Enemies[i].Hp;
         }
 
-        var standing = StandingEnemies(state);
+        var beforeAnswer = new Baseline(state);
         var result = ResolveCardSelection(state, action, rng);
         if (result.Terminal)
         {
             return result;
         }
 
-        AnswerDeathsAmong(state, standing, rng);
+        AnswerDeathsSince(state, beforeAnswer, rng);
         bool playerDead = PlayerIsDead(state);
         bool allDead = NoPrimaryEnemyLeft(state);
         if (!playerDead && !allDead)
@@ -3184,16 +3203,65 @@ public static class CombatEngine
         state.PlayerDebuffsAtRoundStart = BuffSystem.DurationDebuffSnapshot(state.PlayerBuffs);
     }
 
+    /// <summary>
+    /// Answers the deaths of the enemies that were standing at <paramref name="enemyHpsBefore" />'s
+    /// positions and lie dead now. Only for a stretch that cannot have moved the roster since
+    /// its snapshot -- a card's own effect -- because the pairing is by position.
+    /// </summary>
     private static void HandleEnemyDeaths(
         CombatState state,
         ReadOnlySpan<int> enemyHpsBefore,
-        Random rng,
-        bool removeCorpses = true
+        Random rng
     )
     {
+        List<EnemyState>? dead = null;
         for (int i = 0; i < state.Enemies.Count && i < enemyHpsBefore.Length; i++)
         {
-            if (enemyHpsBefore[i] <= 0 || state.Enemies[i].Hp > 0)
+            if (enemyHpsBefore[i] > 0 && state.Enemies[i].Hp <= 0)
+            {
+                (dead ??= []).Add(state.Enemies[i]);
+            }
+        }
+
+        AnswerDeaths(state, dead, rng, CorpseSweep.All);
+    }
+
+    /// <summary>Which corpses a death answer sweeps once it is done.</summary>
+    private enum CorpseSweep
+    {
+        /// <summary>
+        /// Every corpse in the roster, as a death check ends -- except a death that holds the
+        /// fight open and has not been answered yet, which waits for its answer.
+        /// </summary>
+        All,
+
+        /// <summary>
+        /// Only the corpses answered here: an early answer (the held-open backstop) must
+        /// leave the others to the check that owns them.
+        /// </summary>
+        Answered,
+    }
+
+    /// <summary>
+    /// The death answer itself: for each of <paramref name="dead" /> in turn, every death
+    /// hook, then its revive or its spawns; then the corpse sweep.
+    /// </summary>
+    /// <remarks>
+    /// The list is taken before any answer runs and is held by reference, so an answer that
+    /// changes the roster -- a Phrog Parasite's Wrigglers are INSERTED after it -- cannot
+    /// shift a later death out of reach, as it could when this walked the roster by index.
+    /// </remarks>
+    private static void AnswerDeaths(
+        CombatState state,
+        List<EnemyState>? dead,
+        Random rng,
+        CorpseSweep sweep
+    )
+    {
+        foreach (var fallen in dead ?? [])
+        {
+            // The same guard the walk by index made as it reached each creature.
+            if (fallen.Hp > 0)
             {
                 continue;
             }
@@ -3214,29 +3282,29 @@ public static class CombatEngine
             // looking", and these two are neither exclusive with a revive nor with each
             // other. Threading one of them into the chain is how the Test Subject's
             // respawn briefly ended up guarded on the creature not being an amalgam.
-            if (state.Enemies[i].DefId == KE.TorchHeadAmalgam)
+            if (fallen.DefId == KE.TorchHeadAmalgam)
             {
                 EnrageQueenIfWaitingToBurnBright(state);
             }
 
-            if (BuffSystem.Get(state.Enemies[i].Buffs, BuffId.PossessSpeed) > 0)
+            if (BuffSystem.Get(fallen.Buffs, BuffId.PossessSpeed) > 0)
             {
                 // PossessSpeedPower.AfterDeath returns every point of Dexterity its owner
                 // took off the player -- so killing The Forgotten hands the whole debuff
                 // back, which the emulator never did.
-                int possessed = BuffSystem.Get(state.Enemies[i].Buffs, BuffId.PossessSpeed);
+                int possessed = BuffSystem.Get(fallen.Buffs, BuffId.PossessSpeed);
                 BuffSystem.Apply(state.PlayerBuffs, BuffId.Dexterity, possessed);
-                BuffSystem.Remove(state.Enemies[i].Buffs, BuffId.PossessSpeed);
+                BuffSystem.Remove(fallen.Buffs, BuffId.PossessSpeed);
             }
 
-            if (BuffSystem.Get(state.Enemies[i].Buffs, BuffId.PossessStrength) > 0)
+            if (BuffSystem.Get(fallen.Buffs, BuffId.PossessStrength) > 0)
             {
                 // `PossessStrengthPower.AfterDeath`, the same for The Lost's Strength.
                 // Written beside its twin rather than anywhere else, because the two
                 // being apart is how one of them stayed unmodelled.
-                int possessed = BuffSystem.Get(state.Enemies[i].Buffs, BuffId.PossessStrength);
+                int possessed = BuffSystem.Get(fallen.Buffs, BuffId.PossessStrength);
                 Effects.RelicEffects.GainPlayerStrength(state, possessed);
-                BuffSystem.Remove(state.Enemies[i].Buffs, BuffId.PossessStrength);
+                BuffSystem.Remove(fallen.Buffs, BuffId.PossessStrength);
             }
 
             // `DampenPower.AfterDeath`: the power tracks the CASTERS that applied it and
@@ -3245,11 +3313,9 @@ public static class CombatEngine
             // Knight is the only source: no living Knight means no caster left.
             if (
                 BuffSystem.Get(state.PlayerBuffs, BuffId.Dampen) > 0
-                && state.Enemies[i].DefId == KE.MagiKnight
+                && fallen.DefId == KE.MagiKnight
                 && !state.Enemies.Any(other =>
-                    other.DefId == KE.MagiKnight
-                    && other.Hp > 0
-                    && !ReferenceEquals(other, state.Enemies[i])
+                    other.DefId == KE.MagiKnight && other.Hp > 0 && !ReferenceEquals(other, fallen)
                 )
             )
             {
@@ -3259,62 +3325,62 @@ public static class CombatEngine
             // The revive chain proper: at most one of these applies, and the ones that
             // bring the creature back `continue` rather than falling through to the
             // it-really-died work below.
-            if (BuffSystem.Get(state.Enemies[i].Buffs, BuffId.Surprise) > 0)
+            if (BuffSystem.Get(fallen.Buffs, BuffId.Surprise) > 0)
             {
-                SpawnGremlinMercReinforcements(state, rng, state.Enemies[i].StolenGold);
+                SpawnGremlinMercReinforcements(state, rng, fallen.StolenGold);
+                // `RemoveAllPowersAfterDeath` strips the power once `AfterDeath` has run --
+                // SurprisePower claims no exemption -- so the answered corpse holds nothing
+                // open and cannot send its reinforcements twice.
+                BuffSystem.Remove(fallen.Buffs, BuffId.Surprise);
             }
-            else if (TryReviveIllusion(state.Enemies[i]))
-            {
-                continue;
-            }
-            else if (TryRespawnAxebot(state.Enemies[i], rng, state.AscensionLevel))
-            {
-                continue;
-            }
-            else if (TryReattachSegment(state, state.Enemies[i]))
+            else if (TryReviveIllusion(fallen))
             {
                 continue;
             }
-            else if (TryRespawnTestSubject(state.Enemies[i]))
+            else if (TryRespawnAxebot(fallen, rng, state.AscensionLevel))
             {
                 continue;
             }
-            else if (TryEnrageCrabPartner(state, state.Enemies[i]))
+            else if (TryReattachSegment(state, fallen))
+            {
+                continue;
+            }
+            else if (TryRespawnTestSubject(fallen))
+            {
+                continue;
+            }
+            else if (TryEnrageCrabPartner(state, fallen))
             {
                 // Not a revive: the dead half stays dead, so this does not `continue`.
                 TurnPlayerToFaceSurvivor(state);
             }
 
-            if (BuffSystem.Get(state.Enemies[i].Buffs, BuffId.Infested) > 0)
+            if (BuffSystem.Get(fallen.Buffs, BuffId.Infested) > 0)
             {
-                SpawnPhrogParasiteWrigglers(state, rng, state.Enemies[i]);
-                BuffSystem.Remove(state.Enemies[i].Buffs, BuffId.Infested);
+                SpawnPhrogParasiteWrigglers(state, rng, fallen);
+                BuffSystem.Remove(fallen.Buffs, BuffId.Infested);
             }
-            else if (
-                state.Enemies[i].DefId == KE.FatGremlin
-                && !state.Enemies[i].Escaped
-                && state.Enemies[i].HeistGold > 0
-            )
+            else if (fallen.DefId == KE.FatGremlin && !fallen.Escaped && fallen.HeistGold > 0)
             {
                 // HeistPower.BeforeDeath adds an extra REWARD, and it does so in every
                 // encounter -- the merc's own fight was excluded here, which is the one
                 // fight the power exists for. ModifyGoldGained is applied when the row is
                 // claimed, the way it is for the fight's ordinary gold.
-                state.StolenBackGold += state.Enemies[i].HeistGold;
-                state.Enemies[i].HeistGold = 0;
+                state.StolenBackGold += fallen.HeistGold;
+                fallen.HeistGold = 0;
             }
 
             // `SwipePower.BeforeDeath` gives the stolen card back -- but only on DEATH.
             // A Hopper that reaches ESCAPE leaves with it, which is why `Escaped` is
             // checked here exactly as it is for the Heist above.
-            if (state.Enemies[i].StolenCard is { } swiped && !state.Enemies[i].Escaped)
+            if (fallen.StolenCard is { } swiped && !fallen.Escaped)
             {
                 state.StolenBackCards.Add(swiped);
-                state.Enemies[i].StolenCard = null;
-                BuffSystem.Remove(state.Enemies[i].Buffs, BuffId.Swipe);
+                fallen.StolenCard = null;
+                BuffSystem.Remove(fallen.Buffs, BuffId.Swipe);
             }
 
-            if (state.Enemies[i].DefId == KE.SlitheringStrangler)
+            if (fallen.DefId == KE.SlitheringStrangler)
             {
                 BuffSystem.Remove(state.PlayerBuffs, BuffId.Constrict);
             }
@@ -3346,7 +3412,7 @@ public static class CombatEngine
             // -- Gremlin Horn and Melancholy included -- and the power's own AfterDeath is
             // simply one more listener. The corpse sweep below keeps the giant, which is
             // standing again.
-            EnemyAI.TriggerAboutToBlow(state.Enemies[i]);
+            EnemyAI.TriggerAboutToBlow(fallen);
         }
 
         // MIRROR THE GAME: a creature that died leaves the roster unless a power vetoes.
@@ -3356,120 +3422,187 @@ public static class CombatEngine
         // LIVING creatures past the last observation slot and an agent stopped seeing an
         // enemy that was attacking it.
         //
-        // Done AFTER the loop above, which walks by index against `enemyHpsBefore` and
-        // would lose its correlation if the list shrank underneath it -- and skipped when
-        // this is answering deaths early (`AnswerDeathsHoldingTheFightOpen`), because a
-        // later call is still to walk the same roster against its own snapshot.
-        if (removeCorpses)
-        {
-            state.Enemies.RemoveAll(enemy => enemy.Hp <= 0 && EnemyAI.ShouldRemoveOnDeath(enemy));
-        }
+        // A death that holds the fight open and is still unanswered is never swept: its
+        // answer is what sends in the reinforcements, the Wrigglers or the new Axebot, and a
+        // swept corpse would never get one.
+        state.Enemies.RemoveAll(enemy =>
+            enemy.Hp <= 0
+            && EnemyAI.ShouldRemoveOnDeath(enemy)
+            && (
+                sweep == CorpseSweep.All
+                    ? !DiedHoldingTheFightOpen(enemy)
+                    : dead is not null && dead.Contains(enemy)
+            )
+        );
     }
 
     /// <summary>
-    /// Whether this creature's death holds the fight open and has not been answered yet:
-    /// `ShouldStopCombatFromEnding` is true for its power, so until the death is answered
-    /// nothing can end the fight.
+    /// Whether this creature holds the fight open: it carries one of the five powers whose
+    /// `ShouldStopCombatFromEnding` is true, which `CombatManager.IsEnding` asks of every
+    /// hook listener once no primary enemy is left (CombatManager.cs:181-203,
+    /// Hook.cs:2586-2596).
     /// </summary>
     /// <remarks>
-    /// Two powers override that hook. `SteamEruptionPower`: the Waterfall Giant, which the
-    /// answer revives to blow. `AdaptablePower`: the Test Subject, which the answer puts on
-    /// RESPAWN_MOVE (AdaptablePower.cs; TestSubject.cs:166-171) -- marked here by
-    /// `Reviving`, so an answered subject is not answered again.
+    /// - `SteamEruptionPower`: the Waterfall Giant, which its death stands back up to blow.
+    /// - `AdaptablePower`: the Test Subject, which its death sends to RESPAWN_MOVE. The power
+    ///   vetoes both the removal and its own stripping, so it holds until the respawn.
+    /// - `SurprisePower` (SurprisePower.cs:40): the Gremlin Merc, whose death sends in a
+    ///   Sneaky and a Fat Gremlin.
+    /// - `InfestedPower` (InfestedPower.cs:37): the Phrog Parasite, whose death sends in four
+    ///   Wrigglers.
+    /// - `StockPower` (StockPower.cs:28): the Axebot, whose death builds a new one in its
+    ///   slot while stock is left.
+    ///
+    /// The last three veto neither the removal nor their own stripping, so in the game they
+    /// hold the fight only between the death and its answer. That window is where the
+    /// emulator's deferred death answer lives, and the answer ends the hold with it: the
+    /// power is gone from the corpse, or the creature is standing again.
+    /// </remarks>
+    private static bool HoldsTheFightOpen(EnemyState enemy) =>
+        BuffSystem.Has(enemy.Buffs, BuffId.SteamEruption)
+        || BuffSystem.Get(enemy.Buffs, BuffId.Adaptable) > 0
+        || BuffSystem.Get(enemy.Buffs, BuffId.Surprise) > 0
+        || BuffSystem.Get(enemy.Buffs, BuffId.Infested) > 0
+        || BuffSystem.Get(enemy.Buffs, BuffId.Stock) > 0;
+
+    /// <summary>
+    /// Whether this creature's death holds the fight open and has not been answered yet.
+    /// </summary>
+    /// <remarks>
+    /// An answer takes the power off the corpse or stands the creature back up. The one
+    /// power that stays on a corpse is the Test Subject's Adaptable, and `Reviving` marks
+    /// that answer.
     /// </remarks>
     private static bool DiedHoldingTheFightOpen(EnemyState enemy) =>
-        EnemyAI.DiedHoldingSteamEruption(enemy)
-        || (
-            enemy.Hp <= 0
-            && BuffSystem.Get(enemy.Buffs, BuffId.Adaptable) > 0
-            && BuffSystem.Get(enemy.Buffs, BuffId.Reviving) <= 0
-        );
+        enemy.Hp <= 0
+        && BuffSystem.Get(enemy.Buffs, BuffId.Reviving) <= 0
+        && HoldsTheFightOpen(enemy);
 
     /// <summary>
     /// Answers every death that holds the fight open and has not been answered yet: its
-    /// death hooks, then the power's own answer -- `TriggerAboutToBlowState` for the
-    /// Waterfall Giant, RESPAWN_MOVE for the Test Subject.
+    /// death hooks, then the power's own answer -- the Waterfall Giant's revive, the Test
+    /// Subject's RESPAWN_MOVE, the Gremlin Merc's reinforcements, the Phrog Parasite's
+    /// Wrigglers, the Axebot's replacement.
     /// </summary>
     /// <remarks>
     /// The game answers inside the death. The emulator answers a death after the action
-    /// that caused it, and some stretches kill with no check of their own -- a card's
-    /// after-play damage (Strangle, Panache), an exhaust answer under Charon's Ashes -- or
-    /// check only after the enemy phase, which is a phase too late for a creature killed as
-    /// the player's turn ends (the giant performs ABOUT_TO_BLOW, and the subject its
-    /// respawn, in the very next enemy phase). Left unanswered, either one holds the fight
-    /// open forever. So the engine calls this wherever a death must not wait: before the
+    /// that caused it, and the player's turn end answers its kills only after the enemy
+    /// phase -- a phase too late for these (the giant performs ABOUT_TO_BLOW, the subject
+    /// its respawn, and the merc's reinforcements and the Wrigglers their stunned first
+    /// turn, in the very next enemy phase). Left unanswered, a held-open death stalls the
+    /// fight. So the engine calls this wherever such a death must not wait: before the
     /// enemies act, as a poison tick kills the giant at the start of its turn, and before a
     /// step returns.
     ///
-    /// Only those deaths are handled here. `HandleEnemyDeaths` reads its snapshot for one
-    /// thing -- was the creature standing before -- so the snapshot marks them and nothing
-    /// else, and the corpse sweep is left to the call that owns the roster's snapshot.
+    /// It sweeps only the corpses it answered, leaving any other death to the check that
+    /// owns it.
     /// </remarks>
     private static void AnswerDeathsHoldingTheFightOpen(CombatState state, Random rng)
     {
-        Span<int> standingBefore = stackalloc int[state.Enemies.Count];
-        bool any = false;
-        for (int i = 0; i < state.Enemies.Count; i++)
+        List<EnemyState>? dead = null;
+        foreach (var enemy in state.Enemies)
         {
-            if (DiedHoldingTheFightOpen(state.Enemies[i]))
+            if (DiedHoldingTheFightOpen(enemy))
             {
-                standingBefore[i] = 1;
-                any = true;
+                (dead ??= []).Add(enemy);
             }
         }
 
-        if (any)
+        if (dead is not null)
         {
-            HandleEnemyDeaths(state, standingBefore, rng, removeCorpses: false);
+            AnswerDeaths(state, dead, rng, CorpseSweep.Answered);
         }
     }
 
     /// <summary>
-    /// The enemies standing now, held by reference: the "before" of a death check that
-    /// must survive the roster changing under it -- a nested check sweeping its corpses, a
-    /// summon joining -- before the check runs. A positional HP snapshot misreads both.
+    /// The combat as a stretch of the engine began, held by reference: the player's HP and
+    /// every enemy in the roster with its HP then. A stretch reads what it did against it
+    /// -- which enemies died during it -- however the roster changed meanwhile. A positional
+    /// snapshot misreads a corpse swept by a nested check or a summon inserted, and both
+    /// happen inside one action.
     /// </summary>
-    private static List<EnemyState> StandingEnemies(CombatState state) =>
-        state.Enemies.Where(enemy => enemy.Hp > 0).ToList();
+    private readonly struct Baseline
+    {
+        private readonly (EnemyState Enemy, int Hp)[] _roster;
+
+        public Baseline(CombatState state)
+        {
+            PlayerHp = state.PlayerHp;
+            _roster = new (EnemyState, int)[state.Enemies.Count];
+            for (int i = 0; i < _roster.Length; i++)
+            {
+                _roster[i] = (state.Enemies[i], state.Enemies[i].Hp);
+            }
+        }
+
+        public int PlayerHp { get; }
+
+        /// <summary>
+        /// Whether a death of <paramref name="enemy" /> is new since the baseline: it was
+        /// standing then, or it has joined the fight since.
+        /// </summary>
+        public bool CouldHaveDiedSince(EnemyState enemy)
+        {
+            foreach (var (was, hp) in _roster)
+            {
+                if (ReferenceEquals(was, enemy))
+                {
+                    return hp > 0;
+                }
+            }
+
+            return true;
+        }
+    }
 
     /// <summary>
-    /// Answers the death of every enemy in <paramref name="standing" /> that has fallen
-    /// since, through `HandleEnemyDeaths`: its death hooks, its revive, its removal.
+    /// Answers every death since <paramref name="baseline" />, through `AnswerDeaths`: its
+    /// death hooks, its revive or its spawns, its removal.
     /// </summary>
     /// <remarks>
     /// `CreatureCmd.Kill` answers a death the moment it happens (CreatureCmd.cs:489-567),
     /// and `ActionExecutor` checks the win condition after every action
-    /// (ActionExecutor.cs:160-171). The emulator answers a death after the action that
+    /// (ActionExecutor.cs:160-171). The emulator answers a death after the stretch that
     /// caused it, so every stretch of the engine that can kill needs a check of its own. A
-    /// potion, the start of the player's turn, the auto-play queue and a selection's answer
-    /// had none: a kill there fired no Gremlin Horn and left no corpse sweep, and a Test
-    /// Subject killed there sat at 0 HP holding the fight open with nothing to respawn it.
+    /// potion, the start of the player's turn, the auto-play queue, a selection's answer
+    /// and a card's after-play damage had none: a kill there fired no Gremlin Horn and left
+    /// no corpse sweep, a Test Subject killed there held the fight open with nothing to
+    /// respawn it, and a lone Gremlin Merc killed there ended the fight as won.
+    ///
+    /// A death already answered inside the stretch is not answered twice: a reviver is
+    /// marked `Reviving`, a creature that came back is standing, and a plain corpse has
+    /// been swept.
     /// </remarks>
-    private static void AnswerDeathsAmong(CombatState state, List<EnemyState> standing, Random rng)
+    /// <param name="countEscapes">
+    /// Whether an escape counts as a death. Only the enemy phase's check passes true, which
+    /// keeps what its old walk by position did: an escape is answered as a death there.
+    /// </param>
+    /// <param name="sweepAlways">Sweep the corpses even when nothing new died.</param>
+    private static void AnswerDeathsSince(
+        CombatState state,
+        in Baseline baseline,
+        Random rng,
+        bool countEscapes = false,
+        bool sweepAlways = false
+    )
     {
-        Span<int> standingBefore = stackalloc int[state.Enemies.Count];
-        bool any = false;
-        for (int i = 0; i < state.Enemies.Count; i++)
+        List<EnemyState>? dead = null;
+        foreach (var enemy in state.Enemies)
         {
-            var enemy = state.Enemies[i];
-            // A death already answered inside the stretch -- by a check of its own, as a
-            // resumed end of turn makes -- is not answered twice: a reviver is marked
-            // `Reviving`, and a plain corpse has been swept. An escape is no death.
             if (
                 enemy.Hp <= 0
                 && BuffSystem.Get(enemy.Buffs, BuffId.Reviving) <= 0
-                && !enemy.Escaped
-                && standing.Contains(enemy)
+                && (countEscapes || !enemy.Escaped)
+                && baseline.CouldHaveDiedSince(enemy)
             )
             {
-                standingBefore[i] = 1;
-                any = true;
+                (dead ??= []).Add(enemy);
             }
         }
 
-        if (any)
+        if (dead is not null || sweepAlways)
         {
-            HandleEnemyDeaths(state, standingBefore, rng);
+            AnswerDeaths(state, dead, rng, CorpseSweep.All);
         }
     }
 
@@ -3484,38 +3617,25 @@ public static class CombatEngine
         && BuffSystem.Get(enemy.Buffs, BuffId.Illusion) <= 0;
 
     /// <summary>
-    /// Whether the combat is won, which <c>CombatManager.IsEnding</c> decides by asking
-    /// whether any PRIMARY enemy is still alive.
+    /// Whether the fight is won: `CombatManager.IsEnding`, which asks whether any PRIMARY
+    /// enemy is still alive and, if none is, whether anything holds the fight open
+    /// (CombatManager.cs:181-203).
     /// </summary>
     /// <remarks>
     /// Counting every creature instead is wrong in both directions. A Fogmog's eye revives
     /// forever, so a fight it outlives could never be won; and a Gas Bomb left over after
-    /// the Living Fog dies would keep a finished fight running.
-    /// </remarks>
-    /// <summary>
-    /// Whether the fight is won. A creature at 0 HP normally is not in it any more — but
-    /// <c>AdaptablePower.ShouldStopCombatFromEnding</c> returns true, so a Test Subject
-    /// waiting out its respawn turn still is.
-    /// </summary>
-    /// <remarks>
-    /// Keyed on Adaptable rather than on Reviving, because Adaptable is the only power in
-    /// the set that overrides that hook: an Eye With Teeth mid-revive is not a primary
-    /// enemy at all, and a reattaching Decimillipede segment does NOT hold the fight open
-    /// — emptying all three inside one window is how that elite is won.
+    /// the Living Fog dies would keep a finished fight running. An Eye With Teeth mid-revive
+    /// is not a primary enemy at all, and a reattaching Decimillipede segment does NOT hold
+    /// the fight open -- emptying all three inside one window is how that elite is won.
     ///
-    /// `SteamEruptionPower.ShouldStopCombatFromEnding` is the other override: a Waterfall
-    /// Giant that has died holding the power is about to blow, not beaten. In the game it
-    /// is back at 999999999 HP before anything asks; here its death is answered after the
-    /// action that caused it, and until then this is what keeps the fight going.
+    /// What holds it open is `HoldsTheFightOpen`: five powers, on any creature in the
+    /// roster. Knowing only two of them, a lone Gremlin Merc, Phrog Parasite or Axebot
+    /// finished where no death check followed ended the fight as won, with its
+    /// reinforcements, Wrigglers or replacement never sent in.
     /// </remarks>
     private static bool NoPrimaryEnemyLeft(CombatState state) =>
         !state.Enemies.Any(enemy =>
-            IsPrimaryEnemy(enemy)
-            && (
-                enemy.Hp > 0
-                || BuffSystem.Get(enemy.Buffs, BuffId.Adaptable) > 0
-                || EnemyAI.DiedHoldingSteamEruption(enemy)
-            )
+            (IsPrimaryEnemy(enemy) && enemy.Hp > 0) || HoldsTheFightOpen(enemy)
         );
 
     /// <summary>
@@ -4686,10 +4806,10 @@ public static class CombatEngine
         {
             var next = state.AutoPlayQueue[0];
             state.AutoPlayQueue.RemoveAt(0);
-            var standing = StandingEnemies(state);
+            var beforePlay = new Baseline(state);
             AutoPlay(state, next, rng);
             // Answered inside the play, as the drain after an action does.
-            AnswerDeathsAmong(state, standing, rng);
+            AnswerDeathsSince(state, beforePlay, rng);
             if (PlayerIsDead(state) || NoPrimaryEnemyLeft(state))
             {
                 state.AutoPlayQueue.Clear();
