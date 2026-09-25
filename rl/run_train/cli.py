@@ -281,4 +281,4 @@ def _final_test(args: argparse.Namespace) -> int:
 
 
 def _run(args: argparse.Namespace) -> int:
-    return loop.run_detached(args.root.resolve())
+    return loop.run_detached(args.root.resolve(), export_dest=STRATEGY_MODEL_DIR)

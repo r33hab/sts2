@@ -269,11 +269,14 @@ class Loop:
         play: runner.Play | None = None,
         fit: Fit | None = None,
         eval_seeds: Sequence[str] | None = None,
+        export_dest: Path | None = None,
     ):
         self.root = Path(root)
         self.config = config
         self.play = play
         self.fit: Fit = fit or train.fit
+        # Where each new champion is copied for the coach; None (tests) never exports.
+        self.export_dest = None if export_dest is None else Path(export_dest)
         self.eval_seeds = (
             list(eval_seeds)
             if eval_seeds is not None
@@ -343,6 +346,8 @@ class Loop:
             "evaluate": self._evaluate,
             "promote": self._promote,
         }[phase](n)
+        if phase in ("generate", "promote"):
+            self._auto_export()
         return n, phase
 
     def run(self, last_generation: int | None = None) -> None:
@@ -351,6 +356,19 @@ class Loop:
             self.step()
         self._refresh()
         self.write_status("idle")
+
+    def _auto_export(self) -> None:
+        """Copy the champion to `export_dest`, so the coach always holds the current one.
+
+        It runs after a self-play (which may have measured the champion's own boss-kill
+        rate) and after a promotion. A failed copy is logged and never stops training.
+        """
+        if self.export_dest is None or self.champion()["generation"] is None:
+            return
+        try:
+            self.export(self.export_dest)
+        except Exception:  # an export problem must not stop the loop
+            log.exception("automatic export to %s failed", self.export_dest)
 
     # ---- the phases -------------------------------------------------------------------
 
@@ -911,7 +929,7 @@ def _stop(_signum: int, _frame: object) -> NoReturn:
     raise runner.Stopped("stopped by SIGTERM")
 
 
-def run_detached(root: Path) -> int:
+def run_detached(root: Path, export_dest: Path | None = None) -> int:
     """Run the loop in `root` until SIGTERM: the process `start` detaches (DESIGN.md 7).
 
     It writes `loop.pid`, nices itself so training runs at low priority (5.3; its workers
@@ -931,7 +949,7 @@ def run_detached(root: Path) -> int:
     if config is None:
         raise FileNotFoundError(f"{root / CONFIG} is missing: `start` writes it")
     os.nice(max(0, runner.WORKER_NICENESS - os.nice(0)))
-    loop = Loop(root, config)
+    loop = Loop(root, config, export_dest=export_dest)
     shards.write_atomic(root / PID, f"{os.getpid()}\n".encode())
     previous = signal.signal(signal.SIGTERM, _stop)
     log.info("the loop is running as pid %d in %s", os.getpid(), root)

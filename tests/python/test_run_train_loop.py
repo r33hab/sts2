@@ -256,6 +256,7 @@ class LoopTestCase(unittest.TestCase):
         strength: int = 3,
         root: Path | None = None,
         play=fake_play,
+        export_dest: Path | None = None,
     ) -> loop.Loop:
         return loop.Loop(
             root or self.root,
@@ -263,6 +264,7 @@ class LoopTestCase(unittest.TestCase):
             play=play,
             fit=functools.partial(fake_fit, strength=strength, calls=self.calls),
             eval_seeds=EVAL_SEEDS,
+            export_dest=export_dest,
         )
 
     def gen(self, n: int, root: Path | None = None) -> Path:
@@ -830,6 +832,38 @@ class ExportTests(LoopTestCase):
         with self.assertRaisesRegex(ValueError, "rules policy"):
             self.make_loop().export(dest)
         self.assertFalse((dest / "model.json").exists())
+
+    def test_the_loop_exports_the_champion_itself(self):
+        self.promote_a_real_checkpoint()
+        dest = self.tmp / "strategy"
+        self.make_loop(export_dest=dest)._auto_export()
+        self.assertEqual(self.read(dest / "model.json")["generation"], 2)
+
+    def test_no_export_folder_or_a_rules_champion_exports_nothing(self):
+        dest = self.tmp / "strategy"
+        self.make_loop(export_dest=dest)._auto_export()  # the rules are champion
+        self.assertFalse(dest.exists())
+        self.promote_a_real_checkpoint()
+        self.make_loop()._auto_export()  # no folder: tests and one-off loops never export
+        self.assertFalse(dest.exists())
+
+    def test_a_failed_export_is_logged_and_the_loop_goes_on(self):
+        self.promote_a_real_checkpoint()
+        blocker = self.tmp / "a-file"
+        blocker.write_text("not a folder")
+        with self.assertLogs("rl.run_train.loop", level="ERROR"):
+            self.make_loop(export_dest=blocker / "strategy")._auto_export()
+
+    def test_step_exports_after_self_play_and_after_promotion(self):
+        run = self.make_loop()
+        events: list[str] = []
+        run._auto_export = lambda: events.append("export")
+        for _ in range(4):  # the exports interleave with the phases: no comprehension
+            events.append(run.step()[1])  # noqa: PERF401
+        self.assertEqual(
+            events,
+            ["export", "generate", "train", "evaluate", "export", "promote"],
+        )
 
     def test_the_final_test_compares_the_champion_and_the_rules_on_seeds_both_completed(
         self,
