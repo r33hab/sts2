@@ -743,7 +743,7 @@ public static class CardEffects
                         CardSelectionKind.ExhaustFromHand,
                         state.Hand.Count,
                         def.Id,
-                        autoPick: CardSelectionRng(state, rng).Next(state.Hand.Count)
+                        autoPick: AutoPickFromHand(state, rng)
                     );
                 }
                 break;
@@ -773,7 +773,7 @@ public static class CardEffects
                         CardSelectionKind.ExhaustFromHandThenDraw,
                         state.Hand.Count,
                         def.Id,
-                        autoPick: CardSelectionRng(state, rng).Next(state.Hand.Count),
+                        autoPick: AutoPickFromHand(state, rng),
                         amount: upgraded ? 3 : 2
                     );
                 }
@@ -949,7 +949,7 @@ public static class CardEffects
                             CardSelectionKind.ExhaustFromHand,
                             state.Hand.Count,
                             def.Id,
-                            autoPick: CardSelectionRng(state, rng).Next(state.Hand.Count)
+                            autoPick: AutoPickFromHand(state, rng)
                         );
                     }
                     else
@@ -4551,6 +4551,22 @@ public static class CardEffects
         state.CardSelectionRng ?? rng;
 
     /// <summary>
+    /// The fallback pick for a hand-wide selection nobody can answer: one draw from the
+    /// selection stream over the hand, taken ONLY when the selection is about to resolve on
+    /// its own, which is exactly when `OpenCardSelection` sees `CombatState.AutoPlaying`.
+    /// </summary>
+    /// <remarks>
+    /// A pick the player makes (`CardSelectCmd.FromHand`) rolls nothing in the game. Passed
+    /// as a plain argument, this pick was drawn before the opener could see that the player
+    /// was about to choose. So every Brand, Burning Pact and upgraded True Grit the player
+    /// played drew one value nobody used, and every later reader of the stream drew one
+    /// place along: in the combat, and in the rest of the run, which the stream is synced
+    /// back to.
+    /// </remarks>
+    private static int AutoPickFromHand(CombatState state, Random rng) =>
+        state.AutoPlaying ? CardSelectionRng(state, rng).Next(state.Hand.Count) : 0;
+
+    /// <summary>
     /// The stream an effect draws from when it rolls up a NEW card — Stoke, Splash,
     /// Infernal Blade and Discovery all read Rng.CombatCardGeneration in the game, which
     /// is a different subsystem from the one that picks among existing cards.
@@ -4568,7 +4584,13 @@ public static class CardEffects
     /// </summary>
     internal static EnemyState? RandomLivingEnemy(CombatState state, Random? rng)
     {
-        var living = state.Enemies.Where(e => e.Hp > 0).ToList();
+        // A Waterfall Giant whose death is not answered yet counts. In the game it is back
+        // at 999999999 and hittable the moment it dies, so a later hit in the same card
+        // still rolls over it -- and `Rng.NextItem` draws even over one candidate, so
+        // leaving it out skipped draws the game makes.
+        var living = state
+            .Enemies.Where(e => e.Hp > 0 || EnemyAI.DiedHoldingSteamEruption(e))
+            .ToList();
         if (living.Count == 0)
         {
             return null;

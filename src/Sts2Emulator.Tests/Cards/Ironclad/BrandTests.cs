@@ -51,6 +51,52 @@ public class BrandTests
         Assert.Equal(2, fight.PlayerBuffAmount(BuffId.Strength));
     }
 
+    /// <summary>
+    /// `CardSelectCmd.FromHand` hands the choice to the player and rolls nothing, so a
+    /// Brand the player plays leaves `Rng.CombatCardSelection` where it was, through the
+    /// play and through the answer. It drew one value for a pick nobody used, which slid
+    /// every later reader of the stream one draw along.
+    /// </summary>
+    [Fact]
+    public void ThePlayersPickDrawsNothingFromTheSelectionStream()
+    {
+        var fight = Fight
+            .Hand(Card(IC.Brand), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .Energy(1)
+            .Enemy(hp: 40);
+        var selectionRng = new CountingRandom(11);
+        fight.State.CardSelectionRng = selectionRng;
+
+        fight.Play();
+        Assert.Equal(0, selectionRng.CallCount);
+
+        fight.Choose(1);
+        Assert.Equal(0, selectionRng.CallCount);
+    }
+
+    /// <summary>
+    /// Played by Havoc it resolves inside a play that cannot stop for a screen, so the
+    /// emulator still picks for the player there, off the selection stream: one draw, and
+    /// only there. (The game asks the player even then; AGENTS.md "Card Selection".)
+    /// </summary>
+    [Fact]
+    public void AnAutoPlayedBrandStillPicksOffTheSelectionStream()
+    {
+        var fight = Fight
+            .Hand(Card(IC.Havoc), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .Energy(1)
+            .Draw(Card(IC.Brand))
+            .Enemy(hp: 40);
+        var selectionRng = new CountingRandom(11);
+        fight.State.CardSelectionRng = selectionRng;
+
+        fight.Play();
+
+        Assert.Null(fight.Pending);
+        Assert.Equal(1, selectionRng.CallCount);
+        Assert.Single(fight.State.Hand);
+    }
+
     [Fact]
     public void AsksNothingWithAnEmptyHand()
     {

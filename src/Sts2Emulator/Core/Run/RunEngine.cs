@@ -36,32 +36,24 @@ public sealed class RunEngine
         // The Ironclad's StartingHp, and then Neow: `AncientEventModel.BeforeEventStarted`
         // sets a Neow run's current HP to 0 and heals it like any ancient, so it starts full
         // below WearyTraveler and on 64 from it.
-        State.PlayerMaxHp = 80;
+        State.PlayerMaxHp = RunConstants.StartingMaxHp;
         State.PlayerHp = 0;
         ApplyAncientHeal();
         State.Gold = 99;
         State.Floor = 1;
         State.Phase = RunPhase.Ancient;
         State.Deck = [];
-        foreach (int cardId in RunConstants.StarterDeckIds)
+        // `AscensionManager.ApplyEffectsTo` puts Ascender's Bane on the end of the deck
+        // from AscendersBane up; below it the starting deck is the character's own ten.
+        foreach (int cardId in RunConstants.StartingDeckIds(ascension))
         {
-            // `AscensionManager.ApplyEffectsTo` puts Ascender's Bane on the end of the deck
-            // from AscendersBane up; below it the starting deck is the character's own ten.
-            if (
-                cardId == RunConstants.CardAscendersBane
-                && !Ascension.Has(ascension, Ascension.AscendersBane)
-            )
-            {
-                continue;
-            }
-
             RunNonCombatEffects.AddCardToDeck(State, new CardInstance(cardId, Upgraded: false));
         }
 
         State.Relics = [new RelicInstance(RunConstants.RelicBurningBlood)];
         // `Player.CreateForNewRun` starts the belt at three slots, and
         // `AscensionManager.ApplyEffectsTo` takes one away under TightBelt.
-        State.MaxPotionSlots = Ascension.Has(ascension, Ascension.TightBelt) ? 2 : 3;
+        State.MaxPotionSlots = RunConstants.StartingPotionSlots(ascension);
         Array.Clear(State.PotionSlots);
         State.CurrentNodeType = RunConstants.NodeNormal;
         Array.Clear(State.NeowOptions);
@@ -1550,17 +1542,40 @@ public sealed class RunEngine
     /// and is topped up the same way: a capture crosses into act 2 on 264/280 and stands on
     /// Pael at 276.
     /// </remarks>
-    private void ApplyAncientHeal()
+    private void ApplyAncientHeal() =>
+        State.PlayerHp = HpAfterAncientHeal(
+            State.PlayerHp,
+            State.PlayerMaxHp,
+            State.AscensionLevel
+        );
+
+    /// <summary>
+    /// The HP a run stands on once Neow has healed it: <see cref="HpAfterAncientHeal" />
+    /// from zero, of <see cref="RunConstants.StartingMaxHp" />. 80 below WearyTraveler and
+    /// 64 from it.
+    /// </summary>
+    /// <remarks>
+    /// The combat API's synthetic start opens on this too, so a fight built without a run
+    /// stands where the run's first fight would.
+    /// </remarks>
+    public static int StartingHp(int ascension) =>
+        HpAfterAncientHeal(0, RunConstants.StartingMaxHp, ascension);
+
+    /// <summary>The rule <see cref="ApplyAncientHeal" /> applies, on plain numbers.</summary>
+    private static int HpAfterAncientHeal(int hp, int maxHp, int ascension)
     {
-        int missing = State.PlayerMaxHp - State.PlayerHp;
+        int missing = maxHp - hp;
         if (missing <= 0)
         {
-            return;
+            return hp;
         }
 
-        State.PlayerHp += Ascension.Has(State.AscensionLevel, Ascension.WearyTraveler)
-            ? (int)(missing * WearyTravelerHealFraction)
-            : missing;
+        return hp
+            + (
+                Ascension.Has(ascension, Ascension.WearyTraveler)
+                    ? (int)(missing * WearyTravelerHealFraction)
+                    : missing
+            );
     }
 
     /// <summary>What WearyTraveler leaves of an ancient's heal.</summary>

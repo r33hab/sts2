@@ -896,6 +896,38 @@ public static class RunConstants
             IC.AscendersBane,
         ];
 
+    /// <summary>`Ironclad.StartingHp`: the max HP a run starts on, at every level.</summary>
+    public const int StartingMaxHp = 80;
+
+    /// <summary>`Player.initialMaxPotionSlotCount`: the belt before any ascension touches it.</summary>
+    public const int InitialPotionSlots = 3;
+
+    /// <summary>
+    /// The deck a run starts with at <paramref name="ascension" />: the Ironclad's own ten,
+    /// and Ascender's Bane on the end from AscendersBane up, which is where
+    /// `AscensionManager.ApplyEffectsTo` adds it (`Deck.AddInternal(ascendersBane, -1)`).
+    /// </summary>
+    /// <remarks>
+    /// The run engine and the combat API's synthetic start both deal from here, so the two
+    /// cannot disagree about which levels carry the curse.
+    /// </remarks>
+    public static int[] StartingDeckIds(int ascension) =>
+        [
+            .. StarterDeckIds
+                .ToArray()
+                .Where(id =>
+                    id != CardAscendersBane || Ascension.Has(ascension, Ascension.AscendersBane)
+                ),
+        ];
+
+    /// <summary>
+    /// The potion slots a run starts with at <paramref name="ascension" />:
+    /// <see cref="InitialPotionSlots" />, less the one `AscensionManager.ApplyEffectsTo`
+    /// takes away from TightBelt up (`SubtractFromMaxPotionCount(1)`).
+    /// </summary>
+    public static int StartingPotionSlots(int ascension) =>
+        Ascension.Has(ascension, Ascension.TightBelt) ? InitialPotionSlots - 1 : InitialPotionSlots;
+
     public static ReadOnlySpan<int> NeowCurseOptions => [54, 111, 129, 134, 161, 205, 239, 240];
 
     /// <summary>

@@ -49,6 +49,18 @@ public static class EnemyAI
                 ? BuffSystem.Get(enemy.Buffs, BuffId.Vigor)
                 : 0;
 
+        // ABOUT_TO_BLOW_MOVE, the StunIntent a dead giant was forced onto: it deals nothing,
+        // so it returns the way a stunned turn does. Ahead of the stun check because it IS
+        // the stun -- `SetMoveImmediate(..., forceTransition: true)` put it over whatever
+        // move was up.
+        if (IsAboutToBlow(enemy))
+        {
+            PerformAboutToBlow(enemy);
+            enemy.MoveIndex++;
+            RestoreTemporaryEnemyStrength(enemy);
+            return;
+        }
+
         // Block is cleared for the whole side in `CombatEngine` before any creature acts,
         // not here: doing it per-creature let a later actor wipe block an earlier one had
         // GIVEN it -- the Guardbot's 15 on its Fabricator.
@@ -329,6 +341,14 @@ public static class EnemyAI
                     enemy.Hp = 0;
                 }
 
+                // EXPLODE_MOVE: the attack above, then `CreatureCmd.Kill(base.Creature)`. The
+                // Steam Eruption went at ABOUT_TO_BLOW, so nothing holds this death open and
+                // the giant leaves the fight for good.
+                if (IsExploding(enemy))
+                {
+                    enemy.Hp = 0;
+                }
+
                 if (enemy.DefId == KE.ThievingHopper && enemy.MoveIndex == 0)
                 {
                     StealDrawOrDiscardCard(state, rng, enemy);
@@ -541,12 +561,19 @@ public static class EnemyAI
                     AddStatus(state, ST.Wound, 3);
                 }
 
-                if (enemy.DefId == KE.WaterfallGiant && enemy.MoveIndex > 0)
+                // The ring's riders, and only the ring's: EXPLODE is a bare attack that banks
+                // no Steam and applies no Weak, and its index would read as a STOMP here.
+                bool inGiantRing =
+                    enemy.DefId == KE.WaterfallGiant
+                    && enemy.MoveIndex > 0
+                    && enemy.MoveIndex < WaterfallGiantAboutToBlowMove;
+
+                if (inGiantRing)
                 {
                     BuffSystem.Apply(enemy.Buffs, BuffId.SteamEruption, 3);
                 }
 
-                if (enemy.DefId == KE.WaterfallGiant && (enemy.MoveIndex - 1) % 5 == 0)
+                if (inGiantRing && (enemy.MoveIndex - 1) % 5 == 0)
                 {
                     BuffSystem.Apply(state.PlayerBuffs, BuffId.Weak, 1);
                 }
@@ -2802,6 +2829,22 @@ public static class EnemyAI
                 };
 
             case KE.WaterfallGiant:
+                // After its death, the two moves `TriggerAboutToBlowState` leads to. Neither
+                // is a branch, so neither draws. ABOUT_TO_BLOW has
+                // `MustPerformOnceBeforeTransitioning`, so a roll that finds it not yet
+                // performed stays on it -- its StunIntent, read out as Unknown here.
+                if (IsAboutToBlow(enemy))
+                {
+                    return new Intent(IntentType.Unknown, 0);
+                }
+
+                // EXPLODE_MOVE's `DeathBlowIntent(() => SteamEruptionDamage)`: ABOUT_TO_BLOW
+                // recorded the amount onto the intent, which is where it stays.
+                if (IsExploding(enemy))
+                {
+                    return enemy.CurrentIntent;
+                }
+
                 // PRESSURIZE once, then the five-move ring STOMP, RAM, SIPHON,
                 // PRESSURE_GUN, PRESSURE_UP — PRESSURE_UP's FollowUpState is STOMP, so
                 // the ring never returns to PRESSURIZE.
@@ -4762,6 +4805,90 @@ public static class EnemyAI
 
     /// <summary>WaterfallGiant.PressureGunIncrease: what each firing adds.</summary>
     private const int PressureGunIncrease = 5;
+
+    /// <summary>
+    /// Where ABOUT_TO_BLOW_MOVE sits in the giant's move numbering. Parked far above the
+    /// PRESSURIZE-then-ring count, which rises by one a turn, the way BEAST_CRY's loop is
+    /// parked at <see cref="BeastCryLoopBase" />. EXPLODE_MOVE is the next number up.
+    /// </summary>
+    private const int WaterfallGiantAboutToBlowMove = 1000;
+
+    /// <summary>EXPLODE_MOVE: ABOUT_TO_BLOW's FollowUpState, and its own.</summary>
+    private const int WaterfallGiantExplodeMove = WaterfallGiantAboutToBlowMove + 1;
+
+    /// <summary>`TriggerAboutToBlowState`: `SetMaxAndCurrentHp(Creature, 999999999m)`.</summary>
+    private const int WaterfallGiantAboutToBlowHp = 999_999_999;
+
+    private static bool IsAboutToBlow(EnemyState enemy) =>
+        enemy.DefId == KE.WaterfallGiant && enemy.MoveIndex == WaterfallGiantAboutToBlowMove;
+
+    private static bool IsExploding(EnemyState enemy) =>
+        enemy.DefId == KE.WaterfallGiant && enemy.MoveIndex >= WaterfallGiantExplodeMove;
+
+    /// <summary>
+    /// A Waterfall Giant that has died holding Steam Eruption and not yet been answered
+    /// for it. `SteamEruptionPower.ShouldStopCombatFromEnding` holds the fight open for it,
+    /// and <see cref="TriggerAboutToBlow" /> is the answer.
+    /// </summary>
+    /// <remarks>
+    /// The game answers inside the death itself, so this never lasts there. The emulator
+    /// handles a death after the action that caused it, which leaves a window; the engine
+    /// closes it before the enemies act and before the step returns.
+    /// </remarks>
+    internal static bool DiedHoldingSteamEruption(EnemyState enemy) =>
+        enemy.DefId == KE.WaterfallGiant
+        && enemy.Hp <= 0
+        && BuffSystem.Has(enemy.Buffs, BuffId.SteamEruption);
+
+    /// <summary>
+    /// <c>SteamEruptionPower.AfterDeath</c>, which calls
+    /// <c>WaterfallGiant.TriggerAboutToBlowState</c>: the giant is not finished when it dies
+    /// holding Steam Eruption. It stays in the fight (the power vetoes its removal), is set
+    /// back to 999999999 HP, and is forced onto ABOUT_TO_BLOW.
+    /// </summary>
+    /// <remarks>
+    /// <c>Creature.RemoveAllPowersAfterDeath</c> then strips every power the death does
+    /// not spare, and Steam Eruption is the one that spares itself
+    /// (<c>ShouldPowerBeRemovedAfterOwnerDeath</c> is false). So a Weak or a Vulnerable
+    /// put on the giant before it died is gone, and cannot soften the explosion.
+    ///
+    /// No stream is read: the HP is set, not rolled, and the forced move is not a branch.
+    /// </remarks>
+    /// <returns>Whether this was such a death.</returns>
+    internal static bool TriggerAboutToBlow(EnemyState enemy)
+    {
+        if (!DiedHoldingSteamEruption(enemy))
+        {
+            return false;
+        }
+
+        enemy.Buffs.RemoveAll(buff => buff.Id != BuffId.SteamEruption);
+        enemy.MaxHp = WaterfallGiantAboutToBlowHp;
+        enemy.Hp = WaterfallGiantAboutToBlowHp;
+        enemy.MoveIndex = WaterfallGiantAboutToBlowMove;
+        // `SetMoveImmediate` refreshes the readout at once: the StunIntent, not whatever the
+        // giant had announced before it died.
+        enemy.CurrentIntent = new Intent(IntentType.Unknown, 0);
+        enemy.SecondaryIntent = null;
+        return true;
+    }
+
+    /// <summary>
+    /// ABOUT_TO_BLOW_MOVE: <c>SteamEruptionDamage = GetPowerAmount&lt;SteamEruptionPower&gt;()</c>,
+    /// then <c>PowerCmd.Remove&lt;SteamEruptionPower&gt;</c>.
+    /// </summary>
+    /// <remarks>
+    /// The recorded amount is what EXPLODE's <c>DeathBlowIntent</c> announces and what it
+    /// swings for, and the power it came from is gone -- so the intent is where it is kept,
+    /// which clones and snapshots already carry. The emulator reads a death blow out as an
+    /// Attack, as `CardEffects.IntendsToAttack` already assumes.
+    /// </remarks>
+    private static void PerformAboutToBlow(EnemyState enemy)
+    {
+        int eruption = BuffSystem.Get(enemy.Buffs, BuffId.SteamEruption);
+        BuffSystem.Remove(enemy.Buffs, BuffId.SteamEruption);
+        enemy.CurrentIntent = new Intent(IntentType.Attack, eruption);
+    }
 
     private static void AddStatus(CombatState state, int cardId, int count)
     {
