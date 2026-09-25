@@ -6,6 +6,7 @@ worker can import it. Engine-backed runs play at 3 simulations, at A9.
 
 import contextlib
 import json
+import logging
 import multiprocessing
 import os
 import signal
@@ -157,6 +158,35 @@ def generate_then_exit(out_dir: str, n_runs: int, policy_spec: dict, size: int) 
         sys.exit(3)
 
 
+def hang_forever_play(task, on_fight) -> dict:
+    """Leave a marker naming the worker, then hang like a native step that never returns.
+
+    Raises:
+        RuntimeError: On the first attempt at the seed named in `raise_seed`.
+
+    """
+    markers = Path(task.policy_spec["markers"])
+    if task.seed == task.policy_spec.get("raise_seed") and _first_attempt(
+        markers / f"{task.seed}.raised",
+    ):
+        raise RuntimeError("a first failure")
+    (markers / f"{task.seed}.{os.getpid()}").touch()
+    time.sleep(600)
+    return {}
+
+
+def generate_forever(out_dir: str, policy_spec: dict) -> None:
+    """Run in a child process: a generation whose runs never finish."""
+    logging.getLogger(LOGGER).addHandler(logging.NullHandler())  # its retry warning
+    runner.generate(4, 2, policy_spec, Path(out_dir), play=hang_forever_play)
+
+
+def generate_niced(out_dir: str) -> None:
+    """Run in a child process that is itself niced, as the generation loop is."""
+    os.nice(10)
+    runner.generate(2, 1, {"kind": "rules"}, Path(out_dir), play=quick_play)
+
+
 # --------------------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------------------
@@ -195,6 +225,12 @@ def quiet_stderr() -> Iterator[None]:
         os.close(saved)
 
 
+def worker_pids(markers: Path) -> set[int]:
+    """Return the pids named by `hang_forever_play`'s markers (`<seed>.<pid>`)."""
+    names = [path.name.split(".") for path in markers.iterdir()]
+    return {int(name[1]) for name in names if name[1].isdigit()}
+
+
 def wait_for(predicate, timeout: float = 60.0) -> None:
     deadline = time.monotonic() + timeout
     while not predicate():
@@ -206,11 +242,9 @@ def wait_for(predicate, timeout: float = 60.0) -> None:
 class RunnerTestCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)  # last: after any cleanup a test adds
         self.root = Path(self.tmp.name)
         self.gen = self.root / "gen_0003"
-
-    def tearDown(self):
-        self.tmp.cleanup()
 
     def markers(self) -> Path:
         path = self.root / "markers"
@@ -261,14 +295,43 @@ class GenerateTests(RunnerTestCase):
         self.assertEqual(again, paths)
 
     def test_workers_are_niced_and_report_fights(self):
-        runner.generate(4, 2, {"kind": "rules"}, self.gen, play=quick_play)
+        seen: list[dict] = []
+        runner.generate(
+            4,
+            2,
+            {"kind": "rules"},
+            self.gen,
+            play=quick_play,
+            on_record=seen.append,
+        )
         records = [
             record
             for path in shards.shard_paths(self.gen / "shards")
             for record in shards.read_shard(path)
         ]
         parent = os.nice(0)
-        self.assertTrue(all(r["niceness"] >= min(19, parent + 10) for r in records))
+        self.assertTrue(all(r["niceness"] == max(10, parent) for r in records))
+        # Each completed record is handed to the caller once, as it lands.
+        self.assertEqual(
+            sorted(r["seed"] for r in seen),
+            sorted(r["seed"] for r in records),
+        )
+
+    def test_workers_run_at_nice_10_under_a_parent_that_is_niced_itself(self):
+        # The generation loop nices itself to train at low priority; its workers stay at
+        # 10 rather than stacking another 10 on top.
+        ctx = multiprocessing.get_context("spawn")
+        child = ctx.Process(target=generate_niced, args=(str(self.gen),))
+        child.start()
+        child.join(60)
+        self.assertEqual(child.exitcode, 0)
+        records = [
+            record
+            for path in shards.shard_paths(self.gen / "shards")
+            for record in shards.read_shard(path)
+        ]
+        self.assertEqual(len(records), 2)
+        self.assertTrue(all(r["niceness"] == max(10, os.nice(0) + 10) for r in records))
 
     def test_a_policy_that_raises_once_is_retried_and_every_seed_lands_once(self):
         spec = {"kind": "rules", "markers": str(self.markers())}
@@ -295,6 +358,8 @@ class GenerateTests(RunnerTestCase):
         self.assertTrue(
             all("a policy that raises once" in r["detail"] for r in retries),
         )
+        # Each first failure is also appended to the generation's retries.jsonl.
+        self.assertEqual(shards.read_jsonl(self.gen / "retries.jsonl"), retries)
         self.assertEqual(manifest["runner"]["worker_restarts"], 0)
         self.assertEqual(sum("retrying" in line for line in logs.output), 4)
         # The retry replays the same run: a run is a function of its seed (5.10).
@@ -338,6 +403,8 @@ class GenerateTests(RunnerTestCase):
             (retry[0]["seed"], retry[0]["exit_code"], retry[0]["encounter"]),
             (abort, -signal.SIGABRT, first_fight[0]["encounter"]),
         )
+        # The first failure is in retries.jsonl; the second is the quarantine line.
+        self.assertEqual(shards.read_jsonl(self.gen / "retries.jsonl"), retry)
         self.assertTrue(any("quarantined" in line for line in logs.output))
 
     def test_a_worker_hung_past_the_seed_timeout_is_killed_retried_then_quarantined(
@@ -423,6 +490,38 @@ class GenerateTests(RunnerTestCase):
         self.assertEqual(shards.read_jsonl(self.gen / "quarantine.jsonl"), [])
 
 
+class JobConfigTests(unittest.TestCase):
+    def test_a_config_no_job_could_run_with_is_refused(self):
+        for name, make in (
+            ("workers", lambda: runner.JobConfig(workers=0)),
+            ("seed_timeout", lambda: runner.JobConfig(seed_timeout=0.0)),
+            ("seed_timeout", lambda: runner.JobConfig(seed_timeout=-5.0)),
+            ("run_step_cap", lambda: runner.JobConfig(run_step_cap=0)),
+        ):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, name):
+                make()
+        runner.JobConfig(
+            workers=1,
+            seed_timeout=0.1,
+            run_step_cap=1,
+        )  # the least that runs
+
+    def test_a_config_round_trips_through_its_json(self):
+        config = runner.JobConfig(
+            workers=3,
+            combat_budget=CombatBudget(60, 250),
+            ascension=A9,
+            ascension_stands_in_for=10,
+            W=30.0,
+            seed_timeout=90.0,
+        )
+        self.assertEqual(runner.JobConfig.from_json(config.to_json()), config)
+        self.assertEqual(
+            runner.JobConfig.from_json(runner.JobConfig().to_json()),
+            runner.JobConfig(),
+        )
+
+
 class ResumeTests(RunnerTestCase):
     def start_child(self, n_runs: int, spec: dict, size: int):
         ctx = multiprocessing.get_context("spawn")
@@ -432,6 +531,65 @@ class ResumeTests(RunnerTestCase):
         )
         child.start()
         return child
+
+    def start_hanging_generation(self, spec: dict):
+        """Start a generation whose runs hang; whatever happens, end it and its workers."""
+        ctx = multiprocessing.get_context("spawn")
+        child = ctx.Process(target=generate_forever, args=(str(self.gen), spec))
+        child.start()
+
+        def end_everything() -> None:
+            child.kill()
+            child.join()
+            for pid in worker_pids(Path(spec["markers"])):
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(pid, signal.SIGKILL)
+
+        self.addCleanup(end_everything)
+        return child
+
+    def test_a_worker_exits_when_its_parent_dies(self):
+        # The orphan watchdog: a worker hung in a run never holds a core after the
+        # process that started it is killed outright.
+        markers = self.markers()
+        child = self.start_hanging_generation(
+            {"kind": "rules", "markers": str(markers)},
+        )
+        wait_for(lambda: len(list(markers.iterdir())) >= 2)
+        pids = worker_pids(markers)
+        self.assertEqual(len(pids), 2)
+        child.kill()  # SIGKILL: no shutdown, no chance to end the workers
+        child.join()
+
+        def all_gone() -> bool:
+            for pid in pids:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    continue
+                return False
+            return True
+
+        wait_for(all_gone, timeout=15)
+
+    def test_a_first_failure_is_on_disk_before_the_job_ends(self):
+        # retries.jsonl is appended as each failure happens, so a parent that dies
+        # before writing its manifest still leaves the trace of a recovered crash.
+        markers = self.markers()
+        spec = {"kind": "rules", "markers": str(markers), "raise_seed": "T0003R0001"}
+        child = self.start_hanging_generation(spec)
+        retries = self.gen / "retries.jsonl"
+        wait_for(lambda: bool(shards.read_jsonl(retries)))
+        wait_for(lambda: len(worker_pids(markers)) >= 2)
+        child.kill()
+        child.join()
+        self.assertFalse((self.gen / "manifest.json").exists())
+        [line] = shards.read_jsonl(retries)
+        self.assertEqual(
+            (line["seed"], line["status"], line["reason"]),
+            ("T0003R0001", "error", "exception"),
+        )
+        self.assertIn("a first failure", line["detail"])
 
     def assert_every_seed_exactly_once(self, n_runs: int) -> None:
         seeds = shard_seeds(self.gen)

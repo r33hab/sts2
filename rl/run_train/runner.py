@@ -1,8 +1,8 @@
 """The worker process model (DESIGN.md 5.8): every multi-process job runs through here.
 
 Self-play generations, evaluations, the final test and the budget check all hand their
-seeds to `run_seeds`. It starts `workers` processes from a `spawn` context; each calls
-`os.nice(10)` and loads its own native library, since the emulator is not thread-safe.
+seeds to `run_seeds`. It starts `workers` processes from a `spawn` context; each runs at
+nice 10 and loads its own native library, since the emulator is not thread-safe.
 
 - **One seed at a time, over a private pipe.** Each worker has its own `Pipe`, and there is
   no shared queue: a worker killed while it held a shared queue's lock would wedge the
@@ -19,10 +19,13 @@ seeds to `run_seeds`. It starts `workers` processes from a `spawn` context; each
   `exitcode == -6`. A worker still busy with one seed after `seed_timeout` seconds is
   killed (erratum O5). A Python exception comes back over the pipe and the worker carries
   on. Whatever the failure, the seed is retried once and quarantined on a second failure,
-  with the exit code and the last fight the worker reported. A worker that dies before it
-  is ready never ran its seed, so the seed is not charged; when workers keep dying that
-  way (the play function cannot be loaded, say), the job fails instead of quarantining
-  every seed.
+  with the exit code and the last fight the worker reported. A generation appends every
+  first failure to `retries.jsonl` as it happens, and every second one to
+  `quarantine.jsonl`. A worker that dies before it is ready never ran its seed, so the
+  seed is not charged; when workers keep dying that way (the play function cannot be
+  loaded, say), the job fails instead of quarantining every seed.
+- **Orphans.** A worker exits once its parent is gone, so a worker hung in a run never
+  holds a core after the parent is killed outright.
 - **Stopping.** SIGTERM to the parent: it stops dispatching, terminates the workers
   (SIGTERM, then SIGKILL after 10 s), flushes the completed records, and raises `Stopped`.
 """
@@ -76,6 +79,12 @@ DEFAULT_BUDGET = CombatBudget(120, 500)
 # What reading a pipe raises once the process at the other end is gone: end-of-file, or
 # a reset when it died with a message it never read.
 _PIPE_GONE = (EOFError, OSError)
+# Workers run at this niceness or above (DESIGN.md 5.8), whatever their parent's: the
+# generation loop nices itself to train, and its workers do not stack another 10 on it.
+WORKER_NICENESS = 10
+# How often a worker checks that its parent is still alive.
+_ORPHAN_POLL_SECONDS = 1.0
+_RETRIES = "retries.jsonl"
 
 
 class Stopped(Exception):  # noqa: N818 -- a stop the operator asked for, not an error
@@ -102,6 +111,34 @@ class JobConfig:
     seed_timeout: float = 600.0  # erratum O5
     shard_size: int = 25
     run_step_cap: int = 6_000
+
+    def __post_init__(self) -> None:
+        if self.workers < 1:
+            raise ValueError(f"workers must be at least 1, not {self.workers}")
+        if not self.seed_timeout > 0:
+            raise ValueError(f"seed_timeout must be positive, not {self.seed_timeout}")
+        if self.run_step_cap < 1:
+            raise ValueError(
+                f"run_step_cap must be at least 1, not {self.run_step_cap}",
+            )
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> JobConfig:
+        stands_in_for = data["ascension_stands_in_for"]
+        return cls(
+            workers=int(data["workers"]),
+            combat_budget=CombatBudget.parse(str(data["combat_budget"])),
+            ascension=int(data["ascension"]),
+            ascension_stands_in_for=(
+                None if stands_in_for is None else int(stands_in_for)
+            ),
+            W=float(data["W"]),
+            c=float(data["c"]),
+            crn_fraction=float(data["crn_fraction"]),
+            seed_timeout=float(data["seed_timeout"]),
+            shard_size=int(data["shard_size"]),
+            run_step_cap=int(data["run_step_cap"]),
+        )
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -191,10 +228,27 @@ Play = Callable[[Task, Callable[[int], None]], shards.RunRecord]
 # --------------------------------------------------------------------------------------
 
 
+def _exit_when_orphaned(parent: int) -> None:
+    """Exit the worker once `parent` is gone (the worker is reparented).
+
+    It runs on its own thread, so it fires while the main thread is stuck in a native
+    step: ctypes releases the GIL around a foreign call.
+    """
+    while os.getppid() == parent:
+        time.sleep(_ORPHAN_POLL_SECONDS)
+    os._exit(1)
+
+
 def _worker_main(conn: connection.Connection, play: Play) -> None:
     """Take one task at a time from the pipe until told to stop or the parent is gone."""
     signal.signal(signal.SIGINT, signal.SIG_IGN)  # Ctrl-C is the parent's to handle
-    os.nice(10)
+    os.nice(max(0, WORKER_NICENESS - os.nice(0)))
+    threading.Thread(
+        target=_exit_when_orphaned,
+        args=(os.getppid(),),
+        name="orphan-watchdog",
+        daemon=True,
+    ).start()
     try:
         conn.send(("ready", None, os.getpid()))
     except OSError:  # BrokenPipeError: the parent is gone
@@ -306,14 +360,16 @@ def run_seeds(
     *,
     on_done: Callable[[str, shards.RunRecord], None],
     on_quarantine: Callable[[Failure], None],
+    on_retry: Callable[[Failure], None] | None = None,
     generation: int | None = None,
     play: Play | None = None,
 ) -> JobStats:
     """Play every seed once on `config.workers` processes (DESIGN.md 5.8).
 
     Each seed ends in exactly one call: `on_done(seed, record)` when it completes, or
-    `on_quarantine(failure)` after its second failure. `play(task, report_fight)` is the
-    per-seed function a worker runs: `selfplay.play_task` unless a test swaps it.
+    `on_quarantine(failure)` after its second failure. `on_retry(failure)` is called for
+    each first failure, as it happens. `play(task, report_fight)` is the per-seed function
+    a worker runs: `selfplay.play_task` unless a test swaps it.
 
     A lookahead spec is played with the job's W (`playing_spec`), and one naming another
     W raises `ValueError` before any seed runs.
@@ -347,6 +403,8 @@ def run_seeds(
         if failures[failure.seed] < 2:
             stats.retried += 1
             stats.retries.append(failure.to_json())
+            if on_retry is not None:
+                on_retry(failure)
             log.warning(
                 "%s: %s (%s, exit code %s, last encounter %s); retrying once",
                 failure.seed,
@@ -528,12 +586,15 @@ def generate(
     generation: int | None = None,
     config: JobConfig | None = None,
     play: Play | None = None,
+    on_record: Callable[[shards.RunRecord], None] | None = None,
 ) -> list[Path]:
     """Play generation `out_dir` (`gen_NNNN`) of self-play and return its shards (5.7).
 
     A generation with a `manifest.json` is complete and is not played again. Otherwise
     temp files are deleted, the runs the shards hold are kept, and only the seeds that no
     shard and no `quarantine.jsonl` line lists are played. The manifest is written last.
+    Every first failure is appended to `retries.jsonl` as it happens, and `on_record` is
+    handed each record as it completes.
 
     Raises:
         ValueError: If `generation` is not given and `out_dir` is not named `gen_NNNN`.
@@ -579,6 +640,8 @@ def generate(
     def keep(seed: str, record: shards.RunRecord) -> None:
         done.add(seed)
         writer.add(record)
+        if on_record is not None:
+            on_record(record)
 
     try:
         stats = run_seeds(
@@ -588,6 +651,10 @@ def generate(
             on_done=keep,
             on_quarantine=lambda failure: shards.append_jsonl(
                 quarantine_path,
+                failure.to_json(),
+            ),
+            on_retry=lambda failure: shards.append_jsonl(
+                out_dir / _RETRIES,
                 failure.to_json(),
             ),
             generation=generation,
