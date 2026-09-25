@@ -85,6 +85,14 @@ public static class CombatEngine
         // after: Knife Trap aims its Shivs, and the next Hellraiser must roll its own.
         state.AutoPlayTargetIndex = -1;
 
+        // A giant killed where no death check followed -- an auto-play, the start of the
+        // turn -- is back and about to blow before the agent sees the state, as it is in
+        // the game the moment it dies.
+        if (!result.Terminal)
+        {
+            AnswerSteamEruptionDeaths(state, rng);
+        }
+
         return result;
     }
 
@@ -1042,6 +1050,12 @@ public static class CombatEngine
             return new StepResult(Terminal: true, PlayerWon: false, Reward: -1f);
         }
 
+        // A giant the player's turn end killed -- The Bomb, Stone Calendar, an orb -- was
+        // back and about to blow the moment it died, so ABOUT_TO_BLOW is the move it takes
+        // in the enemy phase below. Left for the end-of-phase death check, it would sit
+        // that phase out as a corpse and blow a round late.
+        AnswerSteamEruptionDeaths(state, rng);
+
         // `OblivionPower.AfterSideTurnEnd` removes itself when the PLAYER's side turn ends
         // -- not its owner's, which is the enemy's. Removed after the Doom it spent the
         // turn stacking has been paid, so the last card played still counts.
@@ -1157,6 +1171,14 @@ public static class CombatEngine
                         {
                             BuffSystem.Apply(enemy.Buffs, BuffId.Poison, -1);
                         }
+                    }
+
+                    // A giant the poison kills holding Steam Eruption is not out of this
+                    // phase: the poison ticks as the side's turn STARTS, before anyone acts,
+                    // so the forced ABOUT_TO_BLOW is the move it takes now.
+                    if (enemy.Hp <= 0 && EnemyAI.DiedHoldingSteamEruption(enemy))
+                    {
+                        AnswerSteamEruptionDeaths(state, rng);
                     }
 
                     if (enemy.Hp <= 0)
@@ -3060,7 +3082,8 @@ public static class CombatEngine
     private static void HandleEnemyDeaths(
         CombatState state,
         ReadOnlySpan<int> enemyHpsBefore,
-        Random rng
+        Random rng,
+        bool removeCorpses = true
     )
     {
         for (int i = 0; i < state.Enemies.Count && i < enemyHpsBefore.Length; i++)
@@ -3211,6 +3234,14 @@ public static class CombatEngine
                 enemy.CurrentIntent = new Intent(IntentType.Unknown, 0);
                 enemy.SecondaryIntent = null;
             }
+
+            // `SteamEruptionPower.AfterDeath` -> `TriggerAboutToBlowState`. Not in the
+            // revive chain above, because this death is a REAL one: `Hook.AfterDeath` runs
+            // with `wasRemovalPrevented: false`, so every death hook here has fired for it
+            // -- Gremlin Horn and Melancholy included -- and the power's own AfterDeath is
+            // simply one more listener. The corpse sweep below keeps the giant, which is
+            // standing again.
+            EnemyAI.TriggerAboutToBlow(state.Enemies[i]);
         }
 
         // MIRROR THE GAME: a creature that died leaves the roster unless a power vetoes.
@@ -3221,8 +3252,50 @@ public static class CombatEngine
         // enemy that was attacking it.
         //
         // Done AFTER the loop above, which walks by index against `enemyHpsBefore` and
-        // would lose its correlation if the list shrank underneath it.
-        state.Enemies.RemoveAll(enemy => enemy.Hp <= 0 && EnemyAI.ShouldRemoveOnDeath(enemy));
+        // would lose its correlation if the list shrank underneath it -- and skipped when
+        // this is answering one death early (`AnswerSteamEruptionDeaths`), because a later
+        // call is still to walk the same roster against its own snapshot.
+        if (removeCorpses)
+        {
+            state.Enemies.RemoveAll(enemy => enemy.Hp <= 0 && EnemyAI.ShouldRemoveOnDeath(enemy));
+        }
+    }
+
+    /// <summary>
+    /// Answers the death of any Waterfall Giant that died holding Steam Eruption and has
+    /// not been answered yet: its death hooks, then `TriggerAboutToBlowState`.
+    /// </summary>
+    /// <remarks>
+    /// The game answers inside the death. The emulator answers a death after the action
+    /// that caused it, and some actions never check at all -- an auto-play, the start of the
+    /// player's turn -- or check only after the enemy phase, which is a phase too late for
+    /// a giant killed as the player's turn ends (it performs ABOUT_TO_BLOW in the very
+    /// next enemy phase). So the engine calls this wherever a death must not wait: before
+    /// the enemies act, as a poison tick kills the giant at the start of its turn, and
+    /// before a step returns.
+    ///
+    /// Only the giant's death is handled here. `HandleEnemyDeaths` reads its snapshot for
+    /// one thing -- was the creature standing before -- so the snapshot marks the giant and
+    /// nothing else, and the corpse sweep is left to the call that owns the roster's
+    /// snapshot.
+    /// </remarks>
+    private static void AnswerSteamEruptionDeaths(CombatState state, Random rng)
+    {
+        Span<int> standingBefore = stackalloc int[state.Enemies.Count];
+        bool any = false;
+        for (int i = 0; i < state.Enemies.Count; i++)
+        {
+            if (EnemyAI.DiedHoldingSteamEruption(state.Enemies[i]))
+            {
+                standingBefore[i] = 1;
+                any = true;
+            }
+        }
+
+        if (any)
+        {
+            HandleEnemyDeaths(state, standingBefore, rng, removeCorpses: false);
+        }
     }
 
     /// <summary>
@@ -3254,11 +3327,20 @@ public static class CombatEngine
     /// the set that overrides that hook: an Eye With Teeth mid-revive is not a primary
     /// enemy at all, and a reattaching Decimillipede segment does NOT hold the fight open
     /// — emptying all three inside one window is how that elite is won.
+    ///
+    /// `SteamEruptionPower.ShouldStopCombatFromEnding` is the other override: a Waterfall
+    /// Giant that has died holding the power is about to blow, not beaten. In the game it
+    /// is back at 999999999 HP before anything asks; here its death is answered after the
+    /// action that caused it, and until then this is what keeps the fight going.
     /// </remarks>
     private static bool NoPrimaryEnemyLeft(CombatState state) =>
         !state.Enemies.Any(enemy =>
             IsPrimaryEnemy(enemy)
-            && (enemy.Hp > 0 || BuffSystem.Get(enemy.Buffs, BuffId.Adaptable) > 0)
+            && (
+                enemy.Hp > 0
+                || BuffSystem.Get(enemy.Buffs, BuffId.Adaptable) > 0
+                || EnemyAI.DiedHoldingSteamEruption(enemy)
+            )
         );
 
     /// <summary>
