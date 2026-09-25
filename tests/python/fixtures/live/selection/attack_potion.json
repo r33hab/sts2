@@ -150,6 +150,7 @@
     "source_card": null,
     "source_potion": "ATTACK_POTION",
     "source_relic": null,
+    "played_card": null,
     "candidates": [
       {
         "id": "BLUDGEON",

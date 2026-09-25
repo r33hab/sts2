@@ -2097,7 +2097,7 @@ class EndToEndLoadTests(unittest.TestCase):
         defaults = loader_defaults()
         paths = sorted(FIXTURES.rglob("*.json"))
         # Tasks 1 and 2's area fixtures and Task 3's selections.
-        self.assertGreaterEqual(len(paths), 23)
+        self.assertGreaterEqual(len(paths), 26)
         for path in paths:
             live_doc = loadable(json.loads(path.read_text(encoding="utf-8")))
             doc = convert.convert(live_doc).doc
@@ -2113,8 +2113,15 @@ class EndToEndLoadTests(unittest.TestCase):
         defaults = loader_defaults()
         doc = convert.convert(load("selection/headbutt")).doc
         exported = round_trip(doc, 1)
+
+        def swap_two_discards(d: dict[str, Any]) -> None:
+            # The discard pile is in pile order, which the comparison must keep.
+            discard = d["piles"]["discard"]
+            discard[0], discard[1] = discard[1], discard[0]
+
         for change in (
             lambda d: d["piles"]["discard"][-1].update(upgraded=True),
+            swap_two_discards,
             lambda d: d["piles"]["draw"]["unordered"].pop(),
             lambda d: d["pending_selection"].update(candidates=[0, 1]),
             lambda d: d["counters"].update(cards_played_this_turn=0),
@@ -2143,10 +2150,12 @@ class CliTests(unittest.TestCase):
         return status, out.getvalue(), err.getvalue()
 
     def test_the_document_on_stdout_and_the_warnings_on_stderr(self) -> None:
-        result = convert.convert(load("selection/headbutt"))
-        status, out, err = self.run_cli(str(FIXTURES / "selection" / "headbutt.json"))
+        # Toolbox's selection cannot be carried, which is one warning.
+        result = convert.convert(load("selection/toolbox"))
+        status, out, err = self.run_cli(str(FIXTURES / "selection" / "toolbox.json"))
         self.assertEqual(status, 0)
         self.assertEqual(json.loads(out), result.doc)
+        self.assertEqual(len(result.warnings), 1)
         self.assertEqual(
             err.splitlines(),
             [f"warning: {w}" for w in result.warnings] + ["unreliable: 1 warning(s)"],

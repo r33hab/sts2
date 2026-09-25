@@ -150,6 +150,15 @@
     "source_card": "BURNING_PACT",
     "source_potion": null,
     "source_relic": null,
+    "played_card": {
+      "id": "BURNING_PACT",
+      "upgraded": true,
+      "uid": "p1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
     "candidates": [
       {
         "id": "STRIKE_IRONCLAD",

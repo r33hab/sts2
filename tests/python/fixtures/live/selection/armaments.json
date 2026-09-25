@@ -160,6 +160,15 @@
     "source_card": "ARMAMENTS",
     "source_potion": null,
     "source_relic": null,
+    "played_card": {
+      "id": "ARMAMENTS",
+      "upgraded": false,
+      "uid": "p1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
     "candidates": [
       {
         "id": "STRIKE_IRONCLAD",

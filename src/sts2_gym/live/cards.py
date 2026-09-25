@@ -28,6 +28,10 @@ UNMODELLED_ENCHANTMENTS = frozenset({"DEPRECATED_ENCHANTMENT", "SLUMBERING_ESSEN
 # The card `fields` the converter reads; any other field is per-copy state it cannot carry.
 COST_FIELDS = ("cost_this_turn", "cost_for_combat")
 
+# A card's face: everything a live `Card` carries but its uid. Two cards with the same face
+# are the same card to the emulator, so a card with no uid is matched by it.
+FACE = ("id", "upgraded", "cost", "enchantment", "enchant_amount", "fields")
+
 
 def _expected_cost(
     info: names.CardInfo,

@@ -150,6 +150,15 @@
     "source_card": "THINKING_AHEAD",
     "source_potion": null,
     "source_relic": null,
+    "played_card": {
+      "id": "THINKING_AHEAD",
+      "upgraded": false,
+      "uid": "p1",
+      "cost": 0,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
     "candidates": [
       {
         "id": "STRIKE_IRONCLAD",

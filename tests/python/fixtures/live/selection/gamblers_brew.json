@@ -150,6 +150,7 @@
     "source_card": null,
     "source_potion": "GAMBLERS_BREW",
     "source_relic": null,
+    "played_card": null,
     "candidates": [
       {
         "id": "STRIKE_IRONCLAD",

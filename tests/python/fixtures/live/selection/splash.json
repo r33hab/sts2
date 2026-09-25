@@ -150,6 +150,15 @@
     "source_card": "SPLASH",
     "source_potion": null,
     "source_relic": null,
+    "played_card": {
+      "id": "SPLASH",
+      "upgraded": true,
+      "uid": "p1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
     "candidates": [
       {
         "id": "DAGGER_SPRAY",

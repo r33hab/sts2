@@ -26,6 +26,7 @@ from sts2_gym.live import (
     selection,
 )
 from sts2_gym.live.enemy_ai import BRANCH_STATE_IDS
+from sts2_gym.live.selection import MAX_HAND
 
 __all__ = [
     "BRANCH_STATE_IDS",
@@ -51,9 +52,8 @@ POTION_SLOT_CAPACITY = 6
 # The snapshot loader refuses more than MAX_ENEMIES enemies or MAX_HAND cards in hand
 # (NativeExports.cs:35-36; CombatSnapshot.cs:380-385, :473) -- the game's own limits, so a
 # live document past them is malformed. (It also refuses an empty roster, with its own
-# message; a live combat always has an enemy.)
+# message; a live combat always has an enemy.) MAX_HAND is `selection.MAX_HAND`.
 MAX_ENEMIES = 6
-MAX_HAND = 10
 
 # `Character.BaseOrbSlotCount`: only Defect.cs overrides it, to 3 (CombatState.cs, the
 # `OrbCapacity` and `BaseOrbSlots` remarks).
@@ -314,10 +314,7 @@ def _osty(value: object) -> tuple[int, int]:
 
 
 def _same_face(a: dict[str, Any], b: dict[str, Any]) -> bool:
-    return all(
-        a[key] == b[key]
-        for key in ("id", "upgraded", "cost", "enchantment", "enchant_amount", "fields")
-    )
+    return all(a[key] == b[key] for key in cards.FACE)
 
 
 def _draw_regions(
@@ -544,9 +541,13 @@ def _powered_hits(piles: dict[str, Any], history: dict[str, int]) -> list[str]:
 def _pending_selection(value: object) -> dict[str, Any] | None:
     """Check a pending in-combat selection against schema section 1.1.
 
+    `played_card` is optional: a coach that predates it leaves it out, which reads as
+    null, the card unknown.
+
     Raises:
         ConversionError: for an undefined field, a malformed value, an unknown source or
-            candidate id, more than one source, or a toggled uid no candidate carries.
+            candidate id, more than one source, a played card that is not the source card,
+            or a toggled uid no candidate carries.
 
     """
     if value is None:
@@ -568,6 +569,7 @@ def _pending_selection(value: object) -> dict[str, Any] | None:
             "can_skip",
             "selected_uids",
         ),
+        ("played_card",),
     )
     kind = _str(pending["kind"], f"{path}.kind")
     if kind not in selection.SCREENS:
@@ -595,6 +597,18 @@ def _pending_selection(value: object) -> dict[str, Any] | None:
             f"a selection has one source, not {named}",
             path=f"{path}.{named[1]}",
         )
+    played = pending.get("played_card")
+    if played is not None:
+        where = f"{path}.played_card"
+        _card(played, where)
+        ids.card_id(played["id"], path=f"{where}.id")
+        # The card in the play pile whose effect opened the selection (schema section 1.1).
+        if played["id"] != pending["source_card"]:
+            raise ConversionError(
+                f"the played card is {played['id']}, but source_card is "
+                f"{pending['source_card']}",
+                path=where,
+            )
     candidates = _cards(pending["candidates"], f"{path}.candidates")
     for i, card in enumerate(candidates):
         ids.card_id(card["id"], path=f"{path}.candidates[{i}].id")
@@ -611,6 +625,29 @@ def _pending_selection(value: object) -> dict[str, Any] | None:
                 path=f"{path}.selected_uids[{i}]",
             )
     return pending
+
+
+def _held(
+    live: dict[str, Any],
+    live_relics: list[dict[str, Any]],
+    player_powers: list[dict[str, Any]],
+    live_piles: tuple[list[dict[str, Any]], ...],
+) -> dict[str, frozenset[str]]:
+    """Name what the position holds, by `selection.AFTER_PLAY` family.
+
+    The relics, the powers on the player and on every enemy, and the cards in every pile,
+    the draw pile included. Read only once each has been validated.
+    """
+    return {
+        "relic": frozenset(relic["id"] for relic in live_relics),
+        "power": frozenset(power["id"] for power in player_powers)
+        | frozenset(
+            power["id"] for enemy in live["enemies"] for power in enemy["powers"]
+        ),
+        "card": frozenset(
+            card["id"] for pile in (*live_piles, live["draw_pile"]) for card in pile
+        ),
+    }
 
 
 def convert(live: dict[str, Any]) -> ConversionResult:
@@ -744,16 +781,6 @@ def convert(live: dict[str, Any]) -> ConversionResult:
         "exhaust": _translated(exhaust, "exhaust_pile", warnings, corruption),
         "draw": _draw(draw, warnings, corruption),
     }
-    if opened is not None and played is not None:
-        # The card that asked lands where the emulator's play would have put it.
-        pile, copy, warning = selection.played_card(
-            opened,
-            hand,
-            corruption=corruption,
-        )
-        if pile is not None:
-            piles[pile].append(copy)
-        warnings.append(warning)
 
     doc = {
         "schema": EMU_SCHEMA,
@@ -788,12 +815,30 @@ def convert(live: dict[str, Any]) -> ConversionResult:
         "counters": {**history, **power_counters, **relic_state.counters, **_ALWAYS},
         "pending_selection": pending,
     }
-    if opened is not None and played is None:
+    if opened is not None and played is not None:
+        # The card that asked lands where the emulator's play would have put it, and
+        # what the emulator granted before asking is granted. After `_enemies`, which
+        # validates the enemy powers `held` reads.
+        pile, card = selection.land_played_card(
+            opened,
+            hand,
+            corruption=corruption,
+            held=_held(top, live_relics, player_powers, (hand, discard, exhaust)),
+            warnings=warnings,
+        )
+        if pile is not None:
+            piles[pile].append(card)
+        selection.gain_player_strength(
+            buffs,
+            relic_state.relics,
+            selection.owed_strength(opened),
+        )
+    elif opened is not None:
         warnings.extend(
             selection.hook_warnings(
                 opened,
                 relics=live_relics,
-                powers=player_powers,
+                player_powers=player_powers,
                 potions_left=any(doc["potions"]["slots"]),
             ),
         )

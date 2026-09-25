@@ -178,6 +178,7 @@
     "source_card": null,
     "source_potion": "LIQUID_MEMORIES",
     "source_relic": null,
+    "played_card": null,
     "candidates": [
       {
         "id": "IRON_WAVE",

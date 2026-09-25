@@ -160,6 +160,7 @@
     "source_card": null,
     "source_potion": "DROPLET_OF_PRECOGNITION",
     "source_relic": null,
+    "played_card": null,
     "candidates": [
       {
         "id": "DEFEND_IRONCLAD",

@@ -178,6 +178,15 @@
     "source_card": "NEOWS_FURY",
     "source_potion": null,
     "source_relic": null,
+    "played_card": {
+      "id": "NEOWS_FURY",
+      "upgraded": false,
+      "uid": "p1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
     "candidates": [
       {
         "id": "IRON_WAVE",

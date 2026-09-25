@@ -178,6 +178,15 @@
     "source_card": "HEADBUTT",
     "source_potion": null,
     "source_relic": null,
+    "played_card": {
+      "id": "HEADBUTT",
+      "upgraded": false,
+      "uid": "p1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
     "candidates": [
       {
         "id": "SHRUG_IT_OFF",

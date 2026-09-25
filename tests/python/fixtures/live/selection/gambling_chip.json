@@ -172,6 +172,7 @@
     "source_card": null,
     "source_potion": null,
     "source_relic": "GAMBLING_CHIP",
+    "played_card": null,
     "candidates": [
       {
         "id": "STRIKE_IRONCLAD",

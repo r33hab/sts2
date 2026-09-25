@@ -10,31 +10,36 @@ and checked against the running emulator by the test suite.
 
 The emulator asks AFTER a play (AGENTS.md, "Card Selection"). By the time the question
 is put, the card that asked is in its result pile and counted, and whatever it does once
-answered rides on the selection. The game asks mid-play, with the card in its play pile,
-which the live snapshot does not carry. So for a card source `played_card` and
-`count_play` finish the play the emulator's way, and the warning names what the snapshot
-cannot say about that card.
+answered rides on the selection. The game asks mid-play, with that card in its play pile,
+which the live snapshot carries as `played_card`. So for a card source `count_play` and
+`land_played_card` finish the play the emulator's way, and a warning names whatever the
+game still does for the play that the loaded position will not (`AFTER_PLAY`).
 
 A selection this cannot carry exactly maps to None, with a warning naming why:
-- a source the table does not know;
-- a screen other than the one the table expects;
-- a follow-up that depends on what the snapshot does not say (Burning Pact's draw count);
-- candidates it cannot index.
+- a source the table does not know, or a screen other than the one it expects;
+- bounds that contradict the source;
+- a follow-up that depends on the played card's upgrade when the snapshot lacks the card;
+- candidates it cannot index, or cannot tell apart.
 The emulator's position then has no selection, and the warning makes it unreliable.
 """
 
 from __future__ import annotations
 
 import operator
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, NamedTuple
 
 from sts2_gym import names
-from sts2_gym.live import ids
+from sts2_gym.live import cards, ids, powers
 
-# `CardPile.MaxCardsInHand` (CardEffects.MaxCardsInHand).
+# `CardPile.MaxCardsInHand`: the game's hand cap. The snapshot loader refuses a hand past
+# it too (NativeExports.cs:35-36; CombatSnapshot.cs:380-385, :473), which `convert` checks.
 MAX_HAND = 10
+
+# The "pick any number" bound, `CardSelectorPrefs(prompt, 0, 999999999)` (decompiled
+# Ashwater.cs, GamblersBrew.cs, GamblingChip.cs), which the mod reports raw.
+ANY_NUMBER = 999999999
 
 SCREENS = ("HAND", "GRID", "CHOOSE")
 GRID_PILES = ("DRAW", "DISCARD", "EXHAUST")
@@ -50,13 +55,16 @@ class Screen(NamedTuple):
 
 # ── Amount: what `PendingCardSelection.Amount` holds for a source ────────────
 
+# A rule reads the screen and the played card's upgrade, when that is known.
+AmountRule = Callable[[Screen, bool | None], int]
 
-def _no_amount(_screen: Screen) -> int:
+
+def _no_amount(_screen: Screen, _upgraded: bool | None) -> int:
     """Return 0: a single pick's resolution does not read Amount, and its opener leaves it."""
     return 0
 
 
-def _picks(screen: Screen) -> int:
+def _picks(screen: Screen, _upgraded: bool | None) -> int:
     """Return the picks the screen allows, what a reopening screen counts down.
 
     That is its `max`, capped at the cards it shows. A combat grid caps its bounds so
@@ -67,7 +75,7 @@ def _picks(screen: Screen) -> int:
     return min(int(screen.pending["max"]), len(screen.pending["candidates"]))
 
 
-def _hand_size(screen: Screen) -> int:
+def _hand_size(screen: Screen, _upgraded: bool | None) -> int:
     """Ashwater's `amount: state.Hand.Count` (PotionEffects.cs:49-62).
 
     The game's "any number" is `max` 999999999; the emulator reopens the screen for as
@@ -75,6 +83,15 @@ def _hand_size(screen: Screen) -> int:
     the screen is committed until it is confirmed.
     """
     return len(screen.hand)
+
+
+def _by_upgrade(base: int, upgraded: int) -> AmountRule:
+    """Build a rule for an Amount the played card's upgrade decides (`needs_upgrade`)."""
+
+    def rule(_screen: Screen, is_upgraded: bool | None) -> int:
+        return upgraded if is_upgraded else base
+
+    return rule
 
 
 # ── Upgrade: what the screen proves about the card that was played ───────────
@@ -131,20 +148,28 @@ class Opens:
     """What one card, potion or relic opens in the emulator, and how its screen maps there.
 
     `screen` and `pile` are the screen the game shows for it. `kind`, `amount` and
-    `source_def_id` are what the emulator's own opener sets. `source_def_id` None means
-    the source card's own def id; potions and relics set 0. `one_pick` screens take a
-    single card, so their `max` is 1. `upgraded` says what the screen proves about a
-    played card. An entry with `unmappable` set cannot be resumed from the live position,
-    and maps to None with that reason.
+    `source_def_id` are what the emulator's own opener sets; `source_def_id` None means
+    the source card's own def id. `picks` is what the screen takes:
+    - "one": a single card, so `max` is 1;
+    - "up_to": up to `max` cards, min 0, so it can be declined;
+    - "any": any number, min 0, `max` 999999999.
+    `upgraded` says what the screen alone proves about a played card. `needs_upgrade`,
+    when set, says why the mapping needs the played card's upgrade, which only
+    `played_card` can say. `strength` is the Strength, unupgraded and upgraded, the
+    emulator grants before it asks where the game grants it after. An entry with
+    `unmappable` set cannot be resumed from the live position, and maps to None with that
+    reason.
     """
 
     screen: str
     kind: str = ""
     pile: str | None = None
-    amount: Callable[[Screen], int] = _no_amount
+    amount: AmountRule = _no_amount
     source_def_id: int | None = None
-    one_pick: bool = True
+    picks: str = "one"
     upgraded: Callable[[Screen], bool | None] = _unknown
+    needs_upgrade: str | None = None
+    strength: tuple[int, int] = (0, 0)
     unmappable: str | None = None
 
 
@@ -166,22 +191,23 @@ SOURCES: dict[tuple[str, str], Opens] = {
     # Only an upgraded True Grit asks; unupgraded, it exhausts at random
     # (CardEffects.cs:943-966).
     ("card", "TRUE_GRIT"): Opens("HAND", "ExhaustFromHand", upgraded=_upgraded),
+    # A hand card exhausted. The emulator grants Brand's Strength before it asks
+    # (CardEffects.cs:737-752), the game once the exhaust resolves (decompiled
+    # Brand.OnPlay); nothing reads Strength during an exhaust (CardEffects.cs:739-741),
+    # so the Strength the live position still owes is granted with the selection.
     ("card", "BRAND"): Opens(
         "HAND",
-        unmappable=(
-            "the emulator grants Brand's Strength before it asks (CardEffects.cs:737-752), "
-            "the game once the exhaust resolves (decompiled Brand.OnPlay), so the live "
-            "position still owes it -- 1, or 2 upgraded, and the snapshot does not say "
-            "which"
-        ),
+        "ExhaustFromHand",
+        strength=(1, 2),
+        needs_upgrade="the Strength it owes -- 1, or 2 upgraded -- depends on its upgrade",
     ),
+    # A hand card exhausted, then 2 cards drawn, or 3 upgraded: the Amount
+    # (CardEffects.cs:770-790).
     ("card", "BURNING_PACT"): Opens(
         "HAND",
-        unmappable=(
-            "the draw that follows the exhaust -- 2 cards, or 3 when Burning Pact is "
-            "upgraded, the selection's Amount (CardEffects.cs:770-790) -- depends on an "
-            "upgrade the live snapshot does not carry"
-        ),
+        "ExhaustFromHandThenDraw",
+        amount=_by_upgrade(2, 3),
+        needs_upgrade="the draw after the exhaust -- 2, or 3 upgraded -- depends on its upgrade",
     ),
     # ── Colorless cards ──
     # Up to 3 (5 upgraded) exhausts, reopening per pick; min 0 (CardEffects.cs:1170-1188).
@@ -189,7 +215,7 @@ SOURCES: dict[tuple[str, str], Opens] = {
         "HAND",
         "ExhaustFromHandRepeated",
         amount=_picks,
-        one_pick=False,
+        picks="up_to",
         upgraded=_purity,
     ),
     # A draw-pile Skill or Attack to hand (CardEffects.cs:1190-1196, :4243-4258).
@@ -215,16 +241,17 @@ SOURCES: dict[tuple[str, str], Opens] = {
         "DiscardToHand",
         pile="DISCARD",
         amount=_picks,
-        one_pick=False,
+        picks="up_to",
         upgraded=_neows_fury,
     ),
+    # An Attack or Power in hand, cloned once, or twice upgraded: the Amount. The
+    # emulator's opener passes source 0 (CardEffects.cs:7992-7998, :10491-10514).
     ("card", "DUAL_WIELD"): Opens(
         "HAND",
-        unmappable=(
-            "the copies the answer makes -- 1, or 2 when Dual Wield is upgraded, the "
-            "selection's Amount (CardEffects.cs:7992-7998, :10491-10514) -- depend on an "
-            "upgrade the live snapshot does not carry"
-        ),
+        "DualWield",
+        amount=_by_upgrade(1, 2),
+        source_def_id=0,
+        needs_upgrade="the copies it makes -- 1, or 2 upgraded -- depend on its upgrade",
     ),
     # ── Potions ──
     # Any number of hand cards exhausted, min 0 (PotionEffects.cs:49-62).
@@ -233,7 +260,7 @@ SOURCES: dict[tuple[str, str], Opens] = {
         "ExhaustFromHandRepeated",
         amount=_hand_size,
         source_def_id=0,
-        one_pick=False,
+        picks="any",
     ),
     # One of three generated cards to hand, free this turn, skippable
     # (PotionEffects.cs:64-98, :141-166, :433-457, :486-510).
@@ -262,7 +289,7 @@ SOURCES: dict[tuple[str, str], Opens] = {
         "HAND",
         "DiscardAnyThenDraw",
         source_def_id=0,
-        one_pick=False,
+        picks="any",
     ),
     # A discard card to hand, free this turn (PotionEffects.cs:333-345).
     ("potion", "LIQUID_MEMORIES"): Opens(
@@ -284,7 +311,7 @@ SOURCES: dict[tuple[str, str], Opens] = {
         "HAND",
         "DiscardAnyThenDraw",
         source_def_id=0,
-        one_pick=False,
+        picks="any",
     ),
     ("relic", "TOOLBOX"): Opens(
         "CHOOSE",
@@ -294,6 +321,137 @@ SOURCES: dict[tuple[str, str], Opens] = {
             "(CombatFactory.cs:430-457); a loaded position cannot deal it after the answer"
         ),
     ),
+}
+
+# The kinds whose answer moves a card to hand. With the hand full, the game sends that
+# card to the discard pile instead (decompiled CardPileCmd.cs:420-423). The emulator
+# leaves a draw-pile card where it is (CombatEngine.cs:2608-2616), creates no generated
+# card (:2828-2834) and adds a discard card past the cap (:2687-2696).
+TO_HAND_KINDS = frozenset(
+    {"DiscardToHandFree", "DrawPileToHand", "GeneratedCardToHand"},
+)
+
+# What the game still does for a card's play once its selection closes, and the emulator
+# did before it asked (CombatEngine.PlayCard after CardEffects.Apply, CombatEngine.cs:
+# 226-685): a loaded post-play position never does it for this play. Keyed by family:
+# a relic held, a power on the player or an enemy, a card in any pile, and the played
+# card's enchantment. Read off the decompiled overrides; the test suite recomputes them:
+# - `AfterCardPlayed`, `AfterCardPlayedLate` and `AfterHandEmptied`, which
+#   `CardModel.OnPlayWrapper` runs after `OnPlay`;
+# - an enchantment's `OnPlay`, run after the card's own;
+# - `ModifyCardPlayCount` and `EnchantPlayCount`, a repeat that follows the selection;
+# - `ModifyCardPlayResultPileTypeAndPosition`, a result pile other than the card's own.
+# Left out, as `MODELLED` explains: what the converter carries itself.
+AFTER_PLAY: dict[str, frozenset[str]] = {
+    "relic": frozenset(
+        {
+            "BRILLIANT_SCARF",
+            "DAUGHTER_OF_THE_WIND",
+            "DIAMOND_DIADEM",
+            "GAME_PIECE",
+            "HELICAL_DART",
+            "IRON_CLUB",
+            "IVORY_TILE",
+            "KUNAI",
+            "KUSARIGAMA",
+            "LETTER_OPENER",
+            "LOST_WISP",
+            "MUMMIFIED_HAND",
+            "MUSIC_BOX",
+            "NUNCHAKU",
+            "ORNAMENTAL_FAN",
+            "PAELS_LEGION",
+            "PEN_NIB",
+            "PERMAFROST",
+            "RAINBOW_RING",
+            "RAZOR_TOOTH",
+            "SHURIKEN",
+            "THROWING_AXE",
+            "TUNING_FORK",
+            "UNCEASING_TOP",
+            "UNSETTLING_LAMP",
+            "VAMBRACE",
+            "VELVET_CHOKER",
+        },
+    ),
+    "power": frozenset(
+        {
+            "AFTERIMAGE_POWER",
+            "BLACK_HOLE_POWER",
+            "BURST_POWER",
+            "CALAMITY_POWER",
+            "CURL_UP_POWER",
+            "DEVOUR_LIFE_POWER",
+            "DUPLICATION_POWER",
+            "ECHO_FORM_POWER",
+            "ENRAGE_POWER",
+            "FERAL_POWER",
+            "GALVANIC_POWER",
+            "GRAVITY_POWER",
+            "HAUNT_POWER",
+            "JUGGLING_POWER",
+            "MASTER_PLANNER_POWER",
+            "MONOLOGUE_POWER",
+            "NOSTALGIA_POWER",
+            "OBLIVION_POWER",
+            "ONE_TWO_PUNCH_POWER",
+            "PANACHE_POWER",
+            "RAGE_POWER",
+            "REBOUND_POWER",
+            "RUPTURE_POWER",
+            "SERPENT_FORM_POWER",
+            "SIGNAL_BOOST_POWER",
+            "SLOW_POWER",
+            "SNEAKY_POWER",
+            "STORM_POWER",
+            "STRANGLE_POWER",
+            "SUBROUTINE_POWER",
+            "TAG_TEAM_POWER",
+            "TENDER_POWER",
+            "VITAL_SPARK_POWER",
+            "VOID_FORM_POWER",
+            "WITHERING_PRESENCE_POWER",
+        },
+    ),
+    "card": frozenset({"BANSHEES_CRY", "MAKE_IT_SO", "PINPOINT", "RIGHT_HAND_HAND"}),
+    "enchantment": frozenset(
+        {
+            "ADROIT",
+            "CORRUPTED",
+            "GLAM",
+            "GOOPY",
+            "INKY",
+            "MOMENTUM",
+            "SOWN",
+            "SPIRAL",
+            "SWIFT",
+            "VIGOROUS",
+        },
+    ),
+}
+
+# The overriders of those hooks that the converter carries itself, so they are not in
+# `AFTER_PLAY`:
+# - Art of War, Ripple Basin and Pocketwatch reach the emulator only through the counters
+#   `count_play` adds to: AttackCardsPlayedThisTurn (RelicEffects.cs:1171, :1905) and
+#   CardPlaysThisTurn (:1181-1182);
+# - Smoggy's flag is derived from the Skill count after `count_play`
+#   (powers.combat_counters; CombatEngine.cs:152-155);
+# - Corruption's result pile is `land_played_card`'s own (CombatEngine.cs:414-420).
+MODELLED: dict[str, frozenset[str]] = {
+    "relic": frozenset({"ART_OF_WAR", "POCKETWATCH", "RIPPLE_BASIN"}),
+    "power": frozenset({"CORRUPTION_POWER", "SMOGGY_POWER"}),
+}
+
+# `AfterCardExhausted` listeners (decompiled overrides): a played card that exhausts sets
+# them off after its selection in the game, and before it in the emulator
+# (CardEffects.ExhaustCard from CombatEngine.cs:420-445).
+AFTER_EXHAUST: dict[str, frozenset[str]] = {
+    "relic": frozenset(
+        {"BURNING_STICKS", "CHARONS_ASHES", "FORGOTTEN_SOUL", "JOSS_PAPER"},
+    ),
+    "power": frozenset({"DARK_EMBRACE_POWER", "FEEL_NO_PAIN_POWER"}),
+    "card": frozenset({"DRUM_OF_BATTLE"}),
 }
 
 # The game's `AfterPotionUsed` listeners (decompiled BeltBuckle.cs, ReptileTrinket.cs).
@@ -358,17 +516,17 @@ def to_pending(
     live_pending: Mapping[str, Any],
     hand: Sequence[Mapping[str, Any]],
     *,
+    warnings: list[str],
     discard: Sequence[Mapping[str, Any]] = (),
     exhaust: Sequence[Mapping[str, Any]] = (),
     draw: Draw | None = None,
-    warnings: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """Map a validated live `pending_selection` onto the emulator's.
 
     `hand`, `discard`, `exhaust` and `draw` are the live piles, validated, in the order
-    the converter hands them to the emulator. Candidates are matched to them by `uid`,
-    else by `(id, upgraded)` in pile order. A match must be exact:
-    - a HAND or GRID candidate becomes an index into its pile, in ascending order;
+    the converter hands them to the emulator. A match must be exact:
+    - a HAND or GRID candidate becomes an index into its pile, in ascending order, found
+      by uid, else by its whole face, else by `(id, upgraded)` when that is unambiguous;
     - a CHOOSE candidate becomes a `generated_candidates` id;
     - the source decides the kind and what the answer does next.
     `selected_uids` are toggles the game has not acted on, so the emulator's screen
@@ -376,14 +534,21 @@ def to_pending(
     `warnings` and maps to None. A candidate card id the emulator does not know is
     refused, as `ConversionError`.
     """
-    result = _map(Screen(live_pending, hand), discard, exhaust, draw or Draw())
+    screen = Screen(live_pending, hand)
+    result = _map(screen, discard, exhaust, draw or Draw())
     if isinstance(result, str):
-        if warnings is not None:
-            warnings.append(
-                f"pending_selection: {result}; not converted, so the emulator position "
-                "has no selection",
-            )
+        warnings.append(
+            f"pending_selection: {result}; not converted, so the emulator position has no "
+            "selection",
+        )
         return None
+    kind = names.card_selection_kinds()[result["kind"]]
+    if kind in TO_HAND_KINDS and len(hand) >= MAX_HAND:
+        warnings.append(
+            f"pending_selection: the {kind} answer sends its card to a hand that holds "
+            f"{MAX_HAND} already, and the game puts it in the discard pile instead "
+            "(decompiled CardPileCmd.cs:420-423), which the emulator does not",
+        )
     return result
 
 
@@ -414,16 +579,22 @@ def _map(
     candidates = live["candidates"]
     if not candidates:
         return f"{what}: it offers no card"
-    if opens.one_pick and live["max"] != 1:
-        return f"{what}: it takes one card, not {live['max']}"
+    bounds = _bounds(opens, live)
+    if bounds is not None:
+        return f"{what}: {bounds}"
+    upgraded = _upgrade(opens, screen)
+    if isinstance(upgraded, str):
+        return f"{what}: {upgraded}"
+    if opens.needs_upgrade is not None and upgraded is None:
+        return f"{what}: {opens.needs_upgrade}, and the snapshot carries no played_card"
 
     generated: list[int] = []
-    upgraded = False
+    generated_upgraded = False
     if opens.screen == "CHOOSE":
         offer = _generated(candidates)
         if isinstance(offer, str):
             return f"{what}: {offer}"
-        generated, upgraded = offer
+        generated, generated_upgraded = offer
         indices = list(range(len(candidates)))
     else:
         found = _candidate_indices(opens, screen, discard, exhaust, draw)
@@ -437,10 +608,10 @@ def _map(
         "source_card_def_id": (
             ids.card_id(who[1]) if opens.source_def_id is None else opens.source_def_id
         ),
-        "amount": opens.amount(screen),
+        "amount": opens.amount(screen, upgraded),
         "skippable": live["can_skip"],
         "generated_candidates": generated,
-        "generated_upgraded": upgraded,
+        "generated_upgraded": generated_upgraded,
         # Only Choices Paradox keeps its pick Retained (CardEffects.cs:9210-9250), and no
         # source here is it.
         "generated_retained": False,
@@ -448,6 +619,38 @@ def _map(
         "after_selection_to_hand": [],
         "end_turn_awaiting_selection": False,
     }
+
+
+def _bounds(opens: Opens, live: Mapping[str, Any]) -> str | None:
+    """Check the screen's bounds against what the source asks for; return what is off."""
+    low, high, skip = live["min"], live["max"], live["can_skip"]
+    if opens.picks == "one":
+        return None if high == 1 else f"it takes one card, not {high}"
+    if low != 0 or not skip:
+        return (
+            f"it takes cards up to a limit and may be declined, but the screen says min "
+            f"{low}, can_skip {str(skip).lower()}"
+        )
+    if opens.picks == "any" and high != ANY_NUMBER:
+        return f"it takes any number of cards (max {ANY_NUMBER}), not up to {high}"
+    return None
+
+
+def _upgrade(opens: Opens, screen: Screen) -> bool | str | None:
+    """Return the played card's upgrade: `played_card`'s, else what the screen proves.
+
+    A `played_card` the screen contradicts is refused with the reason, as a string.
+    """
+    proven = opens.upgraded(screen)
+    played = screen.pending.get("played_card")
+    if played is None:
+        return proven
+    if proven is not None and proven != played["upgraded"]:
+        return (
+            f"played_card is {'upgraded' if played['upgraded'] else 'unupgraded'}, but "
+            f"the screen shows the card {'upgraded' if proven else 'unupgraded'}"
+        )
+    return played["upgraded"]
 
 
 def _kind(member: str) -> int:
@@ -464,8 +667,16 @@ def _kind(member: str) -> int:
     raise RuntimeError(f"CardSelectionKind has no member {member!r}")
 
 
-# A card's face, what a uid-less match goes by: `(id, upgraded)`.
-_face = operator.itemgetter("id", "upgraded")
+def _face(card: Mapping[str, Any]) -> tuple[Any, ...]:
+    """Return everything the card shows but its uid (`cards.FACE`), hashable."""
+    return tuple(
+        tuple(sorted(card[key].items())) if key == "fields" else card[key]
+        for key in cards.FACE
+    )
+
+
+# What a card is before anything is done to it: `(id, upgraded)`.
+_id_and_upgrade = operator.itemgetter("id", "upgraded")
 
 
 def _generated(candidates: Sequence[Mapping[str, Any]]) -> tuple[list[int], bool] | str:
@@ -523,60 +734,78 @@ def _match(
     pile: Sequence[Mapping[str, Any]],
     where: str,
 ) -> list[int] | str:
-    """Find each candidate in `pile`: by uid, else by `(id, upgraded)` in pile order.
+    """Find each candidate in `pile`, taking each pile card at most once.
 
     A candidate whose uid the pile carries must be that card. The rest are matched after
-    them, so a face match never takes a card a uid pins down: a uid-less candidate takes
-    the first free card with its face, and a candidate whose uid the pile does not carry
-    takes the first free uid-less one.
+    them, so they never take a card a uid pins down, and only against cards their uid
+    cannot contradict (either side's uid missing):
+    - first by the whole face (`cards.FACE`), taking the first such card in pile order,
+      since cards with one face are the same card to the emulator;
+    - else by `(id, upgraded)`, but only when the free cards that match that way all
+      share one face, so the choice among them cannot matter.
     """
     uids = {card["uid"] for card in pile if card["uid"] is not None}
     taken: set[int] = set()
-    for pinned in (True, False):
-        for card in candidates:
-            if (card["uid"] in uids) != pinned:
-                continue
-            for index, held in enumerate(pile):
-                if index in taken:
-                    continue
-                if pinned:
-                    matches = held["uid"] == card["uid"]
-                else:
-                    matches = _face(held) == _face(card) and (
-                        card["uid"] is None or held["uid"] is None
-                    )
-                if matches:
-                    if _face(held) != _face(card):
-                        return (
-                            f"candidate uid {card['uid']} is {held['id']} in the {where}, "
-                            f"not {card['id']}"
-                        )
-                    taken.add(index)
-                    break
-            else:
-                return (
-                    f"candidate {card['id']} (uid {card['uid']}) is not in the {where}"
-                )
+    for card in candidates:
+        if card["uid"] not in uids:
+            continue
+        index = next(i for i, held in enumerate(pile) if held["uid"] == card["uid"])
+        held = pile[index]
+        if _id_and_upgrade(held) != _id_and_upgrade(card):
+            return (
+                f"candidate uid {card['uid']} is {held['id']} in the {where}, not "
+                f"{card['id']}"
+            )
+        if index in taken:
+            return f"candidate uid {card['uid']} is offered twice"
+        taken.add(index)
+    for card in candidates:
+        if card["uid"] in uids:
+            continue
+        free = [
+            i
+            for i, held in enumerate(pile)
+            if i not in taken and (card["uid"] is None or held["uid"] is None)
+        ]
+        same_face = [i for i in free if _face(pile[i]) == _face(card)]
+        close = [i for i in free if _id_and_upgrade(pile[i]) == _id_and_upgrade(card)]
+        if same_face:
+            taken.add(same_face[0])
+        elif close and len({_face(pile[i]) for i in close}) == 1:
+            taken.add(close[0])
+        elif close:
+            return (
+                f"candidate {card['id']} (uid {card['uid']}) could be any of "
+                f"{len(close)} cards in the {where} that differ, and none shows exactly "
+                "its face"
+            )
+        else:
+            return f"candidate {card['id']} (uid {card['uid']}) is not in the {where}"
     return sorted(taken)
 
 
 # ── Finishing the play the emulator's way ────────────────────────────────────
 
 
-def played_card(
+def land_played_card(
     live_pending: Mapping[str, Any],
     hand: Sequence[Mapping[str, Any]],
     *,
     corruption: bool,
-) -> tuple[str | None, dict[str, Any], str]:
-    """Return where a card source lands, its copy, and what the converter had to assume.
+    held: Mapping[str, Collection[str]],
+    warnings: list[str],
+) -> tuple[str | None, dict[str, Any]]:
+    """Return the pile the card that asked lands in, and the emulator card that lands.
 
     The emulator's selection comes after `CombatEngine.PlayCard` has put the played card
-    in its result pile (CombatEngine.cs:395-521): exhausted if the copy exhausts or
-    Corruption takes a Skill, else discarded, and marked `PlayedThisTurn`. A Power goes to
-    no pile, which is the None. The game's card is still in its play pile, which the live
-    snapshot does not carry, so the copy is only as exact as the screen allows. Its
-    upgrade is what `SOURCES` can prove, else unupgraded; no enchantment is assumed.
+    in its result pile (CombatEngine.cs:395-521), marked `PlayedThisTurn`: exhausted if the
+    copy exhausts or Corruption takes a Skill, else discarded; a Power goes to no pile,
+    which is the None. The card is `played_card`, translated like any live card, when the
+    snapshot carries it. Otherwise it is a copy as exact as the screen allows -- its
+    upgrade what `SOURCES` can prove, else unupgraded -- and a warning says so.
+
+    `held` names what the position holds, by `AFTER_PLAY` family ("relic", "power",
+    "card"). Whatever of it the game still runs for the play is warned about.
 
     Raises:
         ValueError: if the selection has no card source.
@@ -584,35 +813,83 @@ def played_card(
     """
     who = source(live_pending)
     if who is None or who[0] != "card":
-        raise ValueError("played_card needs a selection a card opened")
+        raise ValueError("land_played_card needs a selection a card opened")
     entry = who[1]
-    def_id = ids.card_id(entry)
-    info = names.cards()[def_id]
-    opens = SOURCES.get(who)
-    proven = opens.upgraded(Screen(live_pending, hand)) if opens else None
-    upgraded = bool(proven)
-    copy = {"def_id": def_id, "upgraded": upgraded, "played_this_turn": True}
-
-    exhausts = (
-        info.exhaust and not (upgraded and info.exhaust_removed_when_upgraded)
-    ) or (corruption and info.card_type == "Skill")
-    pile = None if info.card_type == "Power" else "exhaust" if exhausts else "discard"
-    if proven is None:
-        upgrade = "taken as unupgraded: the snapshot does not say"
+    played = live_pending.get("played_card")
+    proven: bool | None = None
+    if played is not None:
+        card = cards.to_emu_card(
+            played,
+            path="pending_selection.played_card",
+            warnings=warnings,
+            corruption=corruption,
+        )
     else:
-        upgrade = f"{'upgraded' if upgraded else 'unupgraded'}, as the screen shows"
-    landing = f"a copy goes to the {pile} pile" if pile else "it leaves play"
-    return (
-        pile,
-        copy,
-        (
-            f"pending_selection.source_card: {entry} is still being played in the game, "
-            "its card in the play pile the live snapshot does not carry, while the "
-            f"emulator asks after the play; so its play is counted and {landing} "
-            f"({upgrade}; enchantment unknown), and what follows the play in the game "
-            "-- relics and powers reacting to it, a repeat -- does not happen"
-        ),
+        opens = SOURCES.get(who)
+        proven = opens.upgraded(Screen(live_pending, hand)) if opens else None
+        card = {"def_id": ids.card_id(entry), "upgraded": bool(proven)}
+    card["played_this_turn"] = True
+    pile = _result_pile(card, corruption=corruption)
+
+    if played is None:
+        upgrade = (
+            "taken as unupgraded: the snapshot does not say"
+            if proven is None
+            else f"{'upgraded' if card['upgraded'] else 'unupgraded'}, as the screen shows"
+        )
+        landing = f"lands in the {pile} pile" if pile else "leaves play"
+        warnings.append(
+            f"pending_selection.played_card: missing, so {entry}, still being played in "
+            f"the game, is only a copy that {landing} ({upgrade}; enchantment and cost "
+            "fields unknown)",
+        )
+    enchantment = played["enchantment"] if played is not None else None
+    listening = sorted(
+        name
+        for family in ("relic", "power", "card")
+        for name in held.get(family, ())
+        if name in AFTER_PLAY[family]
+        or (pile == "exhaust" and name in AFTER_EXHAUST[family])
     )
+    if enchantment in AFTER_PLAY["enchantment"]:
+        listening.append(f"its {enchantment} enchantment")
+    if listening:
+        warnings.append(
+            f"pending_selection.source_card: {entry}: the game still has "
+            f"{', '.join(listening)} act on this play once its selection closes, which "
+            "the emulator does before it asks (CombatEngine.PlayCard after "
+            "CardEffects.Apply), so the loaded position never does",
+        )
+    return pile, card
+
+
+def _result_pile(card: Mapping[str, Any], *, corruption: bool) -> str | None:
+    """Pick the pile a played card lands in, as the game does and the emulator mostly does.
+
+    The game decides it as the play begins (decompiled CardModel.OnPlayWrapper):
+    `GetResultPileTypeForCardPlay` -- no pile for a Power, the exhaust pile for a card
+    with the Exhaust keyword -- then Corruption sends a Skill to the exhaust pile. The
+    keyword is the card's, less the upgrade that removes it (Card.cs `IsExhaust`), gained
+    from Goopy and lost to Souls Power (CombatEngine.cs:4352-4360, Card.cs:439-450). The
+    emulator also keeps an upgraded Purity out of the exhaust pile
+    (CombatEngine.cs:4320-4331), which the game does not: Purity's upgrade only adds picks
+    (decompiled Purity.OnUpgrade), so it lands as the game has it.
+    """
+    info = names.cards()[card["def_id"]]
+    if info.card_type == "Power":
+        return None
+    enchantment = card.get("enchantment")
+    if enchantment == ids.enchantment("GOOPY"):
+        exhausts = True
+    elif enchantment == ids.enchantment("SOULS_POWER"):
+        exhausts = False
+    else:
+        exhausts = info.exhaust and not (
+            card["upgraded"] and info.exhaust_removed_when_upgraded
+        )
+    if exhausts or (corruption and info.card_type == "Skill"):
+        return "exhaust"
+    return "discard"
 
 
 def count_play(counters: Mapping[str, int], def_id: int) -> dict[str, int]:
@@ -641,11 +918,65 @@ def count_play(counters: Mapping[str, int], def_id: int) -> dict[str, int]:
     return counted
 
 
+def owed_strength(live_pending: Mapping[str, Any]) -> int:
+    """Return the Strength the emulator grants before a mapped selection's answer.
+
+    Brand's, which the game grants after (`Opens.strength`); 0 for any other source.
+    Only for a selection `to_pending` mapped, so the upgrade it needs is known.
+    """
+    who = source(live_pending)
+    opens = SOURCES.get(who) if who is not None else None
+    if opens is None or opens.strength == (0, 0):
+        return 0
+    played = live_pending.get("played_card")
+    base, upgraded = opens.strength
+    return upgraded if played is not None and played["upgraded"] else base
+
+
+def gain_player_strength(
+    buffs: list[dict[str, int]],
+    relics: list[dict[str, int]],
+    amount: int,
+) -> None:
+    """Grant the player Strength as `RelicEffects.GainPlayerStrength` does, in place.
+
+    Ruined Helmet doubles the first positive Strength each combat and is spent doing it
+    (RelicEffects.cs:2230-2237, :2365-2373; `FiresOncePerCombat`, :1630-1640), and
+    `BuffSystem.Apply` adds it to the stack, dropping one that comes to zero
+    (BuffSystem.cs:5-37). `relics` is the emulator's relic list.
+
+    Raises:
+        RuntimeError: if the buff table has lost Strength, which every player can hold.
+
+    """
+    strength = powers.buff_id("STRENGTH_POWER")
+    if strength is None:
+        raise RuntimeError("STRENGTH_POWER has no BuffId")
+    helmet = ids.relic_id("RUINED_HELMET")
+    if amount > 0:
+        for relic in relics:
+            if relic["id"] == helmet:
+                if relic["counter"] == 0:
+                    relic["counter"] = 1
+                    amount *= 2
+                break
+    for index, buff in enumerate(buffs):
+        if buff["id"] == strength:
+            total = buff["amount"] + amount
+            if total:
+                buff["amount"] = total
+            else:
+                del buffs[index]
+            return
+    if amount:
+        buffs.append({"id": strength, "amount": amount})
+
+
 def hook_warnings(
     live_pending: Mapping[str, Any],
     *,
     relics: Sequence[Mapping[str, Any]],
-    powers: Sequence[Mapping[str, Any]],
+    player_powers: Sequence[Mapping[str, Any]],
     potions_left: bool,
 ) -> list[str]:
     """Warn about what the game has still to run once a potion's or relic's screen closes.
@@ -684,7 +1015,11 @@ def hook_warnings(
     elif kind == "relic" and entry == "GAMBLING_CHIP":
         waiting = sorted(
             {name for name in held if name in TURN_START_LISTENERS}
-            | {power["id"] for power in powers if power["id"] in TURN_START_LISTENERS},
+            | {
+                power["id"]
+                for power in player_powers
+                if power["id"] in TURN_START_LISTENERS
+            },
         )
         if waiting:
             warnings.append(
