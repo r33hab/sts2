@@ -704,6 +704,8 @@ public class CombatSnapshotTests
         {
             ["kind"] = (int)CardSelectionKind.RetainForNextTurn,
             ["candidates"] = new JsonArray(0, 2),
+            // Only a draw-pile selection names candidates by card.
+            ["candidate_cards"] = new JsonArray(),
             ["source_card_def_id"] = SI.WellLaidPlans,
             ["amount"] = 2,
             ["skippable"] = true,
@@ -771,6 +773,313 @@ public class CombatSnapshotTests
 
         Assert.True(unspent["counters"]!["cards_played_this_turn"]!.GetValue<int>() > 1);
     }
+
+    // ── (i) ──────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The draw pile's middle, which the player knows only as a multiset. Anger sits on top
+    /// of it and Thunderclap under it, both in known places (<see cref="DrawPileGrid" />).
+    /// </summary>
+    private static readonly int[] UnorderedMiddle =
+    [
+        Strike,
+        Defend,
+        IC.IronWave,
+        IC.PommelStrike,
+        IC.ShrugItOff,
+    ];
+
+    /// <summary>
+    /// Two draw-pile grids over that pile: the candidates in known places by index, the
+    /// ones in the middle by card, and every card the grid offers. Seeker Strike samples
+    /// three of the whole pile (decompiled SeekerStrike.OnPlay), here the known top card
+    /// and two of the middle. Secret Technique offers the pile's Skills, which here are
+    /// all in the middle (decompiled SecretTechnique.OnPlay).
+    /// </summary>
+    public static TheoryData<int, int[], int[], int[]> DrawPileGrids() =>
+        new()
+        {
+            {
+                CL.SeekerStrike,
+                [0],
+                [IC.IronWave, IC.ShrugItOff],
+                [IC.Anger, IC.IronWave, IC.ShrugItOff]
+            },
+            { CL.SecretTechnique, [], [Defend, IC.ShrugItOff], [Defend, IC.ShrugItOff] },
+        };
+
+    /// <summary>
+    /// The loader shuffles the unordered middle with its seed, so an index into it names
+    /// no particular card. A draw-pile selection names those candidates by card, and the
+    /// load finds them wherever its shuffle put them: every seed offers the same cards, in
+    /// pile order, the known top card keeps its index, and the export is the same document.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(DrawPileGrids))]
+    public void ADrawPileGridOffersTheSameCardsWhateverTheLoadSeed(
+        int source,
+        int[] byIndex,
+        int[] byCard,
+        int[] offered
+    )
+    {
+        byte[] document = Encoding.UTF8.GetBytes(DrawPileGrid(source, byIndex, byCard));
+        var middles = new HashSet<string>();
+        var exports = new HashSet<string>();
+
+        for (int seed = 1; seed <= 8; seed++)
+        {
+            var state = CombatSnapshot.Read(document, seed, out _);
+            var candidates = state.PendingSelection!.Candidates;
+
+            Assert.Equal(candidates.Order(), candidates);
+            Assert.Equal(
+                offered.Order(),
+                candidates.Select(index => state.DrawPile[index].DefId).Order()
+            );
+            Assert.Equal(byIndex, candidates.Where(index => index == 0));
+            Assert.Equal(IC.Anger, state.DrawPile[0].DefId);
+            Assert.Equal(IC.Thunderclap, state.DrawPile[^1].DefId);
+            middles.Add(string.Join(",", state.DrawPile[1..^1].Select(card => card.DefId)));
+
+            string exported = Write(state);
+            var selection = JsonNode.Parse(exported)!["pending_selection"]!;
+            Assert.Equal(byIndex, selection["candidates"]!.AsArray().Select(i => (int)i!));
+            Assert.Equal(byCard.Order(), DefIds(selection["candidate_cards"]).Order());
+            exports.Add(exported);
+        }
+
+        Assert.True(middles.Count > 1, "no seed reordered the middle, so nothing was found");
+        Assert.Single(exports);
+    }
+
+    /// <summary>
+    /// The candidate the answer names is the card that goes to hand, found through the
+    /// observation the way an agent sees it, at every seed.
+    /// </summary>
+    [Fact]
+    public void AnsweringADrawPileGridTakesTheCardTheAnswerNamed()
+    {
+        string document = DrawPileGrid(CL.SeekerStrike, [0], [IC.IronWave, IC.ShrugItOff]);
+
+        for (int seed = 1; seed <= 4; seed++)
+        {
+            int handle = Native.Load(document, seed);
+            try
+            {
+                Assert.True(handle >= 0, Native.LastError());
+                int[] shown = OfferedCards(Native.Observe(handle));
+                Assert.Equal(new[] { IC.Anger, IC.IronWave, IC.ShrugItOff }, shown.Order());
+
+                Native.Step(handle, Array.IndexOf(shown, IC.IronWave));
+
+                var after = JsonNode.Parse(Native.StateJson(handle))!;
+                Assert.Null(after["pending_selection"]);
+                Assert.Equal(IC.IronWave, DefIds(after["piles"]!["hand"])[^1]);
+                var draw = after["piles"]!["draw"]!;
+                Assert.Equal(new[] { IC.Anger }, DefIds(draw["known_top"]));
+                Assert.Equal(new[] { IC.Thunderclap }, DefIds(draw["known_bottom"]));
+                Assert.Equal(
+                    new[] { Strike, Defend, IC.PommelStrike, IC.ShrugItOff }.Order(),
+                    DefIds(draw["unordered"]).Order()
+                );
+            }
+            finally
+            {
+                Native.Destroy(handle);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The whole card is matched first, so of two Strikes that differ only in their
+    /// enchantment the one named takes its own copy. A candidate that no card matches
+    /// field for field falls back to (def_id, upgraded) when that leaves no choice to make,
+    /// and then comes back as the card it found.
+    /// </summary>
+    [Fact]
+    public void ACandidateCardIsMatchedWholeFirstAndThenByItsIdAndUpgrade()
+    {
+        string sharp = DefaultCard(Strike, enchantment: Enchantment.Sharp, enchantAmount: 2);
+        var document = Minimal();
+        document["piles"]!["draw"] = new JsonObject
+        {
+            ["unordered"] = new JsonArray(
+                JsonNode.Parse(DefaultCard(Strike)),
+                JsonNode.Parse(sharp),
+                JsonNode.Parse(DefaultCard(Defend, upgraded: true))
+            ),
+        };
+        document["pending_selection"] = new JsonObject
+        {
+            ["kind"] = (int)CardSelectionKind.DrawPileToHand,
+            ["candidates"] = new JsonArray(),
+            ["candidate_cards"] = new JsonArray(
+                JsonNode.Parse(sharp),
+                new JsonObject
+                {
+                    ["def_id"] = Defend,
+                    ["upgraded"] = true,
+                    ["retain_this_turn"] = true,
+                }
+            ),
+            ["source_card_def_id"] = CL.SecretTechnique,
+        };
+
+        for (int seed = 1; seed <= 4; seed++)
+        {
+            var state = Read(document.ToJsonString(), seed);
+            var offered = state.PendingSelection!.Candidates.Select(i => state.DrawPile[i]);
+
+            Assert.Equal(
+                new[]
+                {
+                    new CardInstance(Defend, true),
+                    new CardInstance(Strike, false) with
+                    {
+                        Enchantment = Enchantment.Sharp,
+                        EnchantAmount = 2,
+                    },
+                },
+                offered.OrderBy(card => card.DefId)
+            );
+            Assert.Equal(
+                Canonical($"[{DefaultCard(Defend, upgraded: true)}, {sharp}]"),
+                Canonical(JsonNode.Parse(Write(state))!["pending_selection"]!["candidate_cards"])
+            );
+        }
+    }
+
+    [Theory]
+    [InlineData(
+        "a card the middle does not hold",
+        "pending_selection.candidate_cards[1]: no card left in piles.draw.unordered matches it (def_id 30, upgraded false)"
+    )]
+    [InlineData(
+        "a known card named by card",
+        "pending_selection.candidate_cards[0]: no card left in piles.draw.unordered matches it (def_id 13, upgraded false)"
+    )]
+    [InlineData(
+        "one card named twice",
+        "pending_selection.candidate_cards[1]: no card left in piles.draw.unordered matches it (def_id 268, upgraded false)"
+    )]
+    [InlineData(
+        "a choice between copies",
+        "pending_selection.candidate_cards[0]: matches 2 cards of piles.draw.unordered by def_id and upgraded that differ in their other fields, and none field for field"
+    )]
+    [InlineData(
+        "an index into the middle",
+        "pending_selection.candidates[1]: 3 is in piles.draw.unordered, whose order the load shuffles; name that candidate in candidate_cards"
+    )]
+    [InlineData(
+        "cards for a hand selection",
+        "pending_selection.candidate_cards: kind 2 does not choose from the draw pile; only a draw-pile selection names its candidates by card"
+    )]
+    [InlineData(
+        "an unknown card",
+        "pending_selection.candidate_cards[0].def_id: unknown card id 999999"
+    )]
+    public void ACandidateTheLoadCannotResolveIsRefusedWithTheFieldNamed(
+        string problem,
+        string expected
+    )
+    {
+        var document = JsonNode.Parse(DrawPileGrid(CL.SeekerStrike, [0], [IC.IronWave]))!;
+        var selection = document["pending_selection"]!;
+        switch (problem)
+        {
+            case "a card the middle does not hold":
+                selection["candidate_cards"] = Cards(IC.ShrugItOff, Bash);
+                break;
+            case "a known card named by card":
+                selection["candidate_cards"] = Cards(IC.Anger);
+                break;
+            case "one card named twice":
+                selection["candidate_cards"] = Cards(IC.IronWave, IC.IronWave);
+                break;
+            case "a choice between copies":
+                document["piles"]!["draw"]!["unordered"] = new JsonArray(
+                    JsonNode.Parse(
+                        DefaultCard(Strike, enchantment: Enchantment.Sharp, enchantAmount: 1)
+                    ),
+                    JsonNode.Parse(
+                        DefaultCard(Strike, enchantment: Enchantment.Sharp, enchantAmount: 2)
+                    )
+                );
+                selection["candidate_cards"] = Cards(Strike);
+                break;
+            case "an index into the middle":
+                selection["candidates"] = new JsonArray(0, 3);
+                break;
+            case "cards for a hand selection":
+                selection["kind"] = (int)CardSelectionKind.ExhaustFromHand;
+                break;
+            case "an unknown card":
+                selection["candidate_cards"] = Cards(999999);
+                break;
+        }
+
+        Assert.Equal(-1, Native.Load(document.ToJsonString(), seed: 1));
+        Assert.Equal(expected, Native.LastError());
+    }
+
+    /// <summary>
+    /// Every kind whose answer takes a draw-pile index names its middle candidates by
+    /// card, the kinds CombatEngine.ResolveCardSelection reads `state.DrawPile[index]` for.
+    /// </summary>
+    [Theory]
+    [InlineData(CardSelectionKind.DrawPileToHand)]
+    [InlineData(CardSelectionKind.TransformDrawPileToSoul)]
+    [InlineData(CardSelectionKind.ExhaustFromDrawPile)]
+    [InlineData(CardSelectionKind.TransformDrawToMinionDiveBomb)]
+    public void EveryDrawPileKindNamesItsMiddleCandidatesByCard(CardSelectionKind kind)
+    {
+        var document = JsonNode.Parse(DrawPileGrid(CL.SeekerStrike, [0], [IC.IronWave]))!;
+        document["pending_selection"]!["kind"] = (int)kind;
+
+        var state = Read(document.ToJsonString(), seed: 3);
+        var selection = JsonNode.Parse(Write(state))!["pending_selection"]!;
+
+        Assert.Equal(
+            new[] { IC.Anger, IC.IronWave },
+            state.PendingSelection!.Candidates.Select(i => state.DrawPile[i].DefId)
+        );
+        Assert.Equal(new[] { 0 }, selection["candidates"]!.AsArray().Select(i => (int)i!));
+        Assert.Equal(new[] { IC.IronWave }, DefIds(selection["candidate_cards"]));
+    }
+
+    /// <summary>
+    /// The minimal document over <see cref="UnorderedMiddle" />, Anger on top of it and
+    /// Thunderclap under it, with a draw-pile grid open: <paramref name="byIndex" /> in
+    /// known places, <paramref name="byCard" /> in the middle.
+    /// </summary>
+    private static string DrawPileGrid(int source, int[] byIndex, int[] byCard)
+    {
+        var document = Minimal();
+        document["piles"]!["draw"] = new JsonObject
+        {
+            ["known_top"] = Cards(IC.Anger),
+            ["known_bottom"] = Cards(IC.Thunderclap),
+            ["unordered"] = Cards(UnorderedMiddle),
+        };
+        document["pending_selection"] = new JsonObject
+        {
+            ["kind"] = (int)CardSelectionKind.DrawPileToHand,
+            ["candidates"] = new JsonArray(byIndex.Select(index => (JsonNode)index).ToArray()),
+            ["candidate_cards"] = Cards(byCard),
+            ["source_card_def_id"] = source,
+        };
+        return document.ToJsonString();
+    }
+
+    /// <summary>The card ids an open selection shows, in answer order.</summary>
+    private static int[] OfferedCards(int[] observation) =>
+        Enumerable
+            .Range(0, observation[CombatObservation.SelectionCountOffset])
+            .Select(i =>
+                observation[CombatObservation.SelectionOffset + i * CombatObservation.CardSlotSize]
+            )
+            .ToArray();
 
     // ── documents ────────────────────────────────────────────────────────────────────
 
@@ -862,7 +1171,8 @@ public class CombatSnapshotTests
 
     /// <summary>
     /// Every optional field in the document set to something that is not its default: one
-    /// card with every card field, one enemy with every AI field, every counter.
+    /// card with every card field, one enemy with every AI field, every counter, and a
+    /// draw-pile selection that names part of the unordered middle by card.
     /// </summary>
     private static string MaximalDocument()
     {
@@ -933,8 +1243,12 @@ public class CombatSnapshotTests
                     }
                   }],
                   "pending_selection": {
-                    "kind": {{(int)CardSelectionKind.RetainForNextTurn}}, "candidates": [0, 1],
-                    "source_card_def_id": {{SI.WellLaidPlans}}, "amount": 2, "skippable": true,
+                    "kind": {{(int)CardSelectionKind.DrawPileToHand}}, "candidates": [0],
+                    "candidate_cards": [
+                      {{DefaultCard(Strike, enchantment: Enchantment.Sharp, enchantAmount: 2)}},
+                      {{DefaultCard(Defend, upgraded: true)}}
+                    ],
+                    "source_card_def_id": {{CL.SeekerStrike}}, "amount": 2, "skippable": true,
                     "generated_candidates": [{{Strike}}, {{Defend}}], "generated_upgraded": true,
                     "generated_retained": true,
                     "after_selection_to_hand": [{{DefaultCard(Bash, upgraded: true)}}],
@@ -973,6 +1287,9 @@ public class CombatSnapshotTests
 
     private static CombatState Read(string json, out int turn) =>
         CombatSnapshot.Read(Encoding.UTF8.GetBytes(json), seed: 1, out turn);
+
+    private static CombatState Read(string json, int seed) =>
+        CombatSnapshot.Read(Encoding.UTF8.GetBytes(json), seed, out _);
 
     private static string Write(CombatState state) =>
         Encoding.UTF8.GetString(CombatSnapshot.Write(state));
@@ -1037,26 +1354,48 @@ public class CombatSnapshotTests
 
     /// <summary>
     /// A document in the form the round-trip rule compares: keys sorted, and the unordered
-    /// middle of the draw pile sorted, because it is compared as a multiset (schema §2.1).
+    /// middle of the draw pile and a selection's candidate cards sorted, because each is
+    /// compared as a multiset (schema §2.1). A bare array of cards is one such multiset.
     /// </summary>
     private static string Canonical(string json) => Canonical(JsonNode.Parse(json));
 
     private static string Canonical(JsonNode? node)
     {
         var sorted = SortKeys(node);
-        if (sorted?["piles"]?["draw"] is JsonObject draw && draw["unordered"] is JsonArray middle)
+        if (sorted is JsonArray cards)
         {
-            draw["unordered"] = new JsonArray(
-                middle
-                    .Select(card => card!.ToJsonString())
-                    .Order(StringComparer.Ordinal)
-                    .Select(card => JsonNode.Parse(card))
-                    .ToArray()
-            );
+            sorted = Multiset(cards);
+        }
+        else if (sorted is JsonObject document)
+        {
+            if (
+                document["piles"]?["draw"] is JsonObject draw
+                && draw["unordered"] is JsonArray middle
+            )
+            {
+                draw["unordered"] = Multiset(middle);
+            }
+
+            if (
+                document["pending_selection"] is JsonObject selection
+                && selection["candidate_cards"] is JsonArray named
+            )
+            {
+                selection["candidate_cards"] = Multiset(named);
+            }
         }
 
         return sorted?.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) ?? "null";
     }
+
+    private static JsonArray Multiset(JsonArray cards) =>
+        new(
+            cards
+                .Select(card => card!.ToJsonString())
+                .Order(StringComparer.Ordinal)
+                .Select(card => JsonNode.Parse(card))
+                .ToArray()
+        );
 
     private static JsonNode? SortKeys(JsonNode? node) =>
         node switch

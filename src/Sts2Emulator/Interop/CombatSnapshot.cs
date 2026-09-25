@@ -47,10 +47,19 @@ public sealed class SnapshotException : Exception
 /// The loader refuses what it cannot honour exactly, naming the field: an unknown id, a
 /// missing required field, a value of the wrong type, a field the schema does not have,
 /// a count past what the game allows (eleven cards in hand, a seventh enemy, a seventh
-/// potion slot), or a buff list the engine could not hold (one BuffId twice, or an
-/// amount of zero). It never drops or trims anything to make a document fit -- a state
-/// that is silently half-built gives confident advice about a fight nobody is in. Buffs
-/// past the observation's ten (player) or five (enemy) slots are loaded all the same.
+/// potion slot), a buff list the engine could not hold (one BuffId twice, or an amount
+/// of zero), or a draw-pile candidate it cannot place (below). It never drops or trims
+/// anything to make a document fit -- a state that is silently half-built gives
+/// confident advice about a fight nobody is in. Buffs past the observation's ten
+/// (player) or five (enemy) slots are loaded all the same.
+/// </para>
+/// <para>
+/// The load shuffles the draw pile's unordered middle with its seed, so an index into
+/// that region would name whatever card the seed put there. A draw-pile selection
+/// therefore names its candidates there by card, in <c>candidate_cards</c>, and the load
+/// finds them after its shuffle; only its candidates at the known ends are indices. The
+/// export writes a draw-pile selection the same way, so the offer survives any load seed.
+/// See <see cref="ReadCandidates" />.
 /// </para>
 /// <para>
 /// <c>counters</c> carries every per-turn and per-combat field of CombatState that has no
@@ -322,6 +331,7 @@ public static class CombatSnapshot
     [
         "kind",
         "candidates",
+        "candidate_cards",
         "source_card_def_id",
         "amount",
         "skippable",
@@ -682,7 +692,7 @@ public static class CombatSnapshot
         state.PendingSelection = new PendingCardSelection
         {
             Kind = kind,
-            Candidates = fields.RequiredItems("candidates", ReadCandidate),
+            Candidates = ReadCandidates(fields, kind, state),
             SourceCardDefId = fields.Int("source_card_def_id"),
             Amount = fields.Int("amount", 0),
             Skippable = fields.Bool("skippable", false),
@@ -707,6 +717,158 @@ public static class CombatSnapshot
         return index >= 0
             ? index
             : throw new SnapshotException(path, $"{index}; a candidate index cannot be negative");
+    }
+
+    /// <summary>
+    /// The selection's candidates: the indices <c>candidates</c> gives, and for a draw-pile
+    /// selection the indices its <c>candidate_cards</c> are found at in the unordered middle
+    /// the load has just shuffled (<see cref="FindInUnorderedMiddle" />), all in pile order.
+    /// </summary>
+    /// <remarks>
+    /// An index into that middle names whatever card the load's seed put there, not the one
+    /// the document meant, so a draw-pile selection may not give one: its known-top and
+    /// known-bottom candidates are indices, and the middle's are cards. Any other selection
+    /// indexes a pile the load keeps in order and names nothing by card.
+    /// </remarks>
+    private static List<int> ReadCandidates(
+        Fields fields,
+        CardSelectionKind kind,
+        CombatState state
+    )
+    {
+        var candidates = fields.RequiredItems("candidates", ReadCandidate);
+        var cards = fields.Items("candidate_cards", ReadCard);
+        if (!ChoosesFromDrawPile(kind))
+        {
+            return cards.Count == 0
+                ? candidates
+                : throw new SnapshotException(
+                    fields.At("candidate_cards"),
+                    $"kind {(int)kind} does not choose from the draw pile; only a draw-pile "
+                        + "selection names its candidates by card"
+                );
+        }
+
+        var (start, end) = UnorderedMiddle(state);
+        for (int i = 0; i < candidates.Count; i++)
+        {
+            if (candidates[i] >= start && candidates[i] < end)
+            {
+                throw new SnapshotException(
+                    Item(fields.At("candidates"), i),
+                    $"{candidates[i]} is in piles.draw.unordered, whose order the load "
+                        + "shuffles; name that candidate in candidate_cards"
+                );
+            }
+        }
+
+        if (cards.Count == 0)
+        {
+            return candidates;
+        }
+
+        var found = FindInUnorderedMiddle(cards, state, fields.At("candidate_cards"));
+        return [.. candidates.Concat(found).Order()];
+    }
+
+    /// <summary>
+    /// The draw-pile index each of <paramref name="cards" /> is found at in the unordered
+    /// middle, read AFTER the load's shuffle. Nothing is moved; only indices are read.
+    /// </summary>
+    /// <remarks>
+    /// A card takes the first free copy in the middle that matches it field for field --
+    /// copies alike in every field are the same card to the engine, so which one it takes
+    /// changes nothing. Only then does a card no copy matches take a free copy with its
+    /// def_id and upgrade, and only if every such copy is alike: otherwise the seed would
+    /// decide which card the selection offers, so the document is refused instead. A card
+    /// with no free copy left is refused too; the known ends are not searched, because a
+    /// card there has an index the document gives.
+    /// </remarks>
+    private static List<int> FindInUnorderedMiddle(
+        List<CardInstance> cards,
+        CombatState state,
+        string path
+    )
+    {
+        var pile = state.DrawPile;
+        var (start, end) = UnorderedMiddle(state);
+        var taken = new bool[pile.Count];
+        var found = new int[cards.Count];
+        Array.Fill(found, -1);
+
+        for (int i = 0; i < cards.Count; i++)
+        {
+            for (int at = start; at < end; at++)
+            {
+                if (!taken[at] && pile[at] == cards[i])
+                {
+                    found[i] = at;
+                    taken[at] = true;
+                    break;
+                }
+            }
+        }
+
+        for (int i = 0; i < cards.Count; i++)
+        {
+            if (found[i] >= 0)
+            {
+                continue;
+            }
+
+            var card = cards[i];
+            var alike = Enumerable
+                .Range(start, end - start)
+                .Where(at =>
+                    !taken[at] && pile[at].DefId == card.DefId && pile[at].Upgraded == card.Upgraded
+                )
+                .ToList();
+            if (alike.Count == 0)
+            {
+                throw new SnapshotException(
+                    Item(path, i),
+                    $"no card left in piles.draw.unordered matches it (def_id {card.DefId}, "
+                        + $"upgraded {(card.Upgraded ? "true" : "false")})"
+                );
+            }
+
+            if (alike.Select(at => pile[at]).Distinct().Count() > 1)
+            {
+                throw new SnapshotException(
+                    Item(path, i),
+                    $"matches {alike.Count} cards of piles.draw.unordered by def_id and upgraded "
+                        + "that differ in their other fields, and none field for field"
+                );
+            }
+
+            found[i] = alike[0];
+            taken[alike[0]] = true;
+        }
+
+        return [.. found];
+    }
+
+    /// <summary>
+    /// The kinds whose answer takes a draw-pile index: <c>CombatEngine.ResolveCardSelection</c>
+    /// reads <c>state.DrawPile[index]</c> for exactly these.
+    /// </summary>
+    private static bool ChoosesFromDrawPile(CardSelectionKind kind) =>
+        kind
+            is CardSelectionKind.DrawPileToHand
+                or CardSelectionKind.TransformDrawPileToSoul
+                or CardSelectionKind.ExhaustFromDrawPile
+                or CardSelectionKind.TransformDrawToMinionDiveBomb;
+
+    /// <summary>
+    /// Where the unordered middle of the draw pile sits: past the known top and short of
+    /// the known bottom, each held inside the pile, as [Start, End).
+    /// </summary>
+    private static (int Start, int End) UnorderedMiddle(CombatState state)
+    {
+        int count = state.DrawPile.Count;
+        int top = Math.Clamp(state.KnownTopCount, 0, count);
+        int bottom = Math.Clamp(state.KnownBottomCount, 0, count - top);
+        return (top, count - bottom);
     }
 
     // ── ids ──────────────────────────────────────────────────────────────────────────
@@ -1061,19 +1223,29 @@ public static class CombatSnapshot
 
     /// <summary>
     /// The draw pile in three parts: the known top and bottom in pile order, and the middle
-    /// the player knows only as a multiset. The middle is SORTED -- by def id, then
-    /// upgraded, then by every other field the card carries -- so two states holding the
-    /// same cards in different orders write the same document.
+    /// the player knows only as a multiset, <see cref="Sorted" />.
     /// </summary>
     private static void WriteDrawPile(Utf8JsonWriter w, CombatState state)
     {
         var pile = state.DrawPile;
-        int top = Math.Clamp(state.KnownTopCount, 0, pile.Count);
-        int bottom = Math.Clamp(state.KnownBottomCount, 0, pile.Count - top);
-        var middle = pile.GetRange(top, pile.Count - top - bottom)
-            .Select(card => (Card: card, Json: CardJson(card)))
-            .ToList();
-        middle.Sort(
+        var (start, end) = UnorderedMiddle(state);
+
+        w.WriteStartObject("draw");
+        WriteItems(w, "known_top", pile.Take(start), WriteCard);
+        WriteItems(w, "known_bottom", pile.Skip(end), WriteCard);
+        WriteItems(w, "unordered", Sorted(pile.GetRange(start, end - start)), WriteCard);
+        w.WriteEndObject();
+    }
+
+    /// <summary>
+    /// Cards the document holds as a multiset, SORTED -- by def id, then upgraded, then by
+    /// every other field the card carries -- so two states holding the same cards in
+    /// different orders write the same document.
+    /// </summary>
+    private static List<CardInstance> Sorted(IEnumerable<CardInstance> cards)
+    {
+        var keyed = cards.Select(card => (Card: card, Json: CardJson(card))).ToList();
+        keyed.Sort(
             static (left, right) =>
             {
                 int order = left.Card.DefId.CompareTo(right.Card.DefId);
@@ -1085,12 +1257,31 @@ public static class CombatSnapshot
                 return order != 0 ? order : left.Json.AsSpan().SequenceCompareTo(right.Json);
             }
         );
+        return [.. keyed.Select(entry => entry.Card)];
+    }
 
-        w.WriteStartObject("draw");
-        WriteItems(w, "known_top", pile.Take(top), WriteCard);
-        WriteItems(w, "known_bottom", pile.Skip(pile.Count - bottom), WriteCard);
-        WriteItems(w, "unordered", middle.Select(entry => entry.Card), WriteCard);
-        w.WriteEndObject();
+    /// <summary>
+    /// A selection's candidates as the document holds them. A draw-pile selection's
+    /// candidates in the unordered middle are cards, <see cref="Sorted" /> as that middle
+    /// is, because the document gives the middle no order an index could point into; every
+    /// other candidate is an index, in the order the selection keeps it.
+    /// </summary>
+    private static (List<int> Indices, List<CardInstance> Cards) DocumentCandidates(
+        CombatState state,
+        PendingCardSelection selection
+    )
+    {
+        if (!ChoosesFromDrawPile(selection.Kind))
+        {
+            return (selection.Candidates, []);
+        }
+
+        var (start, end) = UnorderedMiddle(state);
+        bool InMiddle(int index) => index >= start && index < end;
+        return (
+            [.. selection.Candidates.Where(index => !InMiddle(index))],
+            Sorted(selection.Candidates.Where(InMiddle).Select(index => state.DrawPile[index]))
+        );
     }
 
     private static byte[] CardJson(CardInstance card)
@@ -1188,12 +1379,9 @@ public static class CombatSnapshot
 
         w.WriteStartObject("pending_selection");
         w.WriteNumber("kind", (int)selection.Kind);
-        WriteItems(
-            w,
-            "candidates",
-            selection.Candidates,
-            (writer, index) => writer.WriteNumberValue(index)
-        );
+        var (indices, cards) = DocumentCandidates(state, selection);
+        WriteItems(w, "candidates", indices, (writer, index) => writer.WriteNumberValue(index));
+        WriteItems(w, "candidate_cards", cards, WriteCard);
         w.WriteNumber("source_card_def_id", selection.SourceCardDefId);
         w.WriteNumber("amount", selection.Amount);
         w.WriteBoolean("skippable", selection.Skippable);

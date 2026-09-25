@@ -50,7 +50,7 @@ STARTING_ENERGY = 3
 POTION_SLOT_CAPACITY = 6
 
 # The snapshot loader refuses more than MAX_ENEMIES enemies or MAX_HAND cards in hand
-# (NativeExports.cs:35-36; CombatSnapshot.cs:380-385, :473) -- the game's own limits, so a
+# (NativeExports.cs:35-36; CombatSnapshot.cs:390-395, :483) -- the game's own limits, so a
 # live document past them is malformed. (It also refuses an empty roster, with its own
 # message; a live combat always has an enemy.) MAX_HAND is `selection.MAX_HAND`.
 MAX_ENEMIES = 6

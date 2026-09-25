@@ -1816,8 +1816,8 @@ class LoaderLimitTests(Refusals):
 
 LOADER_SOURCE = ROOT / "src" / "Sts2Emulator" / "Interop" / "CombatSnapshot.cs"
 
-# The fields the loader cannot do without (CombatSnapshot.cs:349-358, :380, :414-418,
-# :493-496, :529, :542-543, and the buff, relic and orb readers): each is read with no
+# The fields the loader cannot do without (CombatSnapshot.cs:359-368, :390, :424-428,
+# :503-506, :539, :552-553, and the buff, relic and orb readers): each is read with no
 # default, and a document missing one is refused.
 LOADER_REQUIRED = {
     "combat": {"schema", "ascension", "turn", "player", "enemies"},
@@ -1918,6 +1918,8 @@ class LoaderShapeTests(unittest.TestCase):
                         "selection",
                         "pending_selection",
                     )
+                    for emu in doc["pending_selection"]["candidate_cards"]:
+                        self.assert_fields(emu, "card", "a candidate card")
 
     def test_every_counter_the_converter_can_write_is_one_the_loader_reads(
         self,
@@ -1936,7 +1938,7 @@ class LoaderShapeTests(unittest.TestCase):
 def loadable(live_doc: dict[str, Any]) -> dict[str, Any]:
     """Return the live document, given a lone Nibbit on the round's move if it has no enemy.
 
-    The loader refuses an empty roster (CombatSnapshot.cs:386-389), and the piles fixture,
+    The loader refuses an empty roster (CombatSnapshot.cs:396-399), and the piles fixture,
     which is about the piles, has none.
     """
     if live_doc["enemies"]:
@@ -2021,7 +2023,8 @@ def normalized(
     """Normalize a document per schema section 2.1, so two documents compare as states.
 
     - omitted optional fields take the loader's defaults;
-    - `piles.draw.unordered` is a multiset, so it is sorted;
+    - `piles.draw.unordered` and `pending_selection.candidate_cards` are multisets, so
+      they are sorted;
     - a null `debuffs_at_round_start` becomes its derived value, which only the loader
       computes, so it is taken from `derived`, the exported document.
     """
@@ -2030,6 +2033,9 @@ def normalized(
 
     def cards(pile: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [card_defaults | item for item in pile]
+
+    def multiset(pile: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return sorted(cards(pile), key=lambda item: json.dumps(item, sort_keys=True))
 
     out = defaults["combat"] | out
     out["player"] = defaults["player"] | out["player"]
@@ -2045,10 +2051,7 @@ def normalized(
     piles["draw"] = {
         "known_top": cards(draw["known_top"]),
         "known_bottom": cards(draw["known_bottom"]),
-        "unordered": sorted(
-            cards(draw["unordered"]),
-            key=lambda item: json.dumps(item, sort_keys=True),
-        ),
+        "unordered": multiset(draw["unordered"]),
     }
     for key in ("hand", "discard", "exhaust"):
         piles[key] = cards(piles[key])
@@ -2067,6 +2070,7 @@ def normalized(
     if out.get("pending_selection") is not None:
         pending = defaults["selection"] | out["pending_selection"]
         pending["after_selection_to_hand"] = cards(pending["after_selection_to_hand"])
+        pending["candidate_cards"] = multiset(pending["candidate_cards"])
         out["pending_selection"] = pending
     return out
 
@@ -2133,6 +2137,23 @@ class EndToEndLoadTests(unittest.TestCase):
                     normalized(doc, defaults, exported),
                     normalized(changed, defaults, exported),
                 )
+
+        # A draw-pile grid's cards are a multiset: their order is not compared, and the
+        # cards themselves are.
+        doc = convert.convert(load("selection/seeker_strike_middle")).doc
+        exported = round_trip(doc, 1)
+        reordered = copy.deepcopy(exported)
+        reordered["pending_selection"]["candidate_cards"].reverse()
+        self.assertEqual(
+            normalized(doc, defaults, exported),
+            normalized(reordered, defaults, exported),
+        )
+        upgraded = copy.deepcopy(exported)
+        upgraded["pending_selection"]["candidate_cards"][0]["upgraded"] = True
+        self.assertNotEqual(
+            normalized(doc, defaults, exported),
+            normalized(upgraded, defaults, exported),
+        )
 
 
 class CliTests(unittest.TestCase):

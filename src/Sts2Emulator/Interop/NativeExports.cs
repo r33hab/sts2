@@ -56,7 +56,12 @@ public static class NativeExports
     //      Sts2_ResetArena takes a belt size. Sts2_StartingDeck, Sts2_StartingHp,
     //      Sts2_StartingMaxHp and Sts2_StartingPotionSlots publish those starting values,
     //      and Sts2_DefaultAscension publishes the level the plain resets deal.
-    public const int NATIVE_API_VERSION = 31;
+    // v32: a draw-pile selection in an `sts2-emu-snapshot/1` document names its candidates
+    //      in the unordered middle by card (`candidate_cards`), which Sts2_LoadCombatSnapshot
+    //      finds after its shuffle and Sts2_GetStateJson writes back; an index into that
+    //      middle is refused. A library from before refuses the field, and wrote indices
+    //      that a reload's shuffle pointed at other cards.
+    public const int NATIVE_API_VERSION = 32;
 
     /// <summary>
     /// The plain resets' deck: the start of a run at the default level, from the one

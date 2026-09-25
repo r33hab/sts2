@@ -19,8 +19,12 @@ A selection this cannot carry exactly maps to None, with a warning naming why:
 - a source the table does not know, or a screen other than the one it expects;
 - bounds that contradict the source;
 - a follow-up that depends on the played card's upgrade when the snapshot lacks the card;
-- candidates it cannot index, or cannot tell apart.
+- candidates it cannot find in their pile, or cannot tell apart.
 The emulator's position then has no selection, and the warning makes it unreliable.
+
+A candidate is an index into its pile, except in the draw pile's unordered middle, which
+the loader shuffles: a candidate there is named by card (`candidate_cards`), and the
+loader finds it after its shuffle.
 """
 
 from __future__ import annotations
@@ -34,7 +38,7 @@ from sts2_gym import names
 from sts2_gym.live import cards, ids, powers
 
 # `CardPile.MaxCardsInHand`: the game's hand cap. The snapshot loader refuses a hand past
-# it too (NativeExports.cs:35-36; CombatSnapshot.cs:380-385, :473), which `convert` checks.
+# it too (NativeExports.cs:35-36; CombatSnapshot.cs:390-395, :483), which `convert` checks.
 MAX_HAND = 10
 
 # The "pick any number" bound, `CardSelectorPrefs(prompt, 0, 999999999)` (decompiled
@@ -494,8 +498,10 @@ TURN_START_LISTENERS = frozenset(
 class Draw:
     """The live draw pile in the emulator's three regions (schema section 2, piles.draw).
 
-    The loader shuffles `middle` with its own seed (CombatSnapshot.cs:471-487), so a card
-    there has no index the converter can know; `top` and `bottom` keep theirs.
+    The loader shuffles `middle` with its own seed (CombatSnapshot.cs `ReadPiles`), so a
+    card there has no index the converter can know: a candidate there is named by card
+    instead, and the loader finds it after its shuffle. `top` and `bottom` keep their
+    indices.
     """
 
     top: Sequence[Mapping[str, Any]] = ()
@@ -525,8 +531,11 @@ def to_pending(
 
     `hand`, `discard`, `exhaust` and `draw` are the live piles, validated, in the order
     the converter hands them to the emulator. A match must be exact:
-    - a HAND or GRID candidate becomes an index into its pile, in ascending order, found
-      by uid, else by its whole face, else by `(id, upgraded)` when that is unambiguous;
+    - a HAND or GRID candidate is found in its pile by uid, else by its whole face, else
+      by `(id, upgraded)` when that is unambiguous, and becomes an index into the pile, in
+      ascending order;
+    - except a draw-pile candidate in the unordered middle, which the loader shuffles: it
+      becomes the draw pile's own card in `candidate_cards` (`_draw_candidates`);
     - a CHOOSE candidate becomes a `generated_candidates` id;
     - the source decides the kind and what the answer does next.
     `selected_uids` are toggles the game has not acted on, so the emulator's screen
@@ -590,6 +599,7 @@ def _map(
 
     generated: list[int] = []
     generated_upgraded = False
+    by_card: list[dict[str, Any]] = []
     if opens.screen == "CHOOSE":
         offer = _generated(candidates)
         if isinstance(offer, str):
@@ -600,11 +610,12 @@ def _map(
         found = _candidate_indices(opens, screen, discard, exhaust, draw)
         if isinstance(found, str):
             return f"{what}: {found}"
-        indices = found
+        indices, by_card = found
 
     return {
         "kind": _kind(opens.kind),
         "candidates": indices,
+        "candidate_cards": by_card,
         "source_card_def_id": (
             ids.card_id(who[1]) if opens.source_def_id is None else opens.source_def_id
         ),
@@ -704,29 +715,56 @@ def _candidate_indices(
     discard: Sequence[Mapping[str, Any]],
     exhaust: Sequence[Mapping[str, Any]],
     draw: Draw,
-) -> list[int] | str:
-    """Index a HAND or GRID screen's candidates into the pile the emulator takes them from."""
+) -> tuple[list[int], list[dict[str, Any]]] | str:
+    """Place a HAND or GRID screen's candidates in the pile the emulator takes them from.
+
+    Return their indices into it, in pile order, and the draw-pile candidates the loader
+    finds by card (`_draw_candidates`).
+    """
     candidates = screen.pending["candidates"]
     if opens.screen == "HAND":
-        return _match(candidates, screen.hand, "hand")
-    if opens.pile == "DISCARD":
-        return _match(candidates, discard, "discard pile")
-    if opens.pile == "EXHAUST":
-        return _match(candidates, exhaust, "exhaust pile")
+        found = _match(candidates, screen.hand, "hand")
+    elif opens.pile == "DISCARD":
+        found = _match(candidates, discard, "discard pile")
+    elif opens.pile == "EXHAUST":
+        found = _match(candidates, exhaust, "exhaust pile")
+    else:
+        return _draw_candidates(candidates, draw)
+    return found if isinstance(found, str) else (sorted(found), [])
 
+
+def _draw_candidates(
+    candidates: Sequence[Mapping[str, Any]],
+    draw: Draw,
+) -> tuple[list[int], list[dict[str, Any]]] | str:
+    """Place a draw-pile grid's candidates: by index at the known ends, by card between.
+
+    The loader shuffles the unordered middle with its seed (CombatSnapshot.cs
+    `ReadPiles`), so an index into it would name whatever card the seed put there, and
+    the loader refuses one. A candidate there is named by the draw pile's own copy of it,
+    translated as the pile is, and the loader finds that copy once it has shuffled
+    (`FindInUnorderedMiddle`). Only cards the grid shows are named, in the order the live
+    draw pile lists them, and the loader uses them for nothing but finding the candidates.
+    """
     pile = [*draw.top, *draw.middle, *draw.bottom]
     found = _match(candidates, pile, "draw pile")
     if isinstance(found, str):
         return found
     middle = range(len(draw.top), len(draw.top) + len(draw.middle))
-    offered = sum(index in middle for index in found)
-    if 0 < offered < len(middle):
-        return (
-            f"it offers {offered} of the {len(middle)} draw-pile cards whose order the "
-            "player does not know, and the loader shuffles those (CombatSnapshot.cs:"
-            "471-487), so which draw-pile indices they take is unknown until it loads"
-        )
-    return found
+    offered_as = {index: i for i, index in enumerate(found)}
+    return (
+        [index for index in sorted(found) if index not in middle],
+        [
+            cards.to_emu_card(
+                pile[index],
+                path=f"pending_selection.candidates[{offered_as[index]}]",
+                # Said once already: `convert` translates the pile, this card included.
+                warnings=[],
+            )
+            for index in sorted(found)
+            if index in middle
+        ],
+    )
 
 
 def _match(
@@ -736,17 +774,18 @@ def _match(
 ) -> list[int] | str:
     """Find each candidate in `pile`, taking each pile card at most once.
 
-    A candidate whose uid the pile carries must be that card. The rest are matched after
-    them, so they never take a card a uid pins down, and only against cards their uid
-    cannot contradict (either side's uid missing):
+    Return each candidate's index into `pile`, in candidate order. A candidate whose uid
+    the pile carries must be that card. The rest are matched after them, so they never
+    take a card a uid pins down, and only against cards their uid cannot contradict
+    (either side's uid missing):
     - first by the whole face (`cards.FACE`), taking the first such card in pile order,
       since cards with one face are the same card to the emulator;
     - else by `(id, upgraded)`, but only when the free cards that match that way all
       share one face, so the choice among them cannot matter.
     """
     uids = {card["uid"] for card in pile if card["uid"] is not None}
-    taken: set[int] = set()
-    for card in candidates:
+    placed: dict[int, int] = {}
+    for position, card in enumerate(candidates):
         if card["uid"] not in uids:
             continue
         index = next(i for i, held in enumerate(pile) if held["uid"] == card["uid"])
@@ -756,23 +795,23 @@ def _match(
                 f"candidate uid {card['uid']} is {held['id']} in the {where}, not "
                 f"{card['id']}"
             )
-        if index in taken:
+        if index in placed.values():
             return f"candidate uid {card['uid']} is offered twice"
-        taken.add(index)
-    for card in candidates:
+        placed[position] = index
+    for position, card in enumerate(candidates):
         if card["uid"] in uids:
             continue
         free = [
             i
             for i, held in enumerate(pile)
-            if i not in taken and (card["uid"] is None or held["uid"] is None)
+            if i not in placed.values() and (card["uid"] is None or held["uid"] is None)
         ]
         same_face = [i for i in free if _face(pile[i]) == _face(card)]
         close = [i for i in free if _id_and_upgrade(pile[i]) == _id_and_upgrade(card)]
         if same_face:
-            taken.add(same_face[0])
+            placed[position] = same_face[0]
         elif close and len({_face(pile[i]) for i in close}) == 1:
-            taken.add(close[0])
+            placed[position] = close[0]
         elif close:
             return (
                 f"candidate {card['id']} (uid {card['uid']}) could be any of "
@@ -781,7 +820,7 @@ def _match(
             )
         else:
             return f"candidate {card['id']} (uid {card['uid']}) is not in the {where}"
-    return sorted(taken)
+    return [placed[position] for position in range(len(candidates))]
 
 
 # ── Finishing the play the emulator's way ────────────────────────────────────
