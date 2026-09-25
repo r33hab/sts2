@@ -1,0 +1,199 @@
+{
+  "schema": "sts2-live-snapshot/1",
+  "game_version": "v0.107.1",
+  "character": "IRONCLAD",
+  "ascension": 10,
+  "act": 1,
+  "floor": 2,
+  "room_type": "monster",
+  "round": 2,
+  "player": {
+    "hp": 64,
+    "max_hp": 80,
+    "block": 0,
+    "energy": 3,
+    "max_energy": 3,
+    "gold": 99,
+    "stars": 0,
+    "osty": null,
+    "orbs": {
+      "slots": 0,
+      "list": []
+    },
+    "powers": [
+      {
+        "id": "WEAK_POWER",
+        "amount": 1
+      }
+    ],
+    "relics": [
+      {
+        "id": "BURNING_BLOOD",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "LAVA_ROCK",
+        "counter": null,
+        "fields": {
+          "HasTriggered": false
+        }
+      }
+    ],
+    "potions": [
+      {
+        "slot": 0,
+        "id": null
+      },
+      {
+        "slot": 1,
+        "id": null
+      }
+    ],
+    "max_potion_slots": 2
+  },
+  "hand": [
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#3",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "ASCENDERS_BANE",
+      "upgraded": false,
+      "uid": "ASCENDERS_BANE#0",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#3",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    }
+  ],
+  "draw_pile": [
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    }
+  ],
+  "discard_pile": [
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#4",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "BASH",
+      "upgraded": false,
+      "uid": "BASH#0",
+      "cost": 2,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    }
+  ],
+  "exhaust_pile": [],
+  "known_draw_top": [],
+  "known_draw_bottom": [],
+  "enemies": [
+    {
+      "entity_id": "SLUDGE_SPINNER_0",
+      "id": "SLUDGE_SPINNER",
+      "slot": 0,
+      "hp": 35,
+      "max_hp": 41,
+      "block": 0,
+      "powers": [],
+      "intents": [
+        {
+          "type": "ATTACK",
+          "damage": 12,
+          "base_damage": 12,
+          "hits": 1
+        }
+      ],
+      "move_id": "SLAM_MOVE",
+      "state_log": [
+        "OIL_SPRAY_MOVE",
+        "SLAM_MOVE"
+      ],
+      "ai_fields": {
+        "OilSprayDamage": 9,
+        "SlamDamage": 12,
+        "RageDamage": 7
+      }
+    }
+  ],
+  "history": {
+    "cards_played_this_turn": 0,
+    "cards_played_this_combat": 3,
+    "attacks_played_this_turn": 0,
+    "skills_played_this_turn": 0
+  },
+  "pending_selection": null
+}

@@ -23,13 +23,19 @@ one line in the log, so a newer coach still works with an older service. The met
             turn it expects and every move's statistics out, all in game terms (`moves`).
             A search worker that failed, died or hung during the call makes the answer
             unreliable: that is how an emulator fault on the position shows.
+  check     the live positions before and after a move, and the move in game terms; does
+            the simulator predict what the game did (`fidelity`)?
+  strategy  the training design's live-run object and a live screen in; the exported
+            strategy champion's value for each option on it, best first (`StrategyModel`).
   shutdown  answer, then stop the worker pool and exit 0. EOF on stdin does the same, and
             so does SIGTERM, with status 143.
 
 The error types: `bad_request` (not JSON, no id, a bad param value), `unknown_method`,
-`conversion` (the converter refused the snapshot, naming the field), `load` (the
-emulator refused the converted position), `mapping` (the emulator's position does not
-line up with the live one, so its moves cannot be named), `search` (the search failed)
+`conversion` (the converter refused a snapshot, naming the field), `load` (the emulator
+refused the converted position), `mapping` (the emulator's position does not line up with
+the live one, so its moves cannot be named, or a move names what the position does not
+hold), `search` (the search failed), `no_model` (no strategy champion is exported, or the
+training package is not there), `strategy` (the training package failed on the request)
 and `internal` (a bug; its traceback is in the log).
 """
 
@@ -50,16 +56,17 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import asdict
+from dataclasses import asdict, fields, is_dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Protocol, TextIO
+from typing import Any, Protocol, SupportsFloat, TextIO, cast
 
 # The native library is loaded by the time this module runs: `python -m` imports the
 # `sts2_gym` package first, whose `env` imports `native`. The search is not, and waits
-# for `main` to claim stdout (`_search_module`).
+# for `main` to claim stdout (`_search_module`); nor is the training package, which
+# `StrategyModel` imports on the first `strategy` request.
 from sts2_gym import native
-from sts2_gym.live import ConversionError, moves
+from sts2_gym.live import ConversionError, fidelity, moves
 from sts2_gym.live.convert import convert
 
 _ROOT = Path(__file__).resolve().parents[3]
@@ -68,6 +75,17 @@ SERVICE_VERSION = "1"
 GAME_VERSION_TARGET = "v0.107.1"
 DEFAULT_WORKERS = 4
 WORKER_NICE = 10
+
+# `check` loads the position before once per resample; this many at most.
+MAX_RESAMPLES = 256
+# The fields of the protocol's `Move`, which `check` reads its move from.
+MOVE_FIELDS = frozenset(field.name for field in fields(moves.Move))
+
+# Where the training loop's `export` puts the strategy champion: `model.json` and its
+# weights (the training branch's rl/run_train/DESIGN.md, section 7, Task 4).
+STRATEGY_MODEL_DIR = (
+    Path.home() / "Documents" / "git" / "spire-coach" / "data" / "models" / "strategy"
+)
 
 # `analyze`'s params beside `live`, and their defaults.
 ANALYZE_DEFAULTS: dict[str, float | int] = {
@@ -107,18 +125,151 @@ class RequestError(Exception):
         self.message = message
 
 
-class Service:
-    """Answer protocol lines one at a time, with one search pool behind them."""
+class NoModelError(Exception):
+    """No strategy champion to score with: none is exported, or no training package."""
 
-    def __init__(self, searcher: Searcher, *, workers: int, sim_commit: str) -> None:
+
+class StrategyError(Exception):
+    """The training package failed on a request; the message names its error."""
+
+
+# The training package, bound to an exported champion: its live front end
+# (`run_train.features`) and `run_train.policy.score_options`.
+Scorer = tuple[Any, Callable[[Any, Any], Any]]
+
+
+def _training_package(model_dir: Path, info: Mapping[str, Any]) -> Scorer:
+    """Import the training package's live front end and inference API, lazily.
+
+    `rl/run_train` arrives with the training merge. Its `policy.score_options(decision,
+    view)` scores with the champion its own `export` wrote to `model_dir`, so the policy
+    module is reloaded when it was imported before: a new generation's weights are then
+    read afresh.
+
+    Raises:
+        NoModelError: If `run_train.features` or `run_train.policy` cannot be imported.
+
+    """
+    _rl_on_path()
+    try:
+        features = importlib.import_module("run_train.features")
+        again = "run_train.policy" in sys.modules
+        policy = importlib.import_module("run_train.policy")
+        if again:
+            policy = importlib.reload(policy)
+    except ImportError as error:
+        raise NoModelError(
+            f"the training package is not importable: {error}",
+        ) from error
+    _LOG.info(
+        "strategy champion generation %s loaded from %s",
+        info["generation"],
+        model_dir,
+    )
+    return features, policy.score_options
+
+
+class StrategyModel:
+    """The strategy champion the training loop exported, scored through its inference API.
+
+    `model_dir` holds the champion: `model.json` and its `.npz` weights. `load` binds the
+    training package to it (`_training_package`), and is the seam the tests fake. The
+    champion is loaded on the first request and again whenever `model.json` names another
+    generation, never at start-up, so the service starts without the training package and
+    answers `no_model` until both it and a champion are there.
+    """
+
+    def __init__(
+        self,
+        model_dir: Path = STRATEGY_MODEL_DIR,
+        *,
+        load: Callable[[Path, Mapping[str, Any]], Scorer] = _training_package,
+    ) -> None:
+        self._dir = model_dir
+        self._load = load
+        self._generation: int | None = None
+        self._scorer: Scorer | None = None
+
+    def score(self, live_run: dict[str, Any], screen: dict[str, Any]) -> dict[str, Any]:
+        """Value each option on a live screen with the champion, best first.
+
+        As the training design lays it out (its DESIGN.md, 3.4 to 3.7): `view =
+        features.view_from_live(live_run)`, `decision = features.decision_from_live(screen,
+        view)`, then `score_options(decision, decision.view or view)`, where a later pick
+        of a multi-card selection carries the view its options index. Returns the options
+        and the champion's `model.json`. `NoModelError` is raised when no champion is
+        exported, its `model.json` cannot be read, or the training package cannot be
+        imported.
+
+        Raises:
+            StrategyError: If the training package raises on the request.
+
+        """
+        info = self._model_json()
+        if self._scorer is None or info["generation"] != self._generation:
+            self._scorer = self._load(self._dir, info)
+            self._generation = info["generation"]
+        features, score_options = self._scorer
+        # Whatever the training package raises is its answer to this request: an id it
+        # does not know, a map it has not seen yet, a screen it cannot read.
+        try:
+            view = features.view_from_live(live_run)
+            decision = features.decision_from_live(screen, view)
+            scores = score_options(decision, decision.view or view)
+        except Exception as error:
+            raise StrategyError(f"{type(error).__name__}: {error}") from error
+        return {"options": _best_first(scores), "model": info}
+
+    def _model_json(self) -> dict[str, Any]:
+        """Read the exported champion's `model.json`, with weights beside it.
+
+        Raises:
+            NoModelError: If there is none, it cannot be read, it names no integer
+                generation, or no `.npz` weights lie beside it.
+
+        """
+        path = self._dir / "model.json"
+        try:
+            info = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError as error:
+            raise NoModelError(
+                f"no strategy champion is exported to {self._dir}",
+            ) from error
+        except (OSError, ValueError) as error:
+            raise NoModelError(f"{path} cannot be read: {error}") from error
+        if not isinstance(info, dict) or not _is_int(info.get("generation")):
+            raise NoModelError(f"{path} names no integer generation")
+        if not any(self._dir.glob("*.npz")):
+            raise NoModelError(f"{self._dir} holds no .npz weights beside model.json")
+        return info
+
+
+class Service:
+    """Answer protocol lines one at a time, with one search pool behind them.
+
+    `strategy` is the strategy champion `strategy` requests are scored with; by default the
+    one the training loop exports to `STRATEGY_MODEL_DIR`.
+    """
+
+    def __init__(
+        self,
+        searcher: Searcher,
+        *,
+        workers: int,
+        sim_commit: str,
+        strategy: StrategyModel | None = None,
+    ) -> None:
         self._searcher = searcher
         self._workers = workers
         self._sim_commit = sim_commit
+        self._strategy_model = strategy if strategy is not None else StrategyModel()
         # Set once `shutdown` is answered: `serve` stops reading after it.
         self.stopping = False
         self._methods: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
             "health": self._health,
             "analyze": self._analyze,
+            "check": self._check,
+            "strategy": self._strategy,
             "shutdown": self._shutdown,
         }
 
@@ -232,6 +383,47 @@ class Service:
             ) from error
         except (RuntimeError, ValueError) as error:
             raise RequestError("search", str(error)) from error
+
+    @staticmethod
+    def _check(params: dict[str, Any]) -> dict[str, Any]:
+        """Hold the game's outcome of a move against the simulator's (`fidelity.check`).
+
+        Raises:
+            RequestError: If the converter refuses either snapshot ("conversion", its path
+                naming the side), the loader refuses the position before ("load"), or the
+                loaded position does not line up with the live one or the move names what
+                it does not hold ("mapping"). Bad params are refused by `_check_params`.
+
+        """
+        pre, move, post, resamples = _check_params(params)
+        try:
+            return fidelity.check(pre, move, post, resamples=resamples)
+        except ConversionError as error:
+            raise RequestError("conversion", str(error)) from error
+        except native.SnapshotError as error:
+            raise RequestError(
+                "load",
+                f"the emulator refused the converted position: {error}",
+            ) from error
+        except moves.MappingError as error:
+            raise RequestError("mapping", str(error)) from error
+
+    def _strategy(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Value the options on a live screen with the strategy champion.
+
+        Raises:
+            RequestError: If there is no champion or no training package ("no_model"), or
+                the training package fails on the request ("strategy"). Bad params are
+                refused by `_strategy_params`.
+
+        """
+        live_run, screen = _strategy_params(params)
+        try:
+            return self._strategy_model.score(live_run, screen)
+        except NoModelError as error:
+            raise RequestError("no_model", str(error)) from error
+        except StrategyError as error:
+            raise RequestError("strategy", str(error)) from error
 
 
 def serve(service: Service, lines: Iterable[str], out: TextIO) -> None:
@@ -407,6 +599,121 @@ def _analyze_params(
     return live, settings
 
 
+def _check_params(
+    params: Mapping[str, Any],
+) -> tuple[dict[str, Any], moves.Move, dict[str, Any], int]:
+    """Check `check`'s params: the live positions either side, the move, the resamples.
+
+    A param `check` does not know is ignored (`_ignore_unknown`).
+
+    Raises:
+        RequestError: For a position that is not an object, or resamples that are not an
+            integer from 1 to `MAX_RESAMPLES` ("bad_request"). A bad move is refused by
+            `_move_param`.
+
+    """
+    _ignore_unknown("check", params, known=("pre", "move", "post", "resamples"))
+    pre, post = _snapshot_param(params, "pre"), _snapshot_param(params, "post")
+    resamples = params.get("resamples", fidelity.DEFAULT_RESAMPLES)
+    if not _is_int(resamples) or not 1 <= resamples <= MAX_RESAMPLES:
+        raise RequestError(
+            "bad_request",
+            f"params.resamples must be an integer from 1 to {MAX_RESAMPLES}, not "
+            f"{resamples!r}",
+        )
+    return pre, _move_param(params.get("move")), post, resamples
+
+
+def _snapshot_param(params: Mapping[str, Any], key: str) -> dict[str, Any]:
+    """Return a param that must be a live snapshot; the converter checks the rest.
+
+    Raises:
+        RequestError: If it is not an object ("bad_request").
+
+    """
+    value = params.get(key)
+    if not isinstance(value, dict):
+        raise RequestError(
+            "bad_request",
+            f"params.{key} must be a live snapshot object",
+        )
+    return cast("dict[str, Any]", value)
+
+
+def _move_param(value: object) -> moves.Move:
+    """Read `check`'s move: the protocol's `Move`, as the coach sends it.
+
+    Only `kind` is needed; every other field may be left out or null, and a field the Move
+    does not have is ignored (`_ignore_unknown`), as a MoveStat's statistics are.
+
+    Raises:
+        RequestError: For a move that is not an object, of no known kind, or with a field
+            of the wrong type ("bad_request").
+
+    """
+    if not isinstance(value, dict):
+        raise RequestError("bad_request", "params.move must be a Move object")
+    value = cast("dict[str, Any]", value)
+    _ignore_unknown("check's move", value, known=MOVE_FIELDS)
+    kind = value.get("kind")
+    if kind not in moves.MOVE_KINDS:
+        raise RequestError(
+            "bad_request",
+            f"params.move.kind must be one of {list(moves.MOVE_KINDS)}, not {kind!r}",
+        )
+    for key in ("card_index", "potion_slot", "select_index"):
+        if value.get(key) is not None and not _is_int(value[key]):
+            raise RequestError(
+                "bad_request",
+                f"params.move.{key} must be an integer or null, not {value[key]!r}",
+            )
+    for key in ("card_uid", "card_id", "potion_id", "target", "label"):
+        if value.get(key) is not None and not isinstance(value[key], str):
+            raise RequestError(
+                "bad_request",
+                f"params.move.{key} must be a string or null, not {value[key]!r}",
+            )
+    return moves.Move(
+        kind=kind,
+        card_index=value.get("card_index"),
+        card_uid=value.get("card_uid"),
+        card_id=value.get("card_id"),
+        potion_slot=value.get("potion_slot"),
+        potion_id=value.get("potion_id"),
+        target=value.get("target"),
+        select_index=value.get("select_index"),
+        label=value.get("label") or kind.replace("_", " "),
+    )
+
+
+def _strategy_params(
+    params: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Check `strategy`'s params: the live-run object and the live screen.
+
+    Both are the training design's (its DESIGN.md, 3.5 and 3.7), which the training
+    package reads; here they only have to be objects. A param `strategy` does not know is
+    ignored (`_ignore_unknown`).
+
+    Raises:
+        RequestError: For either that is not an object ("bad_request").
+
+    """
+    _ignore_unknown("strategy", params, known=("live_run", "decision"))
+    live_run, screen = params.get("live_run"), params.get("decision")
+    if not isinstance(live_run, dict):
+        raise RequestError(
+            "bad_request",
+            "params.live_run must be the training design's live-run object",
+        )
+    if not isinstance(screen, dict):
+        raise RequestError(
+            "bad_request",
+            "params.decision must be the training design's live screen object",
+        )
+    return live_run, screen
+
+
 def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
@@ -566,6 +873,48 @@ def _about_the_pool(warning: str) -> bool:
     )
 
 
+# ── strategy ─────────────────────────────────────────────────────────────────
+
+
+def _best_first(scores: Iterable[Any]) -> list[dict[str, Any]]:
+    """Put the policy's option scores in protocol form: best value first, unscored last.
+
+    A score is the training package's `OptionScore(option, value, p_boss, scorable)`,
+    whose value and boss-kill chance are None for an option it cannot score. The option
+    goes out as its fields (`features.Option` is a dataclass). The policy keeps its own
+    order, best first; the sort does not rely on it, and keeps it among equals.
+    """
+    options = [
+        {
+            "option": _plain(score.option),
+            "value": _number(score.value),
+            "p_boss": _number(score.p_boss),
+        }
+        for score in scores
+    ]
+    return sorted(
+        options,
+        key=lambda option: (option["value"] is None, -(option["value"] or 0.0)),
+    )
+
+
+def _plain(option: object) -> object:
+    """Return an option as JSON can carry it: a dataclass as its fields."""
+    return (
+        asdict(option)
+        if is_dataclass(option) and not isinstance(option, type)
+        else option
+    )
+
+
+def _number(value: SupportsFloat | None) -> float | None:
+    """Return a value as JSON carries it: a float (numpy's too), or None for none or NaN."""
+    if value is None:
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
 # ── Responses ────────────────────────────────────────────────────────────────
 
 
@@ -621,10 +970,15 @@ def _search_module() -> ModuleType:
     `rl/` is a folder of scripts, not a package, and the search's worker processes import
     `live_search` by that name, so the service does too. A second call finds it imported.
     """
+    _rl_on_path()
+    return importlib.import_module("live_search")
+
+
+def _rl_on_path() -> None:
+    """Put `rl/` on the import path: the search and the training package live there."""
     rl = str(_ROOT / "rl")
     if rl not in sys.path:
         sys.path.insert(0, rl)
-    return importlib.import_module("live_search")
 
 
 def _exit_on_signal(signum: int, _frame: object) -> None:

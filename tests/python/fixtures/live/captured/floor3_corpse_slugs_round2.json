@@ -1,0 +1,254 @@
+{
+  "schema": "sts2-live-snapshot/1",
+  "game_version": "v0.107.1",
+  "character": "IRONCLAD",
+  "ascension": 10,
+  "act": 1,
+  "floor": 3,
+  "room_type": "monster",
+  "round": 2,
+  "player": {
+    "hp": 56,
+    "max_hp": 80,
+    "block": 0,
+    "energy": 3,
+    "max_energy": 3,
+    "gold": 109,
+    "stars": 0,
+    "osty": null,
+    "orbs": {
+      "slots": 0,
+      "list": []
+    },
+    "powers": [
+      {
+        "id": "FRAIL_POWER",
+        "amount": 2
+      }
+    ],
+    "relics": [
+      {
+        "id": "BURNING_BLOOD",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "LAVA_ROCK",
+        "counter": null,
+        "fields": {
+          "HasTriggered": false
+        }
+      }
+    ],
+    "potions": [
+      {
+        "slot": 0,
+        "id": null
+      },
+      {
+        "slot": 1,
+        "id": null
+      }
+    ],
+    "max_potion_slots": 2
+  },
+  "hand": [
+    {
+      "id": "BASH",
+      "upgraded": false,
+      "uid": "BASH#0",
+      "cost": 2,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#3",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#3",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    }
+  ],
+  "draw_pile": [
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#4",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    }
+  ],
+  "discard_pile": [
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "IRON_WAVE",
+      "upgraded": false,
+      "uid": "IRON_WAVE#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    }
+  ],
+  "exhaust_pile": [
+    {
+      "id": "ASCENDERS_BANE",
+      "upgraded": false,
+      "uid": "ASCENDERS_BANE#0",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    }
+  ],
+  "known_draw_top": [],
+  "known_draw_bottom": [],
+  "enemies": [
+    {
+      "entity_id": "CORPSE_SLUG_0",
+      "id": "CORPSE_SLUG",
+      "slot": 0,
+      "hp": 16,
+      "max_hp": 27,
+      "block": 0,
+      "powers": [
+        {
+          "id": "RAVENOUS_POWER",
+          "amount": 5
+        }
+      ],
+      "intents": [
+        {
+          "type": "DEBUFF",
+          "damage": null,
+          "base_damage": null,
+          "hits": null
+        }
+      ],
+      "move_id": "GOOP_MOVE",
+      "state_log": [
+        "GLOMP_MOVE",
+        "GOOP_MOVE"
+      ],
+      "ai_fields": {
+        "_starterMoveIdx": 1,
+        "WhipSlapDamage": 3,
+        "WhipSlapRepeat": 2,
+        "GlompDamage": 9,
+        "GoopFrailAmt": 2,
+        "RavenousStr": 5,
+        "StarterMoveIdx": 1
+      }
+    },
+    {
+      "entity_id": "CORPSE_SLUG_1",
+      "id": "CORPSE_SLUG",
+      "slot": 1,
+      "hp": 28,
+      "max_hp": 28,
+      "block": 0,
+      "powers": [
+        {
+          "id": "RAVENOUS_POWER",
+          "amount": 5
+        }
+      ],
+      "intents": [
+        {
+          "type": "ATTACK",
+          "damage": 3,
+          "base_damage": 3,
+          "hits": 2
+        }
+      ],
+      "move_id": "WHIP_SLAP_MOVE",
+      "state_log": [
+        "GOOP_MOVE",
+        "WHIP_SLAP_MOVE"
+      ],
+      "ai_fields": {
+        "_starterMoveIdx": 2,
+        "WhipSlapDamage": 3,
+        "WhipSlapRepeat": 2,
+        "GlompDamage": 9,
+        "GoopFrailAmt": 2,
+        "RavenousStr": 5,
+        "StarterMoveIdx": 2
+      }
+    }
+  ],
+  "history": {
+    "cards_played_this_turn": 0,
+    "cards_played_this_combat": 3,
+    "attacks_played_this_turn": 0,
+    "skills_played_this_turn": 0
+  },
+  "pending_selection": null
+}

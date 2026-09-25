@@ -13,6 +13,7 @@ last the process itself is started, spoken to and stopped.
 
 from __future__ import annotations
 
+import dataclasses
 import importlib
 import inspect
 import io
@@ -21,10 +22,12 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, NamedTuple
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -90,6 +93,29 @@ HEALTH_FIELDS = {
     "workers",
     "strategy_model",
     "combat_prior",
+}
+CHECK_FIELDS = {
+    "comparable",
+    "deterministic_mismatches",
+    "random_fields",
+    "implausible",
+    "warnings",
+}
+
+# A real move and the positions either side of it, from a live A10 game: the second card of
+# the first fight, a Defend (the action log's DEFEND_IRONCLAD#0).
+DEFEND_BEFORE = "captured/floor2_sludge_spinner_round1_after_strike"
+DEFEND_AFTER = "captured/floor2_sludge_spinner_round1_after_defend"
+DEFEND_MOVE = {
+    "kind": "card",
+    "card_index": 0,
+    "card_uid": "DEFEND_IRONCLAD#0",
+    "card_id": "DEFEND_IRONCLAD",
+    "potion_slot": None,
+    "potion_id": None,
+    "target": None,
+    "select_index": None,
+    "label": "Defend",
 }
 
 # Small searches: the tests read what the moves NAME, which no budget changes.
@@ -627,6 +653,183 @@ class InvariantTests(unittest.TestCase):
             moves.index_maps(live, emu_doc)
 
 
+# ── The reverse: game moves back to emulator actions ────────────────────────
+
+
+class ToActionTests(unittest.TestCase):
+    """`moves.to_action` reads the maps backwards: a Move to the emulator's (action, target)."""
+
+    def assert_round_trip(
+        self,
+        live: dict[str, Any],
+        children: list[Any],
+        seed: int = 0,
+    ) -> None:
+        """Name each search move in game terms, then map it back to the same action."""
+        emu_doc, draw = loaded(live, seed)
+        maps = moves.index_maps(live, emu_doc, draw_order=draw)
+        for played in children:
+            move = moves.to_move(played, live, emu_doc, maps=maps)
+            with self.subTest(move=move.label, seed=seed):
+                self.assertEqual(
+                    moves.to_action(move, live, emu_doc, maps=maps),
+                    (played.action, played.target),
+                )
+
+    def test_every_card_and_the_end_of_the_turn_map_back(self) -> None:
+        # Strike, Defend, Bash, Defend, Strike against the Sludge Spinner.
+        live = load("captured/floor2_sludge_spinner_round1")
+        aimed = {"STRIKE_IRONCLAD", "BASH"}
+        cards_played = [
+            child(i, "card", target=0 if card["id"] in aimed else -1)
+            for i, card in enumerate(live["hand"])
+        ]
+        self.assert_round_trip(
+            live,
+            [*cards_played, child(len(live["hand"]), "end_turn")],
+        )
+
+    def test_a_potion_maps_back_to_its_slot(self) -> None:
+        live = load("captured/floor4_toadpoles_round1")
+        live["player"]["potions"] = [
+            {"slot": 0, "id": None},
+            {"slot": 1, "id": "FIRE_POTION"},
+        ]
+        hand = len(live["hand"])
+        self.assert_round_trip(live, [child(hand + 2, "potion", target=1)])
+
+    def test_a_target_behind_a_dead_or_reviving_enemy_maps_back(self) -> None:
+        for position in (dead_enemy_position, reviving_enemy_position):
+            live = position()
+            strike = next(
+                i
+                for i, card in enumerate(live["hand"])
+                if card["id"] == "STRIKE_IRONCLAD"
+            )
+            with self.subTest(position=position.__name__):
+                self.assert_round_trip(live, [child(strike, "card", target=1)])
+
+    def test_every_candidate_of_a_selection_maps_back(self) -> None:
+        # The hand, the discard pile, a choice of new cards, the draw pile's known places.
+        for name in (
+            "selection/armaments",
+            "selection/true_grit",
+            "selection/headbutt",
+            "selection/neows_fury",
+            "selection/attack_potion",
+            "selection/seeker_strike",
+            "selection/secret_technique",
+        ):
+            live = load(name)
+            count = len(loaded(live)[0]["pending_selection"]["candidates"])
+            with self.subTest(selection=name):
+                self.assert_round_trip(
+                    live,
+                    [child(action, "select") for action in range(count)],
+                )
+
+    def test_a_draw_pile_pick_maps_back_under_every_shuffle(self) -> None:
+        live = load("selection/droplet_of_precognition")
+        for seed in range(8):
+            self.assert_round_trip(
+                live,
+                [child(action, "select") for action in range(3)],
+                seed,
+            )
+
+    def test_a_skip_is_one_past_the_last_candidate(self) -> None:
+        # Neow's Fury may be declined (CombatEngine.ValidActions).
+        live = load("selection/neows_fury")
+        emu_doc, _ = loaded(live)
+        self.assertTrue(emu_doc["pending_selection"]["skippable"])
+        count = len(emu_doc["pending_selection"]["candidates"])
+        self.assertEqual(moves.to_action(moves.SKIP, live, emu_doc), (count, -1))
+
+    def test_a_card_is_found_by_its_uid_alone(self) -> None:
+        live = load("captured/floor2_sludge_spinner_round1")
+        emu_doc, _ = loaded(live)
+        last = live["hand"][4]
+        move = moves.Move(kind="card", card_uid=last["uid"], label="Strike")
+        self.assertEqual(moves.to_action(move, live, emu_doc), (4, -1))
+
+    def test_a_move_the_snapshot_does_not_hold_is_a_mapping_error(self) -> None:
+        # Strike, Defend, Bash, Defend, Strike against the Sludge Spinner.
+        live = load("captured/floor2_sludge_spinner_round1")
+        strike = {"kind": "card", "card_index": 0, "label": "Strike"}
+        cases: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
+            "a card past the hand": (live, {**strike, "card_index": 5}),
+            "a uid that is not the card's": (live, {**strike, "card_uid": "BASH#0"}),
+            "an id that is not the card's": (live, {**strike, "card_id": "BASH"}),
+            "a uid the hand does not hold": (
+                live,
+                {"kind": "card", "card_uid": "NO_SUCH#9", "label": "?"},
+            ),
+            "a card move naming no card": (live, {"kind": "card", "label": "?"}),
+            "an enemy the snapshot does not hold": (
+                live,
+                {**strike, "target": "JAW_WORM_0"},
+            ),
+            "a dead enemy": (
+                dead_enemy_position(),
+                {**strike, "target": "CORPSE_SLUG_0"},
+            ),
+            "a reviving enemy": (
+                reviving_enemy_position(),
+                {**strike, "target": "EYE_WITH_TEETH_1"},
+            ),
+            "an empty potion slot": (
+                live,
+                {"kind": "potion", "potion_slot": 0, "label": "?"},
+            ),
+            "another potion than the slot holds": (
+                two_flex_potions(),
+                {
+                    "kind": "potion",
+                    "potion_slot": 1,
+                    "potion_id": "FIRE_POTION",
+                    "label": "?",
+                },
+            ),
+            "a potion move naming no slot": (
+                two_flex_potions(),
+                {"kind": "potion", "label": "?"},
+            ),
+            "a pick with no selection open": (
+                live,
+                {"kind": "select", "select_index": 0, "label": "?"},
+            ),
+            "a skip with no selection open": (live, {"kind": "skip", "label": "Skip"}),
+            "a card while a selection is open": (load("selection/headbutt"), strike),
+            "a pick past the candidates": (
+                load("selection/headbutt"),
+                {"kind": "select", "select_index": 3, "label": "?"},
+            ),
+            "a pick naming another card": (
+                load("selection/headbutt"),
+                {
+                    "kind": "select",
+                    "select_index": 0,
+                    "card_uid": "NO_SUCH#9",
+                    "label": "?",
+                },
+            ),
+        }
+        for case, (position, fields) in cases.items():
+            emu_doc, _ = loaded(position)
+            with self.subTest(case=case), self.assertRaises(moves.MappingError):
+                moves.to_action(moves.Move(**fields), position, emu_doc)
+
+    def test_a_pick_no_emulator_candidate_is_known_to_be_is_unmapped(self) -> None:
+        # Without the loaded draw order the shuffled middle's candidates are not found.
+        live = load("selection/droplet_of_precognition")
+        emu_doc, _ = loaded(live)
+        maps = moves.index_maps(live, emu_doc)
+        self.assertEqual(maps.candidates, (2, None, None))
+        pick = moves.Move(kind="select", select_index=0, label="Choose Defend")
+        with self.assertRaises(moves.UnmappedSelectionError):
+            moves.to_action(pick, live, emu_doc, maps=maps)
+
+
 class LineTrackerTests(unittest.TestCase):
     @staticmethod
     def tracker(live: dict[str, Any]) -> tuple[Any, list[dict[str, Any]]]:
@@ -985,6 +1188,435 @@ class CannedSearchTests(unittest.TestCase):
 # ── analyze, with the real search ────────────────────────────────────────────
 
 
+# ── check ────────────────────────────────────────────────────────────────────
+
+
+class CheckTests(unittest.TestCase):
+    """`check` over the protocol: the coach's params in, the coach's `CheckResult` out.
+
+    What the check decides is `test_live_fidelity`'s; here, what the protocol asks of it.
+    """
+
+    def setUp(self) -> None:
+        self.service = service.Service(NoSearch(), workers=4, sim_commit="abc1234")
+
+    def answer(self, params: object) -> dict[str, Any]:
+        return strict(self.service.handle(request("check", params)) or "")
+
+    def refusal(self, params: object) -> dict[str, str]:
+        answer = self.answer(params)
+        self.assertFalse(answer["ok"], answer)
+        return answer["error"]
+
+    @staticmethod
+    def params(**changes: object) -> dict[str, Any]:
+        return {
+            "pre": load(DEFEND_BEFORE),
+            "move": dict(DEFEND_MOVE),
+            "post": load(DEFEND_AFTER),
+            **changes,
+        }
+
+    def test_a_real_move_is_checked_in_the_shape_the_coach_reads(self) -> None:
+        answer = self.answer(self.params())
+        self.assertEqual((answer["id"], answer["ok"]), (1, True), answer)
+        self.assertEqual(
+            answer["result"],
+            {
+                "comparable": True,
+                "deterministic_mismatches": [],
+                "random_fields": [],
+                "implausible": [],
+                "warnings": [],
+            },
+        )
+
+    def test_a_mismatch_reaches_the_coach(self) -> None:
+        post = load(DEFEND_AFTER)
+        post["player"]["block"] = 6
+        answer = self.answer(self.params(post=post, resamples=4))
+        self.assertEqual(
+            answer["result"]["deterministic_mismatches"],
+            [{"field": "player.block", "predicted": 5, "actual": 6}],
+        )
+
+    def test_the_move_needs_only_its_kind_and_what_names_it(self) -> None:
+        answer = self.answer(
+            self.params(move={"kind": "card", "card_uid": "DEFEND_IRONCLAD#0"}),
+        )
+        self.assertTrue(answer["ok"], answer)
+        self.assertTrue(answer["result"]["comparable"])
+
+    def test_bad_params_are_a_bad_request(self) -> None:
+        def without(key: str) -> dict[str, Any]:
+            return {k: v for k, v in self.params().items() if k != key}
+
+        def move(**fields: object) -> dict[str, Any]:
+            return self.params(move={**DEFEND_MOVE, **fields})
+
+        no_kind = {k: v for k, v in DEFEND_MOVE.items() if k != "kind"}
+        cases = {
+            "no pre": without("pre"),
+            "pre not an object": self.params(pre=[1]),
+            "no post": without("post"),
+            "post not an object": self.params(post="after"),
+            "no move": without("move"),
+            "move not an object": self.params(move=["card", 0]),
+            "a move with no kind": self.params(move=no_kind),
+            "a move of no known kind": move(kind="discard"),
+            "a card index as text": move(card_index="0"),
+            "a boolean card index": move(card_index=True),
+            "a target that is not a string": move(target=0),
+            "a label that is not a string": move(label=5),
+            "no resamples": self.params(resamples=0),
+            "negative resamples": self.params(resamples=-1),
+            "fractional resamples": self.params(resamples=2.5),
+            "boolean resamples": self.params(resamples=True),
+            "too many resamples": self.params(resamples=service.MAX_RESAMPLES + 1),
+        }
+        for case, params in cases.items():
+            with self.subTest(case=case):
+                self.assertEqual(self.refusal(params)["type"], "bad_request")
+        self.assertTrue(self.answer(self.params())["ok"])
+
+    def test_a_snapshot_the_converter_refuses_is_a_conversion_error_naming_its_side(
+        self,
+    ) -> None:
+        post = load(DEFEND_AFTER)
+        post["hand"][1]["id"] = "NO_SUCH_CARD"
+        error = self.refusal(self.params(post=post))
+        self.assertEqual(error["type"], "conversion")
+        self.assertIn("post.hand[1].id", error["message"])
+        self.assertIn("NO_SUCH_CARD", error["message"])
+
+    def test_a_move_the_position_does_not_hold_is_a_mapping_error(self) -> None:
+        error = self.refusal(
+            self.params(move={**DEFEND_MOVE, "card_uid": "DEFEND_IRONCLAD#7"}),
+        )
+        self.assertEqual(error["type"], "mapping")
+        self.assertIn("DEFEND_IRONCLAD#7", error["message"])
+
+    def test_a_position_the_loader_refuses_is_a_load_error(self) -> None:
+        # The player fixture has no enemy; the loader refuses an empty roster.
+        player = load("player")
+        error = self.refusal(
+            {"pre": player, "move": {"kind": "end_turn"}, "post": player},
+        )
+        self.assertEqual(error["type"], "load")
+        self.assertIn("enem", error["message"])
+
+    def test_an_unknown_param_or_move_field_is_ignored_with_one_log_line(self) -> None:
+        # A newer coach may send more; a MoveStat carries its statistics besides.
+        for case, params in (
+            ("a param", self.params(from_the_future=1)),
+            ("a move field", self.params(move={**DEFEND_MOVE, "from_the_future": 1})),
+        ):
+            with (
+                self.subTest(case=case),
+                self.assertLogs("sts2_gym.live.service", level="WARNING") as logs,
+            ):
+                answer = self.answer(params)
+                self.assertTrue(answer["ok"], answer)
+            self.assertEqual(len(logs.records), 1)
+            self.assertIn("from_the_future", logs.output[0])
+
+
+# ── strategy ─────────────────────────────────────────────────────────────────
+
+
+class OptionScore(NamedTuple):
+    """The training package's `policy.OptionScore` (its DESIGN.md, section 7, Task 3)."""
+
+    option: Any
+    value: float | None
+    p_boss: float | None
+    scorable: bool
+
+
+@dataclasses.dataclass(frozen=True)
+class CardRef:
+    card_id: int
+    upgraded: bool
+
+
+@dataclasses.dataclass(frozen=True)
+class Option:
+    """A stand-in for `features.Option`: a frozen dataclass that holds others."""
+
+    kind: str
+    action: int
+    card: CardRef | None = None
+    cards: tuple[CardRef, ...] = ()
+
+
+@dataclasses.dataclass(frozen=True)
+class Decision:
+    """A stand-in for `features.Decision`, whose `view` a later pick sets."""
+
+    type: str
+    options: tuple[Option, ...]
+    view: Any = None
+
+
+TAKE_BASH = Option("card.take", 0, CardRef(30, False))
+TAKE_ANGER = Option("card.take", 1, CardRef(12, True))
+SKIP_REWARD = Option("card.skip", 3)
+REROLL = Option("card.reroll", 4)
+RUN_VIEW = "the view of the run"
+PICK_VIEW = "the view a later pick indexes"
+LIVE_RUN = {
+    "run": {"act": 1, "floor": 5, "ascension": 10},
+    "player": {"hp": 60, "max_hp": 80},
+    "map": {"act": 1},
+}
+SCREEN = {"state_type": "card_reward", "card_reward": {"cards": []}}
+
+
+class FakeFeatures:
+    """`run_train.features`' live front end, recording how the service calls it."""
+
+    def __init__(
+        self,
+        decision_view: Any = None,
+        fail: Exception | None = None,
+    ) -> None:
+        self.calls: list[tuple[Any, ...]] = []
+        self.decision = Decision(
+            "card_reward",
+            (TAKE_BASH, TAKE_ANGER, SKIP_REWARD, REROLL),
+            decision_view,
+        )
+        self.fail = fail
+
+    def view_from_live(self, live_run: dict[str, Any]) -> Any:
+        self.calls.append(("view_from_live", live_run))
+        if self.fail is not None:
+            raise self.fail
+        return RUN_VIEW
+
+    def decision_from_live(self, screen: dict[str, Any], view: Any) -> Decision:
+        self.calls.append(("decision_from_live", screen, view))
+        return self.decision
+
+
+class FakeTraining:
+    """The strategy seam's loader: fake modules, recording each load and each scoring.
+
+    Every value is the generation plus a constant, so a test sees which champion scored.
+    """
+
+    def __init__(self, features: FakeFeatures | None = None) -> None:
+        self.features = features or FakeFeatures()
+        self.loads: list[int] = []
+        self.scored: list[tuple[Any, Any]] = []
+
+    def __call__(self, model_dir: Path, info: Mapping[str, Any]) -> tuple[Any, Any]:
+        generation = info["generation"]
+        self.loads.append(generation)
+
+        def score_options(decision: Any, view: Any) -> list[OptionScore]:
+            self.scored.append((decision, view))
+            # Not best first: the service sorts, whatever order the policy keeps.
+            return [
+                OptionScore(SKIP_REWARD, 12.5 + generation, 0.05, True),
+                OptionScore(TAKE_BASH, 14.25 + generation, 0.08, True),
+                OptionScore(REROLL, None, None, False),
+                OptionScore(TAKE_ANGER, 13.0 + generation, 0.06, True),
+            ]
+
+        return self.features, score_options
+
+
+def model_dir(root: Path, generation: int = 3, *, weights: bool = True) -> Path:
+    """Write an exported champion: `model.json` and, unless told not to, its weights."""
+    folder = root / "strategy"
+    folder.mkdir(parents=True, exist_ok=True)
+    info = {"generation": generation, "feature_version": 1, "W": 26.0}
+    (folder / "model.json").write_text(json.dumps(info), encoding="utf-8")
+    if weights:
+        (folder / "champion.npz").write_bytes(b"")
+    return folder
+
+
+class StrategyTests(unittest.TestCase):
+    """`strategy`: the exported champion's option values, or `no_model` without one."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+
+    @staticmethod
+    def ask(model: Any, params: object = None) -> dict[str, Any]:
+        svc = service.Service(
+            NoSearch(),
+            workers=4,
+            sim_commit="abc1234",
+            strategy=model,
+        )
+        body = {"live_run": LIVE_RUN, "decision": SCREEN} if params is None else params
+        return strict(svc.handle(request("strategy", body)) or "")
+
+    def assert_no_model(self, answer: dict[str, Any]) -> str:
+        self.assertFalse(answer["ok"], answer)
+        self.assertEqual(answer["error"]["type"], "no_model")
+        self.assertTrue(answer["error"]["message"])
+        return answer["error"]["message"]
+
+    def test_without_an_exported_champion_there_is_no_model(self) -> None:
+        cases = {
+            "no model folder": self.root / "absent",
+            "no weights": model_dir(self.root / "unweighted", weights=False),
+        }
+        for case, folder in cases.items():
+            training = FakeTraining()
+            with self.subTest(case=case):
+                self.assert_no_model(
+                    self.ask(service.StrategyModel(folder, load=training)),
+                )
+                self.assertEqual(training.loads, [])
+
+    def test_an_unreadable_model_json_is_no_model(self) -> None:
+        folder = model_dir(self.root)
+        for case, text in (
+            ("not JSON", "{nope"),
+            ("not an object", "[3]"),
+            ("no generation", json.dumps({"W": 26.0})),
+            ("a generation that is not an integer", json.dumps({"generation": "3"})),
+        ):
+            (folder / "model.json").write_text(text, encoding="utf-8")
+            with self.subTest(case=case):
+                self.assert_no_model(
+                    self.ask(service.StrategyModel(folder, load=FakeTraining())),
+                )
+
+    def test_without_the_training_package_there_is_no_model(self) -> None:
+        # A None in sys.modules makes the import fail, as on a branch without rl/run_train.
+        folder = model_dir(self.root)
+        with mock.patch.dict(sys.modules, {"run_train": None}):
+            message = self.assert_no_model(self.ask(service.StrategyModel(folder)))
+        self.assertIn("run_train", message)
+
+    def test_the_options_come_back_best_first_with_the_champions_model_json(
+        self,
+    ) -> None:
+        folder = model_dir(self.root, generation=3)
+        answer = self.ask(service.StrategyModel(folder, load=FakeTraining()))
+        self.assertTrue(answer["ok"], answer)
+        result = answer["result"]
+        self.assertEqual(set(result), {"options", "model"})
+        self.assertEqual(
+            result["model"],
+            json.loads((folder / "model.json").read_text(encoding="utf-8")),
+        )
+        self.assertEqual(
+            [(o["option"]["kind"], o["value"]) for o in result["options"]],
+            [
+                ("card.take", 17.25),
+                ("card.take", 16.0),
+                ("card.skip", 15.5),
+                ("card.reroll", None),  # unscorable: shown without a value, last
+            ],
+        )
+        self.assertEqual(
+            result["options"][0],
+            {
+                "option": {
+                    "kind": "card.take",
+                    "action": 0,
+                    "card": {"card_id": 30, "upgraded": False},
+                    "cards": [],
+                },
+                "value": 17.25,
+                "p_boss": 0.08,
+            },
+        )
+
+    def test_the_decision_is_built_and_scored_the_training_designs_way(self) -> None:
+        # The view comes from the live run and the decision from the screen and that view;
+        # the scoring reads the decision's own view when a later pick carries one.
+        for decision_view, scored_on in ((None, RUN_VIEW), (PICK_VIEW, PICK_VIEW)):
+            training = FakeTraining(FakeFeatures(decision_view=decision_view))
+            with self.subTest(decision_view=decision_view):
+                answer = self.ask(
+                    service.StrategyModel(model_dir(self.root), load=training),
+                )
+                self.assertTrue(answer["ok"], answer)
+                self.assertEqual(
+                    training.features.calls,
+                    [
+                        ("view_from_live", LIVE_RUN),
+                        ("decision_from_live", SCREEN, RUN_VIEW),
+                    ],
+                )
+                self.assertEqual(
+                    training.scored,
+                    [(training.features.decision, scored_on)],
+                )
+
+    def test_the_champion_is_reloaded_when_its_generation_changes(self) -> None:
+        folder = model_dir(self.root, generation=3)
+        training = FakeTraining()
+        svc = service.Service(
+            NoSearch(),
+            workers=4,
+            sim_commit="abc1234",
+            strategy=service.StrategyModel(folder, load=training),
+        )
+
+        def best_value() -> float:
+            answer = strict(
+                svc.handle(
+                    request("strategy", {"live_run": LIVE_RUN, "decision": SCREEN}),
+                )
+                or "",
+            )
+            self.assertTrue(answer["ok"], answer)
+            return answer["result"]["options"][0]["value"]
+
+        self.assertEqual((best_value(), best_value()), (17.25, 17.25))
+        self.assertEqual(training.loads, [3])
+        model_dir(self.root, generation=4)
+        self.assertEqual(best_value(), 18.25)
+        self.assertEqual(training.loads, [3, 4])
+
+    def test_a_failure_inside_the_training_package_is_a_strategy_error(self) -> None:
+        class NotReadyError(Exception):
+            """The training package's "no map seen for this act yet"."""
+
+        features = FakeFeatures(fail=NotReadyError("no map screen seen in act 1"))
+        answer = self.ask(
+            service.StrategyModel(model_dir(self.root), load=FakeTraining(features)),
+        )
+        self.assertFalse(answer["ok"], answer)
+        self.assertEqual(answer["error"]["type"], "strategy")
+        self.assertIn("NotReadyError", answer["error"]["message"])
+        self.assertIn("no map screen seen in act 1", answer["error"]["message"])
+
+    def test_bad_params_are_a_bad_request(self) -> None:
+        model = service.StrategyModel(model_dir(self.root), load=FakeTraining())
+        cases = {
+            "no live_run": {"decision": SCREEN},
+            "live_run not an object": {"live_run": [1], "decision": SCREEN},
+            "no decision": {"live_run": LIVE_RUN},
+            "decision not an object": {"live_run": LIVE_RUN, "decision": "card_reward"},
+        }
+        for case, params in cases.items():
+            with self.subTest(case=case):
+                answer = self.ask(model, params)
+                self.assertFalse(answer["ok"], answer)
+                self.assertEqual(answer["error"]["type"], "bad_request")
+
+    def test_an_unknown_param_is_ignored_with_one_log_line(self) -> None:
+        model = service.StrategyModel(model_dir(self.root), load=FakeTraining())
+        params = {"live_run": LIVE_RUN, "decision": SCREEN, "from_the_future": 1}
+        with self.assertLogs("sts2_gym.live.service", level="WARNING") as logs:
+            answer = self.ask(model, params)
+        self.assertTrue(answer["ok"], answer)
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("from_the_future", logs.output[0])
+
+
 class AnalyzeTests(unittest.TestCase):
     searcher: ClassVar[Any]
 
@@ -1074,8 +1706,13 @@ class AnalyzeTests(unittest.TestCase):
                 result = self.analyze(live, recording)
                 self.assertEqual((result["reliable"], result["warnings"]), (True, []))
                 self.assertEqual(result["select_mapping_failures"], 0)
-                self.assertGreater(result["sims"], 0)
                 raw = recording.results[-1]
+                # With one legal move (no energy left: End turn) the search answers at
+                # once and simulates nothing.
+                if len(raw.children) > 1:
+                    self.assertGreater(result["sims"], 0)
+                else:
+                    self.assertEqual(result["sims"], 0)
                 self.assert_names_what_the_search_played(live, raw, result)
                 if raw.best.kind == "card":
                     self.assertEqual(
@@ -1264,7 +1901,11 @@ class ProcessTests(unittest.TestCase):
     ENV: ClassVar[dict[str, str]] = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
 
     @classmethod
-    def start(cls, *args: str) -> subprocess.Popen[bytes]:
+    def start(
+        cls,
+        *args: str,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.Popen[bytes]:
         # Its own process group, so every process it starts can be found again.
         return subprocess.Popen(
             [
@@ -1276,7 +1917,7 @@ class ProcessTests(unittest.TestCase):
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env=cls.ENV,
+            env={**cls.ENV, **(env or {})},
             start_new_session=True,
         )
 
@@ -1364,6 +2005,42 @@ class ProcessTests(unittest.TestCase):
         self.assertEqual(out, b"", "stdout carries protocol lines only")
         self.assert_no_orphans(proc)
 
+    def test_check_and_strategy_round_trip_as_the_coach_sends_them(self) -> None:
+        # A home with no exported champion: `strategy` has no model to answer with.
+        with tempfile.TemporaryDirectory() as home:
+            proc = self.start(env={"HOME": home})
+            try:
+                params = {
+                    "pre": load(DEFEND_BEFORE),
+                    "move": DEFEND_MOVE,
+                    "post": load(DEFEND_AFTER),
+                }
+                checked = self.send(proc, request("check", params, req_id=1))
+                self.assertEqual((checked["id"], checked["ok"]), (1, True), checked)
+                self.assertEqual(set(checked["result"]), CHECK_FIELDS)
+                self.assertTrue(checked["result"]["comparable"])
+                self.assertEqual(checked["result"]["deterministic_mismatches"], [])
+
+                scored = self.send(
+                    proc,
+                    request(
+                        "strategy",
+                        {"live_run": LIVE_RUN, "decision": SCREEN},
+                        req_id=2,
+                    ),
+                )
+                self.assertEqual((scored["id"], scored["ok"]), (2, False), scored)
+                self.assertEqual(scored["error"]["type"], "no_model")
+
+                self.send(proc, request("shutdown", req_id=3))
+                out, err = self.stop(proc)
+            finally:
+                if proc.poll() is None:
+                    self.stop(proc)
+        self.assertEqual(proc.returncode, 0, err.decode("utf-8", "replace"))
+        self.assertEqual(out, b"", "stdout carries protocol lines only")
+        self.assert_no_orphans(proc)
+
     def test_stdin_eof_exits_zero_with_no_orphans(self) -> None:
         proc = self.start()
         try:
@@ -1434,19 +2111,25 @@ class ProcessTests(unittest.TestCase):
         self.assertIn(b"stray output before the service starts", err)
         self.assert_no_orphans(proc)
 
-    def test_importing_the_service_does_not_import_the_search(self) -> None:
+    def test_importing_the_service_imports_neither_the_search_nor_the_training(
+        self,
+    ) -> None:
         done = subprocess.run(
             [
                 sys.executable,
                 "-c",
-                "import sys, sts2_gym.live.service; print('live_search' in sys.modules)",
+                (
+                    "import sys, sts2_gym.live.service; "
+                    "print('live_search' in sys.modules, "
+                    "any(name.split('.')[0] == 'run_train' for name in sys.modules))"
+                ),
             ],
             capture_output=True,
             text=True,
             env=self.ENV,
             check=True,
         )
-        self.assertEqual(done.stdout.strip(), "False")
+        self.assertEqual(done.stdout.strip(), "False False")
 
 
 if __name__ == "__main__":

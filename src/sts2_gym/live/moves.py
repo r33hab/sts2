@@ -18,7 +18,8 @@ places in a pile, so each is found again as the live card at that place.
 A move the search merged covers every live copy it stands for: `hand_indices`,
 `potion_slots` and `select_indices` list them. `check_identity` holds each covered card
 against the def id the search played, so a mapping that drifted fails loudly instead of
-naming the wrong card.
+naming the wrong card. `to_action` is `to_move` reversed: a move the coach names, back to
+the emulator action and target, for the fidelity check to step.
 
 Below the root the line plays through the hand, and the roster loses whoever dies (the
 emulator, like the game, removes a dead creature unless a power keeps it: CombatEngine.cs,
@@ -85,6 +86,7 @@ class Move:
 
 END_TURN = Move(kind="end_turn", label="End turn")
 SKIP = Move(kind="skip", label="Skip")
+MOVE_KINDS = ("card", "potion", "end_turn", "select", "skip")
 
 
 @dataclass(frozen=True)
@@ -159,6 +161,57 @@ def to_move(
     if child.kind == "select":
         return _select_move(live, maps, (child.action, *child.merged_actions))
     raise MappingError(f"no move of kind {child.kind!r}")
+
+
+def to_action(
+    move: Move,
+    live: Mapping[str, Any],
+    emu_doc: Mapping[str, Any],
+    *,
+    maps: IndexMaps | None = None,
+) -> tuple[int, int]:
+    """Map a move in the live snapshot's terms back to the emulator's (action, target).
+
+    `to_move` reversed, reading the same `maps` backwards. A card is its `card_index`, or
+    the hand card holding `card_uid` when the index is not given; a `card_uid` or `card_id`
+    beside the index must be the card there. A potion is its slot, whose potion must be
+    `potion_id` when that is given. A pick is the emulator candidate the maps found to be
+    live candidate `select_index`, and a skip is one past the last candidate. The target is
+    the emulator index of the living enemy `target` names, or -1 for a move aimed at
+    nobody. Whether the emulator allows the action is not asked here.
+
+    `maps` is `index_maps(live, emu_doc)`, built with the loaded draw order when a pick from
+    the draw pile's shuffled middle must be found; building it can raise `MappingError`
+    (see `index_maps`). So can a move that names what the live snapshot does not hold or
+    aims at an enemy that is not alive, and a pick no emulator candidate is known to be
+    raises `UnmappedSelectionError`.
+
+    Raises:
+        MappingError: For a move that does not answer the selection that is open, or
+            leaves one open unanswered, and for a kind of move there is not.
+
+    """
+    maps = maps if maps is not None else index_maps(live, emu_doc)
+    pending = emu_doc["pending_selection"]
+    if move.kind in {"select", "skip"}:
+        if pending is None:
+            raise MappingError(f"a {move.kind} answers a selection, and none is open")
+        if move.kind == "skip":
+            return len(pending["candidates"]), -1
+        return _candidate_action(live, maps, move), -1
+    if pending is not None:
+        raise MappingError(
+            f"a selection is open, which only a pick or a skip answers, not a {move.kind}",
+        )
+    if move.kind == "card":
+        action = maps.hand.index(_hand_index(live, move))
+        return action, _target_index(maps, emu_doc, move.target)
+    if move.kind == "potion":
+        action = len(maps.hand) + 1 + _potion_slot(maps, move)
+        return action, _target_index(maps, emu_doc, move.target)
+    if move.kind == "end_turn":
+        return len(maps.hand), -1
+    raise MappingError(f"no move of kind {move.kind!r}")
 
 
 def hand_indices(
@@ -562,6 +615,108 @@ def _claim_shown(
         return None
     taken.add(alike[0])
     return alike[0]
+
+
+# ── Reading moves back ───────────────────────────────────────────────────────
+
+
+def _hand_index(live: Mapping[str, Any], move: Move) -> int:
+    """Return the live hand index a card move names, by its index or else its uid.
+
+    Raises:
+        MappingError: If neither is given, the index is past the hand, no hand card has
+            the uid, or the card at the index is not the uid or id the move gives.
+
+    """
+    hand = live["hand"]
+    if move.card_index is not None:
+        index = move.card_index
+        card = _at(hand, index, "live hand")
+    elif move.card_uid is not None:
+        index = next(
+            (i for i, card in enumerate(hand) if card["uid"] == move.card_uid),
+            None,
+        )
+        if index is None:
+            raise MappingError(f"no card {move.card_uid} is in the live hand")
+        card = hand[index]
+    else:
+        raise MappingError("a card move names no hand card: no card_index, no card_uid")
+    for key, given in (("uid", move.card_uid), ("id", move.card_id)):
+        if given is not None and card[key] != given:
+            raise MappingError(
+                f"the move names card {key} {given}, but live hand card {index} is "
+                f"{card[key]}",
+            )
+    return index
+
+
+def _target_index(
+    maps: IndexMaps,
+    emu_doc: Mapping[str, Any],
+    entity_id: str | None,
+) -> int:
+    """Return the emulator index of the enemy a move aims at, -1 for a move aimed at none.
+
+    Raises:
+        MappingError: If no live enemy is `entity_id`, or that enemy is not alive: dead, or
+            reviving at 0 HP, where no card can aim.
+
+    """
+    if entity_id is None:
+        return -1
+    if entity_id not in maps.entity_ids:
+        raise MappingError(f"no enemy {entity_id} is in the live snapshot")
+    index = maps.entity_ids.index(entity_id)
+    if emu_doc["enemies"][index]["hp"] <= 0:
+        raise MappingError(f"enemy {entity_id} is not alive, so no move aims at it")
+    return index
+
+
+def _potion_slot(maps: IndexMaps, move: Move) -> int:
+    """Return the slot a potion move names, which must hold its potion.
+
+    Raises:
+        MappingError: If the move names no slot, or the slot is empty, past the belt, or
+            holds another potion than the move's.
+
+    """
+    if move.potion_slot is None:
+        raise MappingError("a potion move names no potion_slot")
+    held = _potion_in(maps.potion_ids, move.potion_slot)
+    if move.potion_id is not None and held != move.potion_id:
+        raise MappingError(
+            f"the move names {move.potion_id}, but slot {move.potion_slot} holds {held}",
+        )
+    return move.potion_slot
+
+
+def _candidate_action(live: Mapping[str, Any], maps: IndexMaps, move: Move) -> int:
+    """Return the emulator candidate the maps found to be the live candidate a pick names.
+
+    Raises:
+        MappingError: If the pick names no candidate, one past the screen, or not the uid
+            or id the move gives.
+        UnmappedSelectionError: If no emulator candidate is known to be that candidate.
+
+    """
+    if move.select_index is None:
+        raise MappingError("a pick names no select_index")
+    screen = live["pending_selection"]["candidates"]
+    card = _at(screen, move.select_index, "live candidates")
+    for key, given in (("uid", move.card_uid), ("id", move.card_id)):
+        if given is not None and card[key] != given:
+            raise MappingError(
+                f"the pick names card {key} {given}, but live candidate "
+                f"{move.select_index} is {card[key]}",
+            )
+    for action, found in enumerate(maps.candidates):
+        if found == move.select_index:
+            return action
+    raise UnmappedSelectionError(
+        f"no emulator candidate is known to be live candidate {move.select_index} "
+        f"({card['id']})",
+    )
 
 
 # ── Naming moves ─────────────────────────────────────────────────────────────
