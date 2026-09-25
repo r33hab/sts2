@@ -2736,14 +2736,13 @@ public static class CombatEngine
                 break;
 
             case CardSelectionKind.DrawPileToHand:
-                if (
-                    index < state.DrawPile.Count
-                    && state.Hand.Count < Effects.CardEffects.MaxCardsInHand
-                )
+                // `CardPileCmd.Add(card, PileType.Hand)`: on a full hand the pick still leaves
+                // the draw pile, for the discard pile (CardPileCmd.cs:420-423).
+                if (index < state.DrawPile.Count)
                 {
                     var card = state.DrawPile[index];
                     state.RemoveFromDrawPileAt(index);
-                    state.Hand.Add(card);
+                    Effects.CardEffects.AddToHandOrDiscard(state, card);
                 }
 
                 // Foregone Conclusion asks for two or three, and a `CardSelectorPrefs` with
@@ -2816,12 +2815,13 @@ public static class CombatEngine
 
             case CardSelectionKind.DiscardToHandFree:
                 // Liquid Memories: the same recovery as DiscardToHand, plus Free this turn
-                // -- the reason it is its own kind rather than a flag on that one.
+                // -- the reason it is its own kind rather than a flag on that one. On a full
+                // hand it goes back onto the end of the discard pile (CardPileCmd.cs:420-423).
                 if (index < state.DiscardPile.Count)
                 {
                     var recoveredFree = state.DiscardPile[index] with { FreeThisTurn = true };
                     state.DiscardPile.RemoveAt(index);
-                    state.Hand.Add(recoveredFree);
+                    Effects.CardEffects.AddToHandOrDiscard(state, recoveredFree);
                 }
 
                 break;
@@ -2956,12 +2956,12 @@ public static class CombatEngine
                 break;
 
             case CardSelectionKind.GeneratedCardToHand:
-                if (
-                    index < selection.GeneratedCandidates.Count
-                    && state.Hand.Count < Effects.CardEffects.MaxCardsInHand
-                )
+                // `CardPileCmd.AddGeneratedCardToCombat(card, PileType.Hand, ...)`: on a full
+                // hand the card is still made, in the discard pile (CardPileCmd.cs:420-423).
+                if (index < selection.GeneratedCandidates.Count)
                 {
-                    state.Hand.Add(
+                    Effects.CardEffects.AddToHandOrDiscard(
+                        state,
                         selection.GeneratedRetained
                             ? new CardInstance(
                                 selection.GeneratedCandidates[index],
@@ -4580,7 +4580,6 @@ public static class CombatEngine
         if (
             def.Id
                 is Effects.CL.Mimic
-                    or Effects.CL.Purity
                     or Effects.CL.SecretTechnique
                     or Effects.CL.SecretWeapon
                     or Effects.CL.ThinkingAhead

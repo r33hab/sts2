@@ -4306,7 +4306,7 @@ public static class CardEffects
         var options = pool.Take(3).ToList();
         if (state.AutoPlaying)
         {
-            state.Hand.Add(new CardInstance(options[0], upgraded, FreeThisTurn: true));
+            AddToHandOrDiscard(state, new CardInstance(options[0], upgraded, FreeThisTurn: true));
             return;
         }
 
@@ -4347,11 +4347,7 @@ public static class CardEffects
 
         if (state.AutoPlaying)
         {
-            if (state.Hand.Count < MaxCardsInHand)
-            {
-                state.Hand.Add(new CardInstance(options[0], false, FreeThisTurn: true));
-            }
-
+            AddToHandOrDiscard(state, new CardInstance(options[0], false, FreeThisTurn: true));
             return;
         }
 
@@ -4434,6 +4430,32 @@ public static class CardEffects
         List<CardInstance> afterwards
     ) => OpenDiscardSelection(state, sourceCardDefId, remaining, afterwards);
 
+    /// <summary>
+    /// `CardPileCmd.Add(card, PileType.Hand)` for a card a selection picked: into the hand,
+    /// or -- when the hand already holds `CardPile.MaxCardsInHand` -- onto the end of the
+    /// DISCARD pile, which is the target the command switches to (CardPileCmd.cs:420-423).
+    /// The card is moved, or made, either way.
+    /// </summary>
+    /// <remarks>
+    /// A free-this-turn grant does not ride into the discard pile. The game's is
+    /// `SetThisTurnOrUntilPlayed`, which `EndOfTurnCleanup` strips from every card the
+    /// player owns as the turn ends (CardEnergyCost.cs:197; PlayerCombatState.cs:274-278).
+    /// `FreeThisTurn` is cleared only as a card leaves the hand, so carried into a pile it
+    /// would make the card free on whatever later turn it came back. Cleared here, the card
+    /// is the game's on every later turn; the one difference is a card fetched back to the
+    /// hand this same turn, which the game would still let the player play for free.
+    /// </remarks>
+    internal static void AddToHandOrDiscard(CombatState state, CardInstance card)
+    {
+        if (state.Hand.Count >= MaxCardsInHand)
+        {
+            state.DiscardPile.Add(card with { FreeThisTurn = false });
+            return;
+        }
+
+        state.Hand.Add(card);
+    }
+
     internal static void AddCardsToHand(CombatState state, List<CardInstance> cards)
     {
         foreach (var card in cards)
@@ -4500,7 +4522,7 @@ public static class CardEffects
             {
                 var card = state.DrawPile[index];
                 state.RemoveFromDrawPileAt(index);
-                state.Hand.Add(card);
+                AddToHandOrDiscard(state, card);
                 break;
             }
 
@@ -8436,7 +8458,9 @@ public static class CardEffects
                 // out of the draw pile and takes it into hand -- a tutor. The upgrade adds
                 // RETAIN. It was paying GOLD, which is not a thing this card does and not
                 // a thing a combat card generally does.
-                if (state.DrawPile.Count > 0 && state.Hand.Count < MaxCardsInHand)
+                // It asks whatever the hand holds: on a full hand the pick goes to the discard
+                // pile (`CardPileCmd.Add`, CardPileCmd.cs:420-423), and the screen still opens.
+                if (state.DrawPile.Count > 0)
                 {
                     OpenCardSelection(
                         state,
@@ -9243,7 +9267,10 @@ public static class CardEffects
         var options = pool.Take(count).ToList();
         if (state.AutoPlaying)
         {
-            state.Hand.Add(new CardInstance(options[0], false) { RetainForCombat = true });
+            AddToHandOrDiscard(
+                state,
+                new CardInstance(options[0], false) { RetainForCombat = true }
+            );
             return;
         }
 
