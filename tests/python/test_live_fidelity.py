@@ -590,9 +590,9 @@ class NotComparableTests(unittest.TestCase):
 
     def test_a_pick_the_emulator_cannot_find_is_not_comparable(self) -> None:
         # Droplet of Precognition offers the draw pile, whose unknown middle the loader
-        # shuffles; a card there is found by the (id, upgraded) the loaded order shows.
-        # With both Strikes in the middle and only one of them Sharp, that does not say
-        # which Strike is which.
+        # shuffles; a card there is found by what the emulator shows at each candidate.
+        # With both Strikes in the middle and only one of them costing 0 this turn, what
+        # it shows, (id, upgraded, enchantment, amount), does not say which is which.
         pre = load("selection/droplet_of_precognition")
         pre["known_draw_top"] = []
         candidates = pre["pending_selection"]["candidates"]
@@ -601,7 +601,7 @@ class NotComparableTests(unittest.TestCase):
             candidates[pick],
             *(c for c in pre["draw_pile"] if c["uid"] == "c5"),
         ):
-            card.update(enchantment="SHARP", enchant_amount=2)
+            card.update(cost=0, fields={"cost_this_turn": 0})
         move = moves.Move(
             kind="select",
             select_index=pick,

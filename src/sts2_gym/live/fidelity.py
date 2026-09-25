@@ -249,6 +249,7 @@ class _World:
             maps = moves.index_maps(
                 self._pre,
                 emu_doc,
+                offered=moves.offered(handle),
                 draw_order=native.get_pile(handle, "draw"),
             )
             try:

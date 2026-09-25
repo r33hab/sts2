@@ -61,10 +61,10 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Protocol, TextIO, cast
 
-# The native library is loaded by the time this module runs: `python -m` imports the
-# `sts2_gym` package first, whose `env` imports `native`. The search is not, and waits
-# for `main` to claim stdout (`_search_module`); nor is the training package, which
-# `strategy` imports on the first `strategy` request.
+# `native` loads the emulator's library as this module is imported, before `main` claims
+# stdout; the library writes nothing there, which the process tests hold it to. The
+# search waits for `main` to claim stdout (`_search_module`), and the training package
+# waits for the first `strategy` request (`strategy`).
 from sts2_gym import native
 from sts2_gym.live import ConversionError, fidelity, moves, strategy
 from sts2_gym.live.convert import convert
@@ -236,6 +236,7 @@ class Service:
                 maps = moves.index_maps(
                     live,
                     emu_doc,
+                    offered=moves.offered(handle),
                     draw_order=native.get_pile(handle, "draw"),
                 )
             except moves.MappingError as error:

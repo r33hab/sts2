@@ -13,7 +13,8 @@ The maps rest on what the converter promises, and `index_maps` checks it against
 position the search loaded: the emulator hand is the live hand, in order, and the
 emulator enemies are the live enemies, in order, a dead or reviving enemy keeping its
 place. Potion slot N is the same slot on both sides. A selection's candidates are
-places in a pile, so each is found again as the live card at that place.
+places in a pile, so each is found again as the live card at that place; in the draw
+pile's unordered middle, which the loader shuffles, by the card the emulator shows there.
 
 A move the search merged covers every live copy it stands for: `hand_indices`,
 `potion_slots` and `select_indices` list them. `check_identity` holds each covered card
@@ -31,15 +32,21 @@ Labels use the game's names, read off the live id: `STRIKE_IRONCLAD` is "Strike"
 
 from __future__ import annotations
 
+import ctypes
 import json
 import operator
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from sts2_gym import names
+from sts2_gym import names, native
 from sts2_gym.live import cards, ids, potions, selection
 from sts2_gym.live.convert import CHARACTERS, POTION_SLOT_CAPACITY
+
+# What the emulator shows of a candidate card: (def id, upgraded, enchantment, enchant
+# amount) in its observation, or (def id, upgraded) where only the draw pile shows it.
+Shown = tuple[int, ...]
 
 # Words a title keeps in lower case unless they lead it: "Touch of Insanity".
 _MINOR_WORDS = frozenset(
@@ -106,25 +113,53 @@ def index_maps(
     live: Mapping[str, Any],
     emu_doc: Mapping[str, Any],
     *,
+    offered: Sequence[Shown] | None = None,
     draw_order: Sequence[tuple[int, bool]] | None = None,
 ) -> IndexMaps:
     """Build the maps between a live snapshot and the emulator position loaded from it.
 
     `emu_doc` is the emulator's export of the loaded position (`native.get_state_json`),
     or the converter's document it was loaded from: the two agree everywhere a map reads.
-    `draw_order` is the loaded draw pile as `native.get_pile` gives it, (def id, upgraded)
-    from the top. Only a pick from the draw pile's unordered middle needs it, since the
-    loader shuffles that region by its seed; without it such a candidate is not found.
+    Only a pick from the draw pile's unordered middle needs more: the loader shuffles that
+    region by its seed, so which middle card each of the emulator's candidates is can only
+    be read off the loaded position. `offered` is what the emulator shows at each of its
+    candidates, as `offered(handle)` reads it, and `draw_order` is the loaded draw pile as
+    `native.get_pile` gives it, (def id, upgraded) from the top; without them such a
+    candidate is not found.
 
     `MappingError` is raised when the emulator hand is not the live hand in length and
-    order, or the emulator enemies or potion slots are not the live ones.
+    order, or the emulator enemies or potion slots are not the live ones, or it offers a
+    card at a known place that the live pile does not hold there.
     """
     return IndexMaps(
         hand=_hand(live, emu_doc),
         entity_ids=_enemies(live, emu_doc),
         potion_ids=_potions(live, emu_doc),
-        candidates=_candidates(live, emu_doc, draw_order),
+        candidates=_candidates(live, emu_doc, offered, draw_order),
     )
+
+
+def offered(handle: int) -> list[Shown]:
+    """Return what the emulator offers at each candidate of its open selection, in order.
+
+    Read off the observation of a faithful copy of the handle, where the search reads its
+    own picks (`live_search._root_moves`): (def id, upgraded, enchantment, enchant amount)
+    for each of the first `native.OBS_MAX_SELECTION_CANDIDATES` candidates, and nothing
+    when no selection is open.
+    """
+    obs = (ctypes.c_int * native.OBS_SIZE)()
+    native.destroy(native.clone(handle, False, 0, obs))
+    if not obs[native.OBS_SELECTION_KIND_OFFSET]:
+        return []
+    count = min(
+        obs[native.OBS_SELECTION_COUNT_OFFSET],
+        native.OBS_MAX_SELECTION_CANDIDATES,
+    )
+    slots = (
+        native.OBS_SELECTION_OFFSET + k * native.OBS_CARD_SLOT_SIZE
+        for k in range(count)
+    )
+    return [(obs[at], bool(obs[at + 1]), obs[at + 2], obs[at + 3]) for at in slots]
 
 
 def to_move(
@@ -507,6 +542,7 @@ def _potion_in(belt: Sequence[str | None], slot: int) -> str:
 def _candidates(
     live: Mapping[str, Any],
     emu_doc: Mapping[str, Any],
+    offered: Sequence[Shown] | None,
     draw_order: Sequence[tuple[int, bool]] | None,
 ) -> tuple[int | None, ...]:
     """Find the live candidate each emulator candidate of the open selection is.
@@ -514,11 +550,9 @@ def _candidates(
     The emulator's candidates are places in the pile the selection takes from, in pile
     order (`selection.to_pending`); a generated card's is its place in the offer, which
     keeps the screen's order. Each place is read in the live pile and its card found on
-    the screen: by uid, else by face. The one place with no live card is the draw pile's
-    unordered middle, which the loader shuffles (CombatSnapshot.cs ReadPiles), so a pick
-    there is found by the card `draw_order` shows at it, among the candidates no known
-    place took, and only when every such candidate showing that card shows one face. A
-    place past its live pile raises `MappingError`.
+    the screen: by uid, else by face. A pick from the draw pile is found by identity too,
+    but a card in its unordered middle has no place to read (`_draw_candidates`). A place
+    past its live pile raises `MappingError`.
 
     Raises:
         MappingError: If the emulator has a selection open and the live snapshot has none,
@@ -541,46 +575,104 @@ def _candidates(
         raise MappingError(f"no known source opened the live selection ({who})")
     if opens.screen == "CHOOSE":
         return tuple(place if place < len(screen) else None for place in places)
-
-    found: list[int | None] = [None] * len(places)
+    if opens.pile == "DRAW":
+        return _draw_candidates(live, emu_doc, offered or (), draw_order)
+    if opens.screen == "HAND":
+        pile, where = live["hand"], "live hand"
+    elif opens.pile == "DISCARD":
+        pile, where = live["discard_pile"], "live discard pile"
+    else:
+        pile, where = live["exhaust_pile"], "live exhaust pile"
     taken: set[int] = set()
-    middle = []
-    for index, place in enumerate(places):
-        card = _card_at(opens, live, emu_doc, place)
-        if card is None:
-            middle.append(index)
+    return tuple(_claim(_at(pile, place, where), screen, taken) for place in places)
+
+
+def _draw_candidates(
+    live: Mapping[str, Any],
+    emu_doc: Mapping[str, Any],
+    offered: Sequence[Shown],
+    draw_order: Sequence[tuple[int, bool]] | None,
+) -> tuple[int | None, ...]:
+    """Find the live candidate each emulator candidate of a draw-pile selection is.
+
+    The loader shuffles the draw pile's unordered middle, so a candidate there is not a
+    place: the document names it by card, and the emulator's export does too, in
+    `candidate_cards` (the spire-coach spec `2026-09-24-snapshot-schemas.md`, 2.3). Its
+    candidates are still places in the loaded pile, in pile order, so they run: the known
+    top ones, the middle ones, the known bottom ones. A known place is read in the live
+    pile and its card found on the screen, by uid, else by face. A middle one is found by
+    the card the emulator shows there (`_middle_shown`): the candidate no known place took
+    that shows that card, when every such candidate shows one face.
+
+    Raises:
+        MappingError: If the emulator shows another card at a known place than the one the
+            live pile holds there.
+
+    """
+    screen = live["pending_selection"]["candidates"]
+    pending = emu_doc["pending_selection"]
+    draw = emu_doc["piles"]["draw"]
+    top, middle = len(draw["known_top"]), len(draw["unordered"])
+    named = pending["candidate_cards"]
+    # The known places, each with its action: the middle's candidates come between.
+    known: list[tuple[int, int, Mapping[str, Any]]] = []
+    for place in pending["candidates"]:
+        if place < top:
+            card = _at(live.get("known_draw_top", []), place, "live known draw top")
+            known.append((len(known), place, card))
         else:
-            found[index] = _claim(card, screen, taken)
-    for index in middle:
-        if draw_order is not None and places[index] < len(draw_order):
-            found[index] = _claim_shown(draw_order[places[index]], screen, taken)
+            card = _at(
+                live.get("known_draw_bottom", []),
+                place - top - middle,
+                "live known draw bottom",
+            )
+            known.append((len(known) + len(named), place, card))
+    first = sum(1 for _, place, _ in known if place < top)
+    found: list[int | None] = [None] * (len(known) + len(named))
+    taken: set[int] = set()
+    for action, place, card in known:
+        if action < len(offered) and offered[action][:2] != _emu_face(card)[:2]:
+            raise MappingError(
+                f"the emulator offers card {offered[action][0]} at draw-pile place "
+                f"{place}, where the live pile holds {card['id']}",
+            )
+        found[action] = _claim(card, screen, taken)
+    shown = _middle_shown(offered, first, named, draw_order, (top, top + middle))
+    for rank, face in enumerate(shown):
+        found[first + rank] = _claim_shown(face, screen, taken)
     return tuple(found)
 
 
-def _card_at(
-    opens: selection.Opens,
-    live: Mapping[str, Any],
-    emu_doc: Mapping[str, Any],
-    place: int,
-) -> Mapping[str, Any] | None:
-    """Return the live card at a place in the selection's pile; None in the draw's middle.
+def _middle_shown(
+    offered: Sequence[Shown],
+    first: int,
+    named: Sequence[Mapping[str, Any]],
+    draw_order: Sequence[tuple[int, bool]] | None,
+    middle: tuple[int, int],
+) -> list[Shown | None]:
+    """Return the card the emulator shows at each of its candidates in the draw's middle.
 
-    A place past the pile raises `MappingError`.
+    Those candidates follow the known top ones, `first` of them, in pile order. The
+    observation shows each of them up to its last slot, whole. Past that, the loaded draw
+    pile shows its (def id, upgraded) where it can say which middle cards the candidates
+    are: when every middle card with the def id and upgrade of one of them is one of them
+    (a grid of every Skill, or of the whole pile). Otherwise that candidate shows nothing.
     """
-    if opens.screen == "HAND":
-        return _at(live["hand"], place, "live hand")
-    if opens.pile == "DISCARD":
-        return _at(live["discard_pile"], place, "live discard pile")
-    if opens.pile == "EXHAUST":
-        return _at(live["exhaust_pile"], place, "live exhaust pile")
-    draw = emu_doc["piles"]["draw"]
-    top, middle = len(draw["known_top"]), len(draw["unordered"])
-    if place < top:
-        return _at(live.get("known_draw_top", []), place, "live known draw top")
-    if place >= top + middle:
-        bottom = live.get("known_draw_bottom", [])
-        return _at(bottom, place - top - middle, "live known draw bottom")
-    return None
+    by_pile: list[tuple[int, bool]] | None = None
+    if draw_order is not None:
+        region = [tuple(card) for card in draw_order[middle[0] : middle[1]]]
+        wanted = Counter((card["def_id"], card["upgraded"]) for card in named)
+        held = Counter(region)
+        if all(held[key] == count for key, count in wanted.items()):
+            by_pile = [(key[0], bool(key[1])) for key in region if key in wanted]
+    return [
+        (
+            offered[first + rank]
+            if first + rank < len(offered)
+            else (by_pile[rank] if by_pile is not None else None)
+        )
+        for rank in range(len(named))
+    ]
 
 
 def _claim(
@@ -609,22 +701,40 @@ def _claim(
 
 
 def _claim_shown(
-    shown: tuple[int, bool],
+    shown: Shown | None,
     screen: Sequence[Mapping[str, Any]],
     taken: set[int],
 ) -> int | None:
-    """Take a candidate the draw pile's middle shows as (def id, upgraded), if unambiguous."""
+    """Take the candidate that shows what the emulator shows, if only one face does.
+
+    `shown` is what the emulator shows of the card, whole or as (def id, upgraded) alone;
+    the free candidates showing it must all show one face, uid aside.
+    """
+    if shown is None:
+        return None
     alike = [
         index
         for index in range(len(screen))
-        if index not in taken
-        and (ids.card_id(screen[index]["id"]), screen[index]["upgraded"])
-        == tuple(shown)
+        if index not in taken and _emu_face(screen[index])[: len(shown)] == shown
     ]
     if not alike or len({_face(screen[index]) for index in alike}) > 1:
         return None
     taken.add(alike[0])
     return alike[0]
+
+
+def _emu_face(card: Mapping[str, Any]) -> Shown:
+    """Return what the emulator shows of a live card, translated as the converter does.
+
+    (def id, upgraded, enchantment, enchant amount), the observation's own four numbers.
+    """
+    emu = cards.to_emu_card(dict(card), path="candidate", warnings=[])
+    return (
+        emu["def_id"],
+        emu["upgraded"],
+        emu.get("enchantment", 0),
+        emu.get("enchant_amount", 0),
+    )
 
 
 # ── Reading moves back ───────────────────────────────────────────────────────
