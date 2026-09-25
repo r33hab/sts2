@@ -168,21 +168,14 @@ _LOADER_MISSING = "load_combat_snapshot unavailable: merge the loader branch"
 # What talking to a worker whose process has gone raises: EOF on its pipe, or a broken pipe.
 _PIPE_GONE = (EOFError, OSError)
 
-# The potions a player aims: `TargetType => TargetType.AnyEnemy` in the decompiled
-# MegaCrit.Sts2.Core.Models.Potions. The emulator's `PotionDef` carries no target type yet,
-# so the names are listed here and resolved through `names.potions()`. The test suite
-# checks this list against the decompiled source whenever that source is present.
+# The potions a player aims: `PotionDef.TargetType == CardTarget.AnyEnemy` in the
+# emulator's Generated/Potions.g.cs, the field `PotionEffects.NeedsEnemyTarget` reads and
+# the one the decompiled MegaCrit.Sts2.Core.Models.Potions declare as `TargetType =>
+# TargetType.AnyEnemy`. The test suite checks it against that source whenever it is present.
 ENEMY_TARGETED_POTIONS = frozenset(
-    {
-        "BeetleJuice",
-        "FirePotion",
-        "PoisonPotion",
-        "PotionOfDoom",
-        "PotionShapedRock",
-        "PowderedDemise",
-        "VulnerablePotion",
-        "WeakPotion",
-    },
+    names.potions()[potion]
+    for potion, target in names.potion_targets().items()
+    if target == "AnyEnemy"
 )
 
 # Where the observation keeps what this reads, from the emulator's own exports. The potion

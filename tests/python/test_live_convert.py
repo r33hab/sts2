@@ -2229,6 +2229,56 @@ class CliTests(unittest.TestCase):
         self.assertEqual(json.loads(done.stdout)["schema"], "sts2-emu-snapshot/1")
 
 
+class NativeFreeImportTests(unittest.TestCase):
+    """Converting a document, or naming a buff, never loads the emulator's library.
+
+    `sts2_gym.native` loads it on import, and checks its build is fresh and its API
+    version current, so only what steps a combat should reach for it.
+    """
+
+    @staticmethod
+    def loaded_after(code: str) -> list[str]:
+        """Run `code` in a fresh interpreter; return which native-bound modules it loaded.
+
+        Raises:
+            AssertionError: if the interpreter fails, with its stderr.
+
+        """
+        probe = (
+            f"import json, sys\n{code}\n"
+            "print(json.dumps(sorted(m for m in ('sts2_gym.native', 'sts2_gym.env', "
+            "'sts2_gym.commands') if m in sys.modules)))\n"
+        )
+        env = {
+            **os.environ,
+            "PYTHONPATH": os.pathsep.join((str(ROOT / "src"), str(ROOT / "scripts"))),
+        }
+        done = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+        if done.returncode != 0:
+            raise AssertionError(done.stderr)
+        return json.loads(done.stdout)
+
+    def test_the_converter_and_buff_map_load_no_native_library(self) -> None:
+        self.assertEqual(
+            self.loaded_after("import sts2_gym.live.convert, sts2_gym.live.__main__"),
+            [],
+        )
+        self.assertEqual(self.loaded_after("import buff_map"), [])
+
+    def test_the_package_still_exports_its_names_when_asked(self) -> None:
+        self.assertEqual(self.loaded_after("import sts2_gym"), [])
+        self.assertIn(
+            "sts2_gym.native",
+            self.loaded_after("from sts2_gym import Sts2CombatEnv, game_seed"),
+        )
+
+
 class EnemyWarningTests(unittest.TestCase):
     """What convert says about the enemies it cannot carry exactly."""
 
