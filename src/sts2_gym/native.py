@@ -13,7 +13,7 @@ _LIB_NAMES = {
     "darwin": "Sts2Emulator.dylib",
 }
 _ALLOW_STALE_ENV = "STS2_ALLOW_STALE_NATIVE"
-_REQUIRED_NATIVE_API_VERSION = 30
+_REQUIRED_NATIVE_API_VERSION = 31
 _REQUIRED_RUN_NATIVE_API_VERSION = 20
 
 
@@ -340,6 +340,7 @@ _lib.Sts2_ResetArena.argtypes = [
     ctypes.c_int,  # player hp
     ctypes.c_int,  # player max hp
     ctypes.c_int,  # player gold
+    ctypes.c_int,  # max potion slots (negative: the belt a run at this level starts with)
     ctypes.c_int,  # ascension
     ctypes.c_int,  # total floor
     ctypes.c_int,  # completed combat rooms
@@ -348,6 +349,25 @@ _lib.Sts2_ResetArena.argtypes = [
 
 _lib.Sts2_CanEnchant.restype = ctypes.c_int
 _lib.Sts2_CanEnchant.argtypes = [ctypes.c_int, ctypes.c_int]
+
+_lib.Sts2_DefaultAscension.restype = ctypes.c_int
+_lib.Sts2_DefaultAscension.argtypes = []
+
+_lib.Sts2_StartingDeck.restype = ctypes.c_int
+_lib.Sts2_StartingDeck.argtypes = [
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.c_int,
+]
+
+_lib.Sts2_StartingHp.restype = ctypes.c_int
+_lib.Sts2_StartingHp.argtypes = [ctypes.c_int]
+
+_lib.Sts2_StartingMaxHp.restype = ctypes.c_int
+_lib.Sts2_StartingMaxHp.argtypes = []
+
+_lib.Sts2_StartingPotionSlots.restype = ctypes.c_int
+_lib.Sts2_StartingPotionSlots.argtypes = [ctypes.c_int]
 
 _lib.Sts2_Step.restype = ctypes.c_int
 _lib.Sts2_Step.argtypes = [
@@ -532,6 +552,12 @@ _lib.Sts2Run_Destroy.argtypes = [ctypes.c_int]
 OBS_SIZE: int = _lib.Sts2_ObsSize()
 MAX_ENEMIES: int = _lib.Sts2_MaxEnemies()
 
+# The level the plain resets deal (`reset`, and `reset_encounter` without a total_floor),
+# and the max HP every run starts on. Both are the emulator's definitions, read rather
+# than restated.
+DEFAULT_ASCENSION: int = _lib.Sts2_DefaultAscension()
+STARTING_MAX_HP: int = _lib.Sts2_StartingMaxHp()
+
 # The combat observation's layout, read from the emulator rather than restated here.
 # These used to be magic numbers in scripts/trace.py, which went silently wrong the
 # moment a card slot grew from two fields to four: it decoded zero enemies and 77 live
@@ -703,7 +729,7 @@ def reset_encounter(
     obs_buf: ctypes.Array,
     completed_combat_rooms: int = -1,
     total_floor: int | None = None,
-    ascension: int = 8,
+    ascension: int = DEFAULT_ASCENSION,
 ) -> None:
     """Reset into a chosen encounter.
 
@@ -718,9 +744,25 @@ def reset_encounter(
 
     ascension is an input to enemy data, not a difficulty label: the game picks monster
     damage with GetValueIfAscension(level, high, low), so the same enemy hits for
-    different amounts at A8 and A10. It only reaches the emulator through the
-    floor-aware reset, so a call without total_floor keeps the default.
+    different amounts at A8 and A10. It also sets the player's start, by the run's own
+    rules at that level: 80/80 HP below WearyTraveler (A2) and 64/80 from it, three
+    potion slots below TightBelt (A4) and two from it, and Ascender's Bane in the deck
+    only from AscendersBane (A5). It only reaches the emulator through the floor-aware
+    reset: without a total_floor the fight is the default level's.
+
+    Raises:
+        ValueError: if an ascension other than DEFAULT_ASCENSION is asked for without a
+            total_floor, since the reset that would run takes no ascension and the
+            level would be dropped without a word. Pass total_floor (1 for a run's first
+            combat) to honour it.
+
     """
+    if total_floor is None and ascension != DEFAULT_ASCENSION:
+        raise ValueError(
+            f"reset_encounter: ascension {ascension} reaches the emulator only through "
+            "the floor-aware reset. Pass total_floor (1 for a run's first combat); "
+            f"without it the fight is A{DEFAULT_ASCENSION}'s.",
+        )
     if total_floor is not None:
         _lib.Sts2_ResetEncounterAtFloor(
             handle,
@@ -798,7 +840,8 @@ def reset_encounter_with_extra_cards(
 
     For captures that must reach a state the starter deck cannot: a Phrog Parasite's
     Wrigglers only spawn when it dies. The live side adds the same cards with
-    debug_add_card, and both sides append before shuffling.
+    debug_add_card, and both sides append before shuffling. The starter deck, HP and belt
+    are the level's, as in reset_encounter.
     """
     extra_buf = (ctypes.c_int * len(extra_card_ids))(*extra_card_ids)
     _lib.Sts2_ResetEncounterAtFloorWithExtraCards(
@@ -823,6 +866,31 @@ def can_enchant(card_id: int, enchantment: int) -> bool:
     return bool(_lib.Sts2_CanEnchant(card_id, enchantment))
 
 
+def starting_deck(ascension: int) -> list[int]:
+    """The deck a run at `ascension` starts with, as the floor-aware resets deal it.
+
+    Ascender's Bane is in it only from AscendersBane (A5). Asked of the engine rather than
+    restated, so a caller building its own start (the arena) deals what a run deals.
+    """
+    capacity = 16
+    while True:
+        buf = (ctypes.c_int * capacity)()
+        count = int(_lib.Sts2_StartingDeck(ascension, buf, capacity))
+        if count <= capacity:
+            return list(buf[:count])
+        capacity = count
+
+
+def starting_hp(ascension: int) -> int:
+    """The HP a run at `ascension` starts on: STARTING_MAX_HP, 80% of it from WearyTraveler (A2)."""
+    return int(_lib.Sts2_StartingHp(ascension))
+
+
+def starting_potion_slots(ascension: int) -> int:
+    """The potion slots a run at `ascension` starts with: three, two from TightBelt (A4)."""
+    return int(_lib.Sts2_StartingPotionSlots(ascension))
+
+
 def reset_arena(
     handle: int,
     deck_ids: list[int],
@@ -837,6 +905,7 @@ def reset_arena(
     ascension: int = 8,
     total_floor: int = 0,
     completed_combat_rooms: int = -1,
+    max_potion_slots: int | None = None,
 ) -> None:
     """Start a combat from an arbitrary run position.
 
@@ -855,6 +924,11 @@ def reset_arena(
     six Shop-rarity relics grant one apiece.
 
     encounter_id of -1 rolls the seeded first-combat encounter instead of forcing one.
+
+    ``max_potion_slots`` is the position's belt. None gives the belt a run at
+    ``ascension`` starts with (``starting_potion_slots``); a position whose belt a relic
+    widened passes its own. It is never narrower than the potions passed, so none is
+    stranded where no action can reach it.
     """
     deck_buf = (ctypes.c_int * len(deck_ids))(*deck_ids)
     ench = list(enchantments or [])
@@ -882,6 +956,7 @@ def reset_arena(
         player_hp,
         player_max_hp,
         player_gold,
+        -1 if max_potion_slots is None else max_potion_slots,
         ascension,
         total_floor,
         completed_combat_rooms,

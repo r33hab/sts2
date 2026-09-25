@@ -62,6 +62,29 @@ public class BurningPactTests
         Assert.Equal([IC.Bash], Fight.Ids(fight.State.ExhaustPile));
     }
 
+    /// <summary>
+    /// The exhaust is the player's pick (`CardSelectCmd.FromHand`), which rolls nothing: the
+    /// selection stream stands still through the play, the answer and the draw after it.
+    /// </summary>
+    [Fact]
+    public void ThePlayersPickDrawsNothingFromTheSelectionStream()
+    {
+        var fight = Fight
+            .Hand(Card(IC.BurningPact), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .Energy(1)
+            .Draw(Card(IC.Anger), Card(IC.DefendIronclad))
+            .Enemy(hp: 40);
+        var selectionRng = new CountingRandom(11);
+        fight.State.CardSelectionRng = selectionRng;
+
+        fight.Play();
+        Assert.Equal(0, selectionRng.CallCount);
+
+        fight.Choose(0);
+        Assert.Equal(0, selectionRng.CallCount);
+        Assert.Equal([IC.StrikeIronclad, IC.Anger, IC.DefendIronclad], Fight.Ids(fight.State.Hand));
+    }
+
     [Fact]
     public void DrawsWithoutAskingWhenTheHandIsEmpty()
     {

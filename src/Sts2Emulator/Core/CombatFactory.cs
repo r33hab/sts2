@@ -15,18 +15,15 @@ public static class CombatFactory
     // matching Creature.SetUniqueMonsterHpValue which excludes already-used MaxHp values.
     private static HashSet<int>? _usedNicheHps;
 
-    private const int StartingPlayerHp = 64;
-    private const int StartingPlayerMaxHp = 80;
+    // The overloads that take no HP or deck start where a run at the default level
+    // starts. Read off the run's own rules rather than restated, so the two cannot drift:
+    // 64/80 and Ascender's Bane at A8.
+    private static int StartingPlayerHp => RunEngine.StartingHp(Ascension.DefaultLevel);
+    private static int StartingPlayerMaxHp => RunConstants.StartingMaxHp;
 
     /// <summary>The ascension of the combat currently being built; see CreateEnemy.</summary>
     private static int _currentAscension = Ascension.DefaultLevel;
     private const int StartingEnergy = 3;
-
-    // Ironclad starting deck card IDs (from Generated/Cards.g.cs).
-    private const int StrikeId = IC.StrikeIronclad; // 472
-    private const int DefendId = IC.DefendIronclad; // 131
-    private const int BashId = IC.Bash; // 30
-    private const int AscendersBaneId = IC.AscendersBane; // 10001
 
     /// <summary>
     /// The encounters the emulator can build. Internal rather than private so a combat
@@ -569,13 +566,7 @@ public static class CombatFactory
         return Math.Min(Math.Max(handDraw, innate.Count), MaxCardsInHand);
     }
 
-    private static int[] StarterDeck() =>
-        [
-            .. Enumerable.Repeat(StrikeId, 5),
-            .. Enumerable.Repeat(DefendId, 4),
-            BashId,
-            AscendersBaneId,
-        ];
+    private static int[] StarterDeck() => RunConstants.StartingDeckIds(Ascension.DefaultLevel);
 
     private static List<EnemyState> CreateEncounter(
         ActOneEncounter encounter,
