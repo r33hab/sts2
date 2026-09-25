@@ -254,7 +254,7 @@ class MappedKindTests(unittest.TestCase):
     def test_draw_pile_to_hand(self) -> None:
         # Secret Technique offers the draw pile's Skills (CardEffects.cs:1190-1196,
         # :4243-4258). Both sit in the unknown middle, whose order the loader shuffles
-        # (CombatSnapshot.cs ReadPiles), so they are named by card and found once it has.
+        # (CombatSnapshot.cs ReadPiles), so they are named by card and followed through it.
         result = self.convert("secret_technique")
         self.assertEqual(
             result.doc["pending_selection"],
@@ -440,7 +440,7 @@ class SourceVariantTests(unittest.TestCase):
         # Three of the seven draw-pile cards (CardEffects.cs:271-281, :4164-4190): the
         # known top Strike keeps its index, and the two sampled out of the six-card middle
         # are named by card, since the loader shuffles the middle (CombatSnapshot.cs
-        # ReadPiles) and finds them after.
+        # ReadPiles) and follows them through it.
         result = convert.convert(load("seeker_strike_middle"))
         self.assertEqual(
             result.doc["pending_selection"],
@@ -1346,6 +1346,82 @@ class MatchingTests(unittest.TestCase):
         (warning,) = self.indices(twice, hand)
         self.assertIn("uid c1 is offered twice", warning)
 
+    def test_a_card_that_could_be_known_or_unordered_warns(self) -> None:
+        # A Strike offered without a uid, where the draw pile holds one Strike on its known
+        # top and one in the unordered middle: taking the top one leaves a Strike in the
+        # middle, taking the middle one leaves the known top Strike to be drawn next. The
+        # converter cannot tell which the grid shows, so the position is unreliable. The
+        # emulator is given the first copy in pile order.
+        screen = pending(
+            "GRID",
+            [card("STRIKE_IRONCLAD")],
+            source_card="SEEKER_STRIKE",
+            pile="DRAW",
+        )
+        draw = selection.Draw(
+            top=[card("STRIKE_IRONCLAD", "d0")],
+            middle=[card("STRIKE_IRONCLAD", "d1"), card("DEFEND_IRONCLAD", "d2")],
+        )
+        result, warnings = to_pending(screen, [], draw=draw)
+        self.assertEqual(result, expected(DRAW_TO_HAND, [0], SEEKER_STRIKE))
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("known top and the unordered middle", warnings[0])
+        # A known bottom copy is a third place.
+        draw = selection.Draw(
+            middle=[card("STRIKE_IRONCLAD", "d1")],
+            bottom=[card("STRIKE_IRONCLAD", "d2")],
+        )
+        _, warnings = to_pending(screen, [], draw=draw)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("unordered middle and the known bottom", warnings[0])
+
+    def test_a_card_with_one_place_to_be_is_quiet(self) -> None:
+        strike = card("STRIKE_IRONCLAD")
+        for label, offered, top, middle in (
+            # Every copy is offered, so every copy is taken.
+            (
+                "all taken",
+                [strike, strike],
+                [card("STRIKE_IRONCLAD", "d0")],
+                [card("STRIKE_IRONCLAD", "d1")],
+            ),
+            # Every copy is in the middle, where the loader finds one by card.
+            (
+                "all unordered",
+                [strike],
+                [],
+                [card("STRIKE_IRONCLAD", "d1"), card("STRIKE_IRONCLAD", "d2")],
+            ),
+            # Every copy is on the known top, and either leaves the same pile behind.
+            (
+                "all on top",
+                [strike],
+                [card("STRIKE_IRONCLAD", "d0"), card("STRIKE_IRONCLAD", "d1")],
+                [card("DEFEND_IRONCLAD", "d2")],
+            ),
+        ):
+            with self.subTest(label):
+                screen = pending(
+                    "GRID",
+                    offered,
+                    source_card="SEEKER_STRIKE",
+                    pile="DRAW",
+                )
+                draw = selection.Draw(top=top, middle=middle)
+                result, warnings = to_pending(screen, [], draw=draw)
+                self.assertIsNotNone(result)
+                self.assertEqual(warnings, [])
+
+    def test_convert_flags_a_card_that_could_be_known_or_unordered(self) -> None:
+        # The fixture's Strike without its uid: c6 on the known top, or c5 in the middle.
+        live_doc = load("seeker_strike")
+        live_doc["pending_selection"]["candidates"][2]["uid"] = None
+        result = convert.convert(live_doc)
+        self.assertIsNotNone(result.doc["pending_selection"])
+        self.assertEqual(len(result.warnings), 1)
+        self.assertIn("SEEKER_STRIKE", result.warnings[0])
+        self.assertFalse(result.reliable)
+
     def test_known_bottom_cards_take_their_own_indices(self) -> None:
         top, middle = [card("BASH", "d0")], [card("DEFEND_IRONCLAD", "d1")]
         bottom = [card("STRIKE_IRONCLAD", "d2"), card("IRON_WAVE", "d3")]
@@ -2016,9 +2092,9 @@ class EmulatorAgreementTests(unittest.TestCase):
 class DrawPileGridLoadTests(unittest.TestCase):
     """A draw-pile grid over part of the unordered middle, converted and loaded.
 
-    The loader shuffles the middle with its seed (CombatSnapshot.cs `ReadPiles`) and then
-    finds the cards the selection names (`FindInUnorderedMiddle`), so each seed offers the
-    same cards from wherever it put them.
+    The loader matches the cards the selection names in the document's list, then follows
+    them through its seeded shuffle (CombatSnapshot.cs `ReadPiles`,
+    `FindInUnorderedMiddle`), so each seed offers the same cards from wherever it put them.
     """
 
     GRIDS = (

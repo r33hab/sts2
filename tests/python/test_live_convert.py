@@ -1829,7 +1829,7 @@ class LoaderLimitTests(Refusals):
 LOADER_SOURCE = ROOT / "src" / "Sts2Emulator" / "Interop" / "CombatSnapshot.cs"
 
 # The fields the loader cannot do without (CombatSnapshot.cs:359-368, :390, :424-428,
-# :503-506, :539, :552-553, and the buff, relic and orb readers): each is read with no
+# :522-525, :558, :571-572, and the buff, relic and orb readers): each is read with no
 # default, and a document missing one is refused.
 LOADER_REQUIRED = {
     "combat": {"schema", "ascension", "turn", "player", "enemies"},

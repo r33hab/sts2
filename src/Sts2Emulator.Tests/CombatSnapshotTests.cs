@@ -979,6 +979,18 @@ public class CombatSnapshotTests
         "an unknown card",
         "pending_selection.candidate_cards[0].def_id: unknown card id 999999"
     )]
+    [InlineData(
+        "indices out of pile order",
+        "pending_selection.candidates[1]: 0 is not after 6; a draw-pile selection lists its candidates in pile order, each once"
+    )]
+    [InlineData(
+        "indices out of pile order, no cards",
+        "pending_selection.candidates[1]: 0 is not after 6; a draw-pile selection lists its candidates in pile order, each once"
+    )]
+    [InlineData(
+        "an index twice",
+        "pending_selection.candidates[1]: 0 is not after 0; a draw-pile selection lists its candidates in pile order, each once"
+    )]
     public void ACandidateTheLoadCannotResolveIsRefusedWithTheFieldNamed(
         string problem,
         string expected
@@ -1017,6 +1029,17 @@ public class CombatSnapshotTests
             case "an unknown card":
                 selection["candidate_cards"] = Cards(999999);
                 break;
+            // The known bottom (Thunderclap, index 6) listed before the known top (Anger, 0).
+            case "indices out of pile order":
+                selection["candidates"] = new JsonArray(6, 0);
+                break;
+            case "indices out of pile order, no cards":
+                selection["candidates"] = new JsonArray(6, 0);
+                selection["candidate_cards"] = new JsonArray();
+                break;
+            case "an index twice":
+                selection["candidates"] = new JsonArray(0, 0);
+                break;
         }
 
         Assert.Equal(-1, Native.Load(document.ToJsonString(), seed: 1));
@@ -1046,6 +1069,89 @@ public class CombatSnapshotTests
         );
         Assert.Equal(new[] { 0 }, selection["candidates"]!.AsArray().Select(i => (int)i!));
         Assert.Equal(new[] { IC.IronWave }, DefIds(selection["candidate_cards"]));
+    }
+
+    /// <summary>
+    /// A named card is one of its copies in the document's list, and the load's shuffle
+    /// takes it wherever it takes any card. Two Strikes among five cards, one of them
+    /// named: it is the upper Strike half the time and in each of the five places a fifth
+    /// of the time. Found in the pile after the shuffle, it was always the upper one.
+    /// </summary>
+    [Fact]
+    public void ANamedCopyIsAsLikelyToBeAnyOfItsTwinsAsTheShuffleMakesIt()
+    {
+        const int seeds = 4000;
+        int[] middle = [Strike, Strike, Defend, IC.IronWave, Bash];
+        byte[] document = Encoding.UTF8.GetBytes(MiddleGrid(middle, [Strike]));
+        int upper = 0;
+        var places = new int[middle.Length];
+
+        for (int seed = 1; seed <= seeds; seed++)
+        {
+            var state = CombatSnapshot.Read(document, seed, out _);
+            int named = Assert.Single(state.PendingSelection!.Candidates);
+            int twin = Enumerable
+                .Range(0, middle.Length)
+                .Single(i => i != named && state.DrawPile[i].DefId == Strike);
+            upper += named < twin ? 1 : 0;
+            places[named]++;
+        }
+
+        Assert.InRange(upper / (double)seeds, 0.46, 0.54);
+        Assert.All(places, count => Assert.InRange(count / (double)seeds, 0.17, 0.23));
+    }
+
+    /// <summary>
+    /// The review's measurement: four Strikes, four Defends and a Bash in the middle, and
+    /// Seeker Strike offering one of each. With the Strike taken, three of the eight cards
+    /// left are Strikes, so the next draw is one 3/8 of the time. When the loader took the
+    /// topmost Strike, it was one only 1/6 of the time: 4/9 that the top card was a
+    /// Strike, times 3/8 that the one under it was too.
+    /// </summary>
+    [Fact]
+    public void TheDrawAfterAPickIsAsLikelyAsTheCardsLeftMakeIt()
+    {
+        const int seeds = 4000;
+        string document = MiddleGrid(
+            [Strike, Strike, Strike, Strike, Defend, Defend, Defend, Defend, Bash],
+            [Strike, Defend, Bash]
+        );
+        int strikes = 0;
+
+        for (int seed = 1; seed <= seeds; seed++)
+        {
+            int handle = Native.Load(document, seed);
+            try
+            {
+                Assert.True(handle >= 0, Native.LastError());
+                Native.Step(handle, Array.IndexOf(OfferedCards(Native.Observe(handle)), Strike));
+                strikes += Native.DrawPile(handle)[0] == Strike ? 1 : 0;
+            }
+            finally
+            {
+                Native.Destroy(handle);
+            }
+        }
+
+        Assert.InRange(strikes / (double)seeds, 0.345, 0.405);
+    }
+
+    /// <summary>
+    /// The minimal document with nothing in the draw pile but an unordered middle, and a
+    /// Seeker Strike grid naming <paramref name="named" /> out of it.
+    /// </summary>
+    private static string MiddleGrid(int[] middle, int[] named)
+    {
+        var document = Minimal();
+        document["piles"]!["draw"] = new JsonObject { ["unordered"] = Cards(middle) };
+        document["pending_selection"] = new JsonObject
+        {
+            ["kind"] = (int)CardSelectionKind.DrawPileToHand,
+            ["candidates"] = new JsonArray(),
+            ["candidate_cards"] = Cards(named),
+            ["source_card_def_id"] = CL.SeekerStrike,
+        };
+        return document.ToJsonString();
     }
 
     /// <summary>

@@ -275,7 +275,6 @@ class Monster:
         spawned: str | None = None,
         resumes_after_stun: bool = False,
         forced: Sequence[str] = (),
-        gap: str | None = None,
     ) -> None:
         self.entry = entry
         self.moves = dict(moves)
@@ -303,9 +302,6 @@ class Monster:
         # nothing (MonsterModel.cs:562-574, MonsterMoveStateMachine.cs:46-49): with one
         # on display, the log still ends on the move before it (`force`).
         self.forced = frozenset(forced)
-        # Something the emulator does not play for this monster at all, which makes any
-        # position holding it unreliable: warned on every conversion.
-        self.gap = gap
 
     @property
     def def_id(self) -> int:
@@ -1823,8 +1819,6 @@ def to_ai(
 
     ctx = Context(enemy, roster, turn, ascension, label, warnings)
     ai, intent, companions = _reconstruct(model, ctx)
-    if model.gap is not None:
-        warnings.append(f"{label}: {model.gap}")
     _merge(buffs, companions)
     return ai, intent, warnings
 

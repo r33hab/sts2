@@ -279,9 +279,8 @@ def creatures(frames: list[Frame]) -> dict[tuple[Any, ...], list[Seen]]:
     logs: dict[tuple[Any, ...], list[str]] = {}
     alive_before: set[tuple[Any, ...]] = set()
     generation: dict[tuple[Any, ...], int] = {}
-    known_max_hp: dict[int, int] = (
-        {}
-    )  # by roster index, which the emulator keeps stable
+    # By roster index, which the emulator keeps stable.
+    known_max_hp: dict[int, int] = {}
     for k, frame in enumerate(frames):
         alive_now: set[tuple[Any, ...]] = set()
         twins: Counter[tuple[int, int]] = Counter()
@@ -453,9 +452,6 @@ class Rebuilt:
     buffs: list[dict[str, int]]
     warnings: list[str]
 
-    def live_label(self) -> str:
-        return f"enemy {self.live['entity_id']} ({self.live['id']})"
-
 
 def rebuild(
     frames: list[Frame],
@@ -502,11 +498,7 @@ def differences(item: Rebuilt) -> list[str]:
     held = sorted((b["id"], b["amount"]) for b in seen.emu["buffs"])
     if rebuilt != held:
         out.append(f"buffs: rebuilt {rebuilt}, emulator {held}")
-    # The one warning a model may owe on every conversion: the gap it declares.
-    declared = [f"{item.live_label()}: {seen.model.gap}"] if seen.model.gap else []
-    out.extend(f"warning: {w}" for w in item.warnings if w not in declared)
-    if declared and declared[0] not in item.warnings:
-        out.append(f"missing warning: {declared[0]}")
+    out.extend(f"warning: {w}" for w in item.warnings)
     return out
 
 
