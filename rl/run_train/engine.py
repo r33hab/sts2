@@ -60,9 +60,12 @@ BUNDLE_CONFIRM_ACTION = rc.BUNDLE_CONFIRM_ACTION  # 2
 FAKE_MERCHANT_THROW_ACTION = 6  # RunConstants.cs:338
 FAKE_MERCHANT_LEAVE_ACTION = 7  # RunConstants.cs:341
 EVENT_RESULT_PENDING = -1  # RunConstants.cs:269
-# The treasure room's chest relic, added by `spire-coach-gaps` (erratum RF1). Until that
-# branch is merged the room offers only proceed, and the session takes that.
-TREASURE_TAKE_RELIC_ACTION = 0
+# The treasure room's chest relic (erratum RF1): offered while it is still in the chest,
+# with the proceed (3) always beside it (`RunEngine.WriteActionMask`, `StepTreasure`).
+TREASURE_TAKE_RELIC_ACTION = rc.TREASURE_TAKE_RELIC_ACTION  # 0
+# The first three normal fights of an act are its weak ones (`EncounterRngSeed` counts
+# `NormalEncountersVisited` against it); the fight network gets the flag (DESIGN.md 5.1).
+WEAK_ENCOUNTERS_PER_ACT = 3
 
 # `DeckSelection` (`RunState.cs:5-76`): what an open card-select screen is for.
 SEL_NONE = 0
@@ -159,28 +162,12 @@ class CombatBudget:
 
 
 def new_run_env(seed: str, ascension: int) -> Sts2RunEnv:
-    """Return a run env at `ascension`, feature-detecting the engine's parameter.
+    """Return a run env at `ascension` (run API 20), the level passed straight through.
 
-    Erratum RF1: if `Sts2RunEnv` takes `ascension` (run API 20, `spire-coach-gaps`), it is
-    passed through; otherwise the engine models ascension 8 only (DESIGN.md 1.5.1) and any
-    other level is refused, so nothing silently plays at the wrong level.
-
-    Raises:
-        ValueError: If the engine cannot play `ascension`.
-
+    The run engine models 0-9 (`Ascension.MaxRunLevel`): DoubleBoss, A10, is not modelled,
+    and the env's `reset` raises for a level outside that range rather than play it wrong.
     """
-    if features.env_accepts_ascension(Sts2RunEnv):
-        # Passed by name through a mapping: the parameter exists only on engines that
-        # have it, which is what was just detected.
-        level: dict[str, int] = {"ascension": ascension}
-        return Sts2RunEnv(seed=seed, max_episode_steps=10**9, **level)
-    if ascension != features.ENGINE_ONLY_ASCENSION:
-        raise ValueError(
-            f"ascension {ascension} requested, but this build's run engine models "
-            f"ascension {features.ENGINE_ONLY_ASCENSION} only (DESIGN.md 1.5.1): the "
-            "ascension parameter arrives with the spire-coach-gaps branch",
-        )
-    return Sts2RunEnv(seed=seed, max_episode_steps=10**9)
+    return Sts2RunEnv(seed=seed, max_episode_steps=10**9, ascension=ascension)
 
 
 # --------------------------------------------------------------------------------------

@@ -107,9 +107,8 @@ SEL_REMOVE_TAGGED_BASIC = 9
 # determinization seed inside a C int lives with the stream derivation in `seeding.py`.
 STEP_CAP = RUN_STEP_CAP
 
-# The ascension every number in DESIGN.md section 2 was measured at, passed explicitly
-# (erratum RF1): `new_run_env` hands it to a run engine that takes one and refuses any
-# other level on an engine that models A8 only.
+# The ascension every number in DESIGN.md sections 2.1-2.8 was measured at, passed
+# explicitly (erratum RF1) to `new_run_env`, which hands it to the run engine.
 PROBE_ASCENSION = 8
 
 

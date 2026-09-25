@@ -1,13 +1,13 @@
 """`rl/run_train/engine.py`: the run session over the native run engine (DESIGN.md 1, 7).
 
-Tests that touch the run engine pass `ascension=8` explicitly: until the
-`spire-coach-gaps` branch is integrated the engine models A8 only, and `RunSession`
-refuses anything else (DESIGN.md 1.5.1, erratum RF1).
+Tests that touch the run engine pass their ascension explicitly (erratum RF1). Most play
+at 8, the level the committed traces and live fixtures were captured at.
 """
 
 import re
 import sys
 import unittest
+from collections import Counter
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -158,6 +158,8 @@ class ConstantsTests(unittest.TestCase):
             "FakeMerchantLeaveAction": engine.FAKE_MERCHANT_LEAVE_ACTION,
             "EventResultPending": engine.EVENT_RESULT_PENDING,
             "CardRewardOptionCount": engine.CARD_REWARD_OPTION_COUNT,
+            "TreasureTakeRelicAction": engine.TREASURE_TAKE_RELIC_ACTION,
+            "WeakEncountersPerAct": engine.WEAK_ENCOUNTERS_PER_ACT,
             "NodeNormal": vocab.NODE_MONSTER,
             "NodeElite": vocab.NODE_ELITE,
             "NodeRest": vocab.NODE_REST,
@@ -172,12 +174,6 @@ class ConstantsTests(unittest.TestCase):
         for name, value in mirrored.items():
             with self.subTest(name=name):
                 self.assertEqual(value, cs[name])
-        # The treasure room's relic action arrives with spire-coach-gaps (erratum RF1).
-        if "TreasureTakeRelicAction" in cs:
-            self.assertEqual(
-                engine.TREASURE_TAKE_RELIC_ACTION,
-                cs["TreasureTakeRelicAction"],
-            )
 
     def test_the_mirrored_phases_match_run_phase(self):
         phases = _cs_phases()
@@ -230,34 +226,34 @@ class CombatBudgetTests(unittest.TestCase):
 
 
 class AscensionTests(unittest.TestCase):
-    """Erratum RF1: feature-detect the run engine's ascension parameter."""
+    """The run engine takes the level (run API 20); the session passes it straight on."""
 
-    def test_without_the_parameter_only_ascension_8_runs(self):
-        if features.env_accepts_ascension():
-            self.skipTest("the run engine takes an ascension on this branch")
-        with self.assertRaises(ValueError) as caught:
-            RunSession("RF1TEST0", ascension=0)
-        self.assertIn("1.5.1", str(caught.exception))
-        session = RunSession("RF1TEST0", ascension=A8)
-        try:
-            self.assertEqual(session.view().max_hp, 80)  # A8's hardcoded 64/80
-        finally:
-            session.close()
-
-    def test_with_the_parameter_the_level_is_passed_through(self):
+    def test_the_level_is_passed_straight_through(self):
         created = []
 
         class FakeEnv:
-            def __init__(self, seed, max_episode_steps=0, max_floors=16, ascension=0):
-                created.append(ascension)
+            def __init__(self, seed, **kwargs: int):
+                created.append(kwargs["ascension"])
 
         with mock.patch.object(engine, "Sts2RunEnv", FakeEnv):
             engine.new_run_env("RF1TEST0", 3)
         self.assertEqual(created, [3])
 
+    def test_a_session_plays_the_level_it_was_given(self):
+        # Ascender's Bane from A5, a two-slot belt from A4, 80% HP from A2 (Ascension.cs).
+        for level, bane, slots in ((0, False, 3), (9, True, 2)):
+            with self.subTest(level=level):
+                session = RunSession("RF1TEST0", ascension=level)
+                try:
+                    view = session.view()
+                    self.assertEqual(view.ascension, level)
+                    self.assertEqual(view.hp, native.starting_hp(level))
+                    self.assertEqual(view.max_potion_slots, slots)
+                    self.assertEqual(features.CardRef(10001, False) in view.deck, bane)
+                finally:
+                    session.close()
+
     def test_view_from_engine_refuses_the_wrong_level(self):
-        if features.env_accepts_ascension():
-            self.skipTest("the run engine takes an ascension on this branch")
         session = RunSession("RF1TEST0", ascension=A8)
         try:
             with self.assertRaises(ValueError):
@@ -584,10 +580,47 @@ class RunCombatTests(unittest.TestCase):
 
 class AutoScreenTests(unittest.TestCase):
     def test_the_treasure_room_takes_the_chest_relic(self):
-        # Erratum RF1: action 0 takes the relic once spire-coach-gaps is merged; until
-        # then the room offers only proceed.
+        # Erratum RF1: action 0 takes the relic while it is in the chest, then 3 leaves.
         self.assertEqual(engine.treasure_action([0, 3]), 0)
         self.assertEqual(engine.treasure_action([3]), 3)
+
+    def test_walking_through_a_treasure_room_adds_exactly_the_chest_relic(self):
+        # The run engine grants the chest relic (run API 20, `StepTreasure`), and the
+        # session's auto step takes it: the room adds one relic, and only one.
+        def treasure_on_offer(_session, decision) -> bool:
+            return decision.type == "map" and any(
+                o.node is not None and o.node[2] == vocab.NODE_TREASURE
+                for o in decision.options
+            )
+
+        for seed in ("TREAS001", "TREAS002", "TREAS003", "TREAS004", "TREAS005"):
+            session = drive_until(
+                seed,
+                treasure_on_offer,
+                prefer_node=vocab.NODE_TREASURE,
+            )
+            if session is None:
+                continue
+            try:
+                decision = next_decision(session)
+                chest = next(
+                    o
+                    for o in decision.options
+                    if o.node is not None and o.node[2] == vocab.NODE_TREASURE
+                )
+                before = session.view().relics
+                session.apply(chest)
+                self.assertEqual(session.phase, rc.PHASE_TREASURE)
+                self.assertEqual(next_decision(session).type, "map")
+                after = session.view().relics
+                self.assertEqual(len(after), len(before) + 1)
+                self.assertEqual(session.info["relic_count"], len(after))
+                gained = Counter(after) - Counter(before)
+                self.assertEqual(sum(gained.values()), 1)
+                return
+            finally:
+                session.close()
+        self.fail("no seed reached a treasure room")
 
 
 if __name__ == "__main__":

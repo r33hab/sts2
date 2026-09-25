@@ -18,7 +18,6 @@ state after an option, so training and serving share every line that touches a f
 
 from __future__ import annotations
 
-import inspect
 import math
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
@@ -28,7 +27,6 @@ from typing import Any, TypeVar
 import numpy as np
 
 from sts2_gym import native
-from sts2_gym.run_env import Sts2RunEnv
 
 from . import FEATURE_VERSION, vocab
 
@@ -297,28 +295,15 @@ _RARITIES = ("Basic", "Common", "Uncommon", "Rare")
 MAP_ROWS = 16  # every act's map has 16 rows (RunConstants.MapBossRow)
 
 # --------------------------------------------------------------------------------------
-# Ascension (DESIGN.md 1.5.1, erratum RF1)
+# Ascension (DESIGN.md 1.5.1)
 # --------------------------------------------------------------------------------------
-
-# The run engine on this branch models ascension 8 only: HP 64/80, eight elites, a
-# two-slot belt and Ascender's Bane are hardcoded (DESIGN.md 1.5.1). The ascension
-# parameter arrives with `spire-coach-gaps` (run API 20, `Sts2RunEnv(..., ascension=...)`).
-ENGINE_ONLY_ASCENSION = 8
-
-
-def env_accepts_ascension(env_class: type = Sts2RunEnv) -> bool:
-    """Whether the run env takes an `ascension` argument (erratum RF1)."""
-    return "ascension" in inspect.signature(env_class.__init__).parameters
 
 
 def engine_ascension(env) -> int | None:
     """Return the ascension `env`'s run engine plays, or None when the env does not say.
 
-    Without the ascension parameter the engine plays 8 and nothing else. With it the env
-    keeps the level it was built with.
+    The env keeps the level it was built with (run API 20, `Sts2RunEnv(..., ascension=)`).
     """
-    if not env_accepts_ascension(type(env)):
-        return ENGINE_ONLY_ASCENSION
     level = getattr(env, "_ascension", None)
     return None if level is None else int(level)
 
