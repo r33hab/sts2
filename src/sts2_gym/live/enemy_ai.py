@@ -124,16 +124,17 @@ class Move:
     `type`, `magnitude` and `hits` are what the monster's `SelectIntent` case returns for
     the move -- `magnitude` being base damage per hit for an attack (Enemy.cs:32-49), and
     for anything else the number `ExecuteIntent` reads back (Defend's block, a buff's
-    amount, a status count).
+    amount, a status count). A `magnitude` of None is an attack for an amount the fight
+    banked, which no table holds and only the live readout says (`_table_intent`).
     """
 
     live: str
     type: str
-    magnitude: Number = 0
+    magnitude: Number | None = 0
     hits: Number = 1
 
 
-def attack(damage: Number, hits: Number = 1, *, live: str = "ATTACK") -> Move:
+def attack(damage: Number | None, hits: Number = 1, *, live: str = "ATTACK") -> Move:
     return Move(live, "Attack", damage, hits)
 
 
@@ -273,6 +274,7 @@ class Monster:
         revives: bool = False,
         spawned: str | None = None,
         resumes_after_stun: bool = False,
+        forced: Sequence[str] = (),
         gap: str | None = None,
     ) -> None:
         self.entry = entry
@@ -297,6 +299,10 @@ class Monster:
         # Its emulator stun skips the `MoveIndex++`, so the pending move comes back after
         # it as it does in the game.
         self.resumes_after_stun = resumes_after_stun
+        # Moves the game forces onto the display with `SetMoveImmediate`, which logs
+        # nothing (MonsterModel.cs:562-574, MonsterMoveStateMachine.cs:46-49): with one
+        # on display, the log still ends on the move before it (`force`).
+        self.forced = frozenset(forced)
         # Something the emulator does not play for this monster at all, which makes any
         # position holding it unreliable: warned on every conversion.
         self.gap = gap
@@ -329,10 +335,39 @@ class Monster:
         """Apply `ExecuteIntent`'s effect on the AI fields: `MoveIndex++` (EnemyAI.cs:838)."""
         f.move_index += 1
 
-    def intent(self, move: str, f: Fields, ascension: int) -> tuple[str, int, int]:
-        """Give the intent `SelectIntent` returns for `move`: (type, magnitude, hits)."""
+    def intent(
+        self,
+        move: str,
+        f: Fields,
+        ascension: int,
+    ) -> tuple[str, int | None, int]:
+        """Give the intent `SelectIntent` returns for `move`: (type, magnitude, hits).
+
+        A magnitude of None is one no table holds (`Move`).
+        """
         spec = self.moves[move]
-        return spec.type, _at(spec.magnitude, ascension), _at(spec.hits, ascension)
+        magnitude = None if spec.magnitude is None else _at(spec.magnitude, ascension)
+        return spec.type, magnitude, _at(spec.hits, ascension)
+
+    def force(self, f: Fields, move: str, ctx: Context) -> None:
+        """Apply what forcing `move` onto the display does to the fields (`self.forced`).
+
+        Raises:
+            NotImplementedError: always; only a model with forced moves knows them.
+
+        """
+        raise NotImplementedError
+
+    def unlogged_rounds(  # noqa: PLR6301 - the hook a forcing model overrides
+        self,
+        move: str,
+    ) -> int:
+        """Give how many rounds may have passed unlogged with `move` on display.
+
+        A creature logs one move a round, its roll at the round's start. Only a forced
+        move the roll cannot leave can take a round without one (`self.forced`).
+        """
+        return 0
 
     def stunned(self, f: Fields, pending: str, ctx: Context) -> str | None:
         """Adjust a stunned creature's fields; say why its moves after the stun diverge.
@@ -985,23 +1020,74 @@ class LagavulinMatriarch(Monster):
 
 
 class WaterfallGiant(Cycle):
-    """PRESSURIZE once, then STOMP -> RAM -> SIPHON -> PRESSURE_GUN -> PRESSURE_UP.
+    """PRESSURIZE once, then STOMP -> RAM -> SIPHON -> PRESSURE_GUN -> PRESSURE_UP, then death.
 
     PRESSURE_GUN announces `CurrentPressureGunDamage`, five more each firing (decompiled
     WaterfallGiant.cs); the emulator counts the firings off `MoveIndex`
-    (EnemyAI.cs:2835-2843). ABOUT_TO_BLOW and EXPLODE, forced when it dies, are not
-    modelled: the emulator leaves a dead giant out of the enemy phase.
+    (EnemyAI.cs:2879-2886).
+
+    Killed while it holds Steam Eruption, it is not finished. SteamEruptionPower.AfterDeath
+    calls TriggerAboutToBlowState, which revives it at 999999999 HP and forces
+    ABOUT_TO_BLOW with SetMoveImmediate, logging nothing (decompiled
+    SteamEruptionPower.cs:15-21, WaterfallGiant.cs:301-313). ABOUT_TO_BLOW is a stun the
+    roll cannot leave before it is performed (MoveState.cs:27-37); its follow-up EXPLODE
+    is rolled and logged, a death blow for the Steam it banked (WaterfallGiant.cs:200-212,
+    :283-299). The emulator parks the two at MoveIndex 1000 and 1001, and keeps the banked
+    amount on EXPLODE's Attack intent (EnemyAI.cs `TriggerAboutToBlow`,
+    `PerformAboutToBlow`).
     """
 
     GUN = "PRESSURE_GUN_MOVE"
+    ABOUT_TO_BLOW = "ABOUT_TO_BLOW_MOVE"
+    EXPLODE = "EXPLODE_MOVE"
+    # EnemyAI.cs `WaterfallGiantAboutToBlowMove`, and `WaterfallGiantExplodeMove` after it.
+    ABOUT_TO_BLOW_INDEX = 1000
+    EXPLODE_INDEX = 1001
 
-    def intent(self, move: str, f: Fields, ascension: int) -> tuple[str, int, int]:
+    def __init__(self, entry: str, moves: Mapping[str, Move], **kwargs: Any) -> None:
+        super().__init__(entry, moves, forced=(self.ABOUT_TO_BLOW,), **kwargs)
+
+    def select(self, f: Fields, move: str, ctx: Context, *, check: bool = True) -> bool:
+        if f.move_index >= self.ABOUT_TO_BLOW_INDEX:
+            # EXPLODE kills the giant for good, so no roll follows it; the same move again
+            # is one resumed after a stun, taken as given.
+            return not check
+        if move == self.EXPLODE:
+            # ABOUT_TO_BLOW's follow-up, wherever the ring was when the giant died.
+            f.move_index = self.EXPLODE_INDEX
+            return True
+        return super().select(f, move, ctx, check=check)
+
+    def force(self, f: Fields, move: str, ctx: Context) -> None:
+        f.move_index = self.ABOUT_TO_BLOW_INDEX
+
+    def unlogged_rounds(self, move: str) -> int:
+        # Killed during its own move (Thorns), it is forced onto ABOUT_TO_BLOW after that
+        # round's roll, and the next round's roll leaves it there without logging
+        # anything (MonsterMoveStateMachine.cs:62), so its log runs a round short from then
+        # on. Killed on the player's turn, it performs ABOUT_TO_BLOW before the next roll.
+        return 1 if move in (self.ABOUT_TO_BLOW, self.EXPLODE) else 0
+
+    def intent(
+        self,
+        move: str,
+        f: Fields,
+        ascension: int,
+    ) -> tuple[str, int | None, int]:
         kind, magnitude, hits = super().intent(move, f, ascension)
-        if move == self.GUN:
+        if move == self.GUN and magnitude is not None:
             # The emulator's integer division truncates toward zero, so the bonus only
             # starts at the first firing, MoveIndex 4.
             magnitude += 5 * (max(f.move_index - 4, 0) // 5)
         return kind, magnitude, hits
+
+    def announced(self, emu: Mapping[str, Any]) -> str:
+        move_index = emu["ai"]["move_index"]
+        if move_index == self.ABOUT_TO_BLOW_INDEX:
+            return self.ABOUT_TO_BLOW
+        if move_index >= self.EXPLODE_INDEX:
+            return self.EXPLODE
+        return super().announced(emu)
 
 
 # ── The Act 1 monsters ───────────────────────────────────────────────────────
@@ -1520,7 +1606,8 @@ _MODELS: tuple[Monster, ...] = (
         },
         loop=("INK_BLOT_MOVE", "INKY_LANCE_MOVE", "DISMEMBER_MOVE", "PREPARE_MOVE"),
     ),
-    # Its SelectIntent case is EnemyAI.cs:2804-2849.
+    # Its SelectIntent case is EnemyAI.cs:2831-2892: after its death ABOUT_TO_BLOW's stun
+    # reads out as Unknown, and EXPLODE announces the Steam it banked.
     WaterfallGiant(
         "WATERFALL_GIANT",
         {
@@ -1530,6 +1617,8 @@ _MODELS: tuple[Monster, ...] = (
             "SIPHON_MOVE": buff(tough(15, 10), live="HEAL"),
             "PRESSURE_GUN_MOVE": attack(deadly(23, 20)),
             "PRESSURE_UP_MOVE": attack(deadly(14, 13)),
+            "ABOUT_TO_BLOW_MOVE": unknown(live="STUN"),
+            "EXPLODE_MOVE": attack(None, live="DEATH_BLOW"),
         },
         prefix=("PRESSURIZE_MOVE",),
         loop=(
@@ -1538,16 +1627,6 @@ _MODELS: tuple[Monster, ...] = (
             "SIPHON_MOVE",
             "PRESSURE_GUN_MOVE",
             "PRESSURE_UP_MOVE",
-        ),
-        # remove when the emulator models the death explosion
-        gap=(
-            "the emulator does not play the Waterfall Giant's death: killed while it holds "
-            "Steam Eruption, it stays in combat and is forced onto ABOUT_TO_BLOW "
-            "(SteamEruptionPower.AfterDeath calls TriggerAboutToBlowState: decompiled "
-            "SteamEruptionPower.cs:19, WaterfallGiant.cs:301-313), then EXPLODEs for that "
-            "Steam Eruption (the states declared at WaterfallGiant.cs:200-204, their moves "
-            "at :283-299), where the emulator just drops it from the enemy phase, so any "
-            "line that kills it plays out wrong"
         ),
     ),
 )
@@ -1610,7 +1689,9 @@ def _table_intent(model: Monster, move: str, f: Fields, ctx: Context) -> dict[st
     A Defend's block and a buff's or status's amount come from the table, since the live
     readout carries none and `ExecuteIntent` reads `CurrentIntent.Magnitude` for them
     (EnemyAI.cs:680-722, :3656-4030). An attack takes the live `base_damage` and `hits`
-    where the readout has them, and the table's where it does not.
+    where the readout has them, and the table's where it does not. An attack for an amount
+    the fight banked has no table number (`Move`), so without `base_damage` the displayed
+    number stands in, and the position is unreliable.
     """
     kind, magnitude, hits = model.intent(move, f, ctx.ascension)
     live = ctx.enemy["intents"]
@@ -1623,12 +1704,25 @@ def _table_intent(model: Monster, move: str, f: Fields, ctx: Context) -> dict[st
     if kind == "Attack":
         shown = next((i for i in live if i["type"] in ids.ATTACK_INTENTS), None)
         if shown is not None and shown["base_damage"] is not None:
-            if shown["base_damage"] != magnitude:
+            if magnitude is not None and shown["base_damage"] != magnitude:
                 ctx.warnings.append(
                     f"{ctx.label}: {move} deals {shown['base_damage']} base damage live "
                     f"but {magnitude} in the emulator's move table",
                 )
             magnitude = shown["base_damage"]
+        elif magnitude is None and shown is not None and shown["damage"] is not None:
+            magnitude = shown["damage"]
+            ctx.warnings.append(
+                f"{ctx.label}: {move} has no base_damage, so the displayed {magnitude} "
+                "(with the modifiers in view already applied) stands in for the amount "
+                "it banked",
+            )
+        elif magnitude is None:
+            magnitude = 0
+            ctx.warnings.append(
+                f"{ctx.label}: {move} deals an amount it banked, which only the live "
+                "readout carries, and the readout has no number; the emulator gets 0",
+            )
         if shown is not None and shown["hits"] is not None:
             if shown["hits"] != hits:
                 ctx.warnings.append(
@@ -1808,7 +1902,9 @@ def _reconstruct(
         return fallback("the displayed move (move_id) is unknown")
     stunned = move_id == STUNNED
     reviving = move_id == REVIVE and model.revives
-    if not (stunned or reviving):
+    # Set without logging, like a stun: the log ends on the move before it.
+    forced = move_id in model.forced
+    if not (stunned or reviving or forced):
         if move_id not in model.moves:
             return fallback(
                 f"{move_id} is not a move {model.entry}'s emulator model can show",
@@ -1817,9 +1913,12 @@ def _reconstruct(
             return fallback(
                 f"the displayed {move_id} is not the last logged move {moves[-1]}",
             )
-    if len(moves) > ctx.turn + 1 or (not model.summoned and len(moves) != ctx.turn + 1):
+    rounds = ctx.turn + 1
+    if len(moves) > rounds or (
+        not model.summoned and len(moves) < rounds - model.unlogged_rounds(move_id)
+    ):
         warnings.append(
-            f"{label}: state_log holds {len(moves)} moves at round {ctx.turn + 1}; a "
+            f"{label}: state_log holds {len(moves)} moves at round {rounds}; a "
             "creature logs one move a round from the round it joins",
         )
 
@@ -1843,6 +1942,8 @@ def _reconstruct(
         extra["Reviving"] = 1
         intent = _bare_intent("Buff")
     else:
+        if forced:
+            model.force(f, move_id, ctx)
         intent = _table_intent(model, move_id, f, ctx)
         if move_id == model.spawned:
             extra["Stunned"] = 1

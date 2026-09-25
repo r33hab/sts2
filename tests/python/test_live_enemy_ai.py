@@ -144,12 +144,20 @@ HITS = (
     # Any unblocked hit wakes the Matriarch, stunned onto SLASH.
     ("lagavulin-matriarch", "LAGAVULIN_MATRIARCH", 200, 0),
     ("lagavulin-matriarch", "LAGAVULIN_MATRIARCH", 200, 1),
+    # The giant dies holding Steam Eruption: SteamEruptionPower.AfterDeath forces it onto
+    # ABOUT_TO_BLOW, and it EXPLODEs for the Steam it banked a round later.
+    ("waterfall-giant", "WATERFALL_GIANT", 1, 1),
+    ("waterfall-giant", "WATERFALL_GIANT", 1, 3),
 )
 
 # `ai` fields that are not the monster's AI state: Beat Into Shape's count of powered hits
 # the enemy took this turn (Enemy.cs:88-93), which no live field carries and which a Strike
 # in the hit scenarios raises.
 NOT_AI = frozenset({"powered_hits_this_turn"})
+
+# `TriggerAboutToBlowState`'s `SetMaxAndCurrentHp(Creature, 999999999m)` (decompiled
+# WaterfallGiant.cs:301-313): the dead giant revived, not a new creature.
+REVIVED_GIANT_MAX_HP = 999_999_999
 
 
 # ── The emulator side ────────────────────────────────────────────────────────
@@ -261,19 +269,28 @@ def creatures(frames: list[Frame]) -> dict[tuple[Any, ...], list[Seen]]:
 
     A creature is known by its def id, its max HP (the game rolls it unique on the side,
     Creature.SetUniqueMonsterHpValue) and its place among any twins; one that appears on a
-    dead creature's key is a new one. Its log gains the move it shows on joining and then
-    the move rolled at each turn's start -- never STUNNED or REVIVE_MOVE, which the game
-    sets without logging (Creature.StunInternal, IllusionPower.AfterDeath).
+    dead creature's key is a new one. The Waterfall Giant's revive at 999999999 HP is the
+    same creature, so it keeps the max HP it was known by. Its log gains the move it shows
+    on joining and then the move rolled at each turn's start -- never STUNNED,
+    REVIVE_MOVE or a model's forced move, which the game sets without logging
+    (Creature.StunInternal, IllusionPower.AfterDeath, MonsterModel.SetMoveImmediate).
     """
     out: dict[tuple[Any, ...], list[Seen]] = {}
     logs: dict[tuple[Any, ...], list[str]] = {}
     alive_before: set[tuple[Any, ...]] = set()
     generation: dict[tuple[Any, ...], int] = {}
+    known_max_hp: dict[int, int] = (
+        {}
+    )  # by roster index, which the emulator keeps stable
     for k, frame in enumerate(frames):
         alive_now: set[tuple[Any, ...]] = set()
         twins: Counter[tuple[int, int]] = Counter()
         for i, emu in enumerate(frame.doc["enemies"]):
-            base = (emu["def_id"], emu["max_hp"])
+            max_hp = emu["max_hp"]
+            if max_hp == REVIVED_GIANT_MAX_HP and i in known_max_hp:
+                max_hp = known_max_hp[i]
+            known_max_hp[i] = max_hp
+            base = (emu["def_id"], max_hp)
             key = (base, twins[base])
             twins[base] += 1
             if not _alive(emu):
@@ -290,6 +307,7 @@ def creatures(frames: list[Frame]) -> dict[tuple[Any, ...], list[Seen]]:
             if (joined or frame.phase == "start") and shown not in (
                 enemy_ai.STUNNED,
                 enemy_ai.REVIVE,
+                *model.forced,
             ):
                 log.append(shown)
             out.setdefault(whole, []).append(
@@ -601,6 +619,8 @@ class SelfConsistencyTests(unittest.TestCase):
             "CEREMONIAL_BEAST BEAST_CRY_MOVE",
             "CEREMONIAL_BEAST CRUSH_MOVE",
             "LAGAVULIN_MATRIARCH STUNNED",
+            "WATERFALL_GIANT ABOUT_TO_BLOW_MOVE",
+            "WATERFALL_GIANT EXPLODE_MOVE",
         ):
             self.assertGreater(shown[display], 0, display)
 
@@ -725,9 +745,6 @@ UNMODELLED = {
     "TERROR_EEL": {"STUN_MOVE"},
     # Likewise PlowPower's CreatureCmd.Stun (decompiled PlowPower.cs).
     "CEREMONIAL_BEAST": {"STUN_MOVE"},
-    # Forced when the giant dies (TriggerAboutToBlowState); the emulator leaves a dead
-    # giant out of the enemy phase, so these are warned about when on display.
-    "WATERFALL_GIANT": {"ABOUT_TO_BLOW_MOVE", "EXPLODE_MOVE"},
     # Declared and never entered: nothing sets it as a follow-up or forces it.
     "BYGONE_EFFIGY": {"SLEEP_MOVE_2"},
 }
@@ -907,7 +924,7 @@ class DecompiledConsistencyTests(unittest.TestCase):
                         self.assertIn(after, legal, f"{before} -> {after}")
                 walked[entry] += len(log)
         self.assertEqual(set(walked), set(MODEL_BY_ENTRY))
-        # The stun and revive paths were walked too.
+        # The stun, revive and forced paths were walked too.
         self.assertLessEqual(
             {
                 "CORPSE_SLUG",
@@ -915,16 +932,18 @@ class DecompiledConsistencyTests(unittest.TestCase):
                 "TERROR_EEL",
                 "CEREMONIAL_BEAST",
                 "LAGAVULIN_MATRIARCH",
+                "WATERFALL_GIANT",
             },
             set(stunned_steps),
         )
 
 
 def steps(seen_list: list[Seen]) -> Iterator[tuple[str, str, bool]]:
-    """Each logged step of one creature, and whether a stun or revive fell between.
+    """Each logged step of one creature, and whether a stun, revive or forced move fell between.
 
-    The game logs no STUNNED or REVIVE_MOVE (Creature.StunInternal, IllusionPower): a
-    frame showing one marks the step that follows it.
+    The game logs no STUNNED, REVIVE_MOVE or forced move (Creature.StunInternal,
+    IllusionPower, MonsterModel.SetMoveImmediate): a frame showing one marks the step that
+    follows it.
 
     Yields:
         Each (move before, move after, interrupted) step, in log order.
@@ -933,7 +952,7 @@ def steps(seen_list: list[Seen]) -> Iterator[tuple[str, str, bool]]:
     interrupted = False
     logged: list[str] = []
     for seen in seen_list:
-        if seen.shown in (enemy_ai.STUNNED, enemy_ai.REVIVE):
+        if seen.shown in (enemy_ai.STUNNED, enemy_ai.REVIVE, *seen.model.forced):
             interrupted = True
         for move in seen.log[len(logged) :]:
             if logged:
@@ -1154,7 +1173,7 @@ class ToAiTests(unittest.TestCase):
 
     def test_the_pressure_gun_grows_with_every_firing(self) -> None:
         # PRESSURE_GUN is MoveIndex 4, 9, 14...; each ring round adds PressureGunIncrease
-        # 5 to BasePressureGunDamage 20 (EnemyAI.cs:2831-2837).
+        # 5 to BasePressureGunDamage 20 (EnemyAI.cs:2879-2886).
         ring = [
             "STOMP_MOVE",
             "RAM_MOVE",
@@ -1171,30 +1190,124 @@ class ToAiTests(unittest.TestCase):
         )
         ai, intent, warnings, _ = to_ai(live, turn=9)
         self.assertEqual((ai["move_index"], intent), (9, emu_intent("Attack", 25)))
-        # Its death is not modelled, which every conversion says (the one warning).
-        self.assertEqual(len(warnings), 1)
-        self.assertIn("ABOUT_TO_BLOW", warnings[0])
+        self.assertEqual(warnings, [])
 
-    def test_a_waterfall_giant_always_warns_that_its_death_is_not_modelled(
-        self,
-    ) -> None:
-        # The emulator drops a dead giant from the enemy phase instead of playing its
-        # forced ABOUT_TO_BLOW and EXPLODE, so any position holding one is unreliable. The
-        # trigger is SteamEruptionPower.AfterDeath (decompiled SteamEruptionPower.cs:19);
-        # WaterfallGiant.cs:200-204 declares the two states.
+    def test_a_waterfall_giant_before_its_death_is_exact(self) -> None:
+        # PRESSURIZE banks PressurizeAmount Steam Eruption, 15 below DeadlyEnemies
+        # (decompiled WaterfallGiant.cs:74; EnemyAI.cs WaterfallGiant, MoveIndex 0).
         live = enemy(
             "WATERFALL_GIANT",
             ["PRESSURIZE_MOVE"],
             "PRESSURIZE_MOVE",
             intents=[other_intent("BUFF")],
         )
-        _, intent, warnings, _ = to_ai(live, turn=0)
+        ai, intent, warnings, buffs = to_ai(live, turn=0)
+        self.assertEqual(ai, enemy_ai.ai_defaults())
         self.assertEqual(intent, emu_intent("Buff", 15))
+        self.assertEqual((warnings, buffs), ([], []))
+
+    GIANT_RING = ["PRESSURIZE_MOVE", "STOMP_MOVE", "RAM_MOVE", "SIPHON_MOVE"]
+
+    def about_to_blow(self, steam: int) -> dict[str, Any]:
+        """Build a giant killed holding Steam Eruption, forced onto ABOUT_TO_BLOW.
+
+        TriggerAboutToBlowState sets its HP to 999999999 and forces the StunIntent move
+        with SetMoveImmediate, which logs nothing (decompiled WaterfallGiant.cs:301-313,
+        MonsterMoveStateMachine.cs:46-49), and its death strips every power but Steam
+        Eruption (Creature.RemoveAllPowersAfterDeath).
+        """
+        return enemy(
+            "WATERFALL_GIANT",
+            self.GIANT_RING,
+            "ABOUT_TO_BLOW_MOVE",
+            intents=[other_intent("STUN")],
+            powers_=[{"id": "STEAM_ERUPTION_POWER", "amount": steam}],
+            hp=999_999_999,
+        )
+
+    def test_a_giant_killed_on_the_players_turn_is_about_to_blow(self) -> None:
+        # Killed at round 4 with SIPHON announced: STOMP and RAM banked 3 each over
+        # PRESSURIZE's 15. The emulator's TriggerAboutToBlow: MoveIndex 1000 and the stun
+        # read out as Unknown (EnemyAI.cs). The Steam Eruption that is left is a live
+        # power, which `convert` carries (powers.to_buffs); no companion is added.
+        ai, intent, warnings, buffs = to_ai(self.about_to_blow(steam=21), turn=3)
+        self.assertEqual(ai, {**enemy_ai.ai_defaults(), "move_index": 1000})
+        self.assertEqual(intent, emu_intent("Unknown", 0))
+        self.assertEqual((warnings, buffs), ([], []))
+
+    def test_a_giant_killed_on_its_own_turn_waits_a_round_unlogged(self) -> None:
+        # Thorns kills it during its SIPHON of round 4. ABOUT_TO_BLOW has
+        # MustPerformOnceBeforeTransitioning, so round 5's roll leaves it on the move and
+        # logs nothing (MoveState.cs:27-37, MonsterMoveStateMachine.cs:62): four moves at
+        # round 5.
+        ai, intent, warnings, _ = to_ai(self.about_to_blow(steam=24), turn=4)
+        self.assertEqual(ai["move_index"], 1000)
+        self.assertEqual(intent, emu_intent("Unknown", 0))
+        self.assertEqual(warnings, [])
+
+    def test_a_giant_about_to_explode_swings_for_the_steam_it_banked(self) -> None:
+        # ABOUT_TO_BLOW records SteamEruptionDamage and removes the power; its follow-up
+        # EXPLODE is rolled and logged, a DeathBlowIntent for that amount (decompiled
+        # WaterfallGiant.cs:204, :283-299). The emulator keeps the amount on its Attack
+        # intent at MoveIndex 1001 (EnemyAI.cs PerformAboutToBlow). The readout's number
+        # is the base; the displayed 31 has the player's Vulnerable in it.
+        for log, turn in (
+            ([*self.GIANT_RING, "EXPLODE_MOVE"], 4),
+            # Killed on its own turn: ABOUT_TO_BLOW took round 5 unlogged.
+            ([*self.GIANT_RING, "EXPLODE_MOVE"], 5),
+        ):
+            live = enemy(
+                "WATERFALL_GIANT",
+                log,
+                "EXPLODE_MOVE",
+                intents=[
+                    {"type": "DEATH_BLOW", "damage": 31, "base_damage": 21, "hits": 1},
+                ],
+                hp=999_999_999,
+            )
+            with self.subTest(turn=turn):
+                ai, intent, warnings, buffs = to_ai(live, turn=turn)
+                self.assertEqual(ai, {**enemy_ai.ai_defaults(), "move_index": 1001})
+                self.assertEqual(intent, emu_intent("Attack", 21))
+                self.assertEqual((warnings, buffs), ([], []))
+
+    def test_an_explosion_read_without_its_base_takes_the_display_and_warns(
+        self,
+    ) -> None:
+        # No table holds what the giant banked, so a readout without base_damage leaves
+        # only the displayed number, modifiers and all.
+        live = enemy(
+            "WATERFALL_GIANT",
+            [*self.GIANT_RING, "EXPLODE_MOVE"],
+            "EXPLODE_MOVE",
+            intents=[
+                {"type": "DEATH_BLOW", "damage": 31, "base_damage": None, "hits": 1},
+            ],
+        )
+        _, intent, warnings, _ = to_ai(live, turn=4)
+        self.assertEqual(intent, emu_intent("Attack", 31))
         self.assertEqual(len(warnings), 1)
-        self.assertIn("Waterfall Giant's death", warnings[0])
-        self.assertIn("EXPLODE", warnings[0])
-        self.assertIn("SteamEruptionPower.cs:19", warnings[0])
-        self.assertIn("WaterfallGiant.cs:200-204", warnings[0])
+        self.assertIn("displayed 31", warnings[0])
+        live["intents"] = [other_intent("DEATH_BLOW")]
+        _, intent, warnings, _ = to_ai(live, turn=4)
+        self.assertEqual(intent, emu_intent("Attack", 0))
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("no number", warnings[0])
+
+    def test_a_giant_log_the_game_cannot_make_still_warns(self) -> None:
+        # A log two rounds short, or a move after EXPLODE, which ends the giant.
+        _, _, warnings, _ = to_ai(self.about_to_blow(steam=24), turn=5)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("4 moves at round 6", warnings[0])
+        live = enemy(
+            "WATERFALL_GIANT",
+            [*self.GIANT_RING, "EXPLODE_MOVE", "STOMP_MOVE"],
+            "STOMP_MOVE",
+            intents=[attack_intent(15)],
+        )
+        _, _, warnings, _ = to_ai(live, turn=5)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("not a walk", warnings[0])
 
     def test_ascension_and_buffs_must_be_given(self) -> None:
         # Both change the result (magnitudes, companions), so neither has a default.

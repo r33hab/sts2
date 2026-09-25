@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import ctypes
 import importlib
 import io
 import json
@@ -50,6 +51,7 @@ native = importlib.import_module("sts2_gym.native")
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "live"
 DECOMPILED = ROOT / "decompiled"
 BUFF = {name: ordinal for ordinal, name in names.buffs().items()}
+INTENT = {name: ordinal for ordinal, name in names.intents().items()}
 
 # Ids read off the generated tables (Cards.g.cs, Relics.g.cs, Potions.g.cs, id_map.json).
 STRIKE, DEFEND, BASH, POMMEL_STRIKE, SHRUG_IT_OFF = 472, 131, 30, 358, 433
@@ -85,6 +87,16 @@ def emu_card(def_id: int, upgraded: bool = False, **extra: Any) -> dict[str, Any
 
 def buff(name: str, amount: int) -> dict[str, int]:
     return {"id": BUFF[name], "amount": amount}
+
+
+def emu_intent(kind: str, magnitude: int, hits: int = 1) -> dict[str, Any]:
+    """Build the emulator's `Intent` (Enemy.cs), every field written."""
+    return {
+        "type": INTENT[kind],
+        "magnitude": magnitude,
+        "hits": hits,
+        "carries_damage": False,
+    }
 
 
 # ── Schema §2, structurally ──────────────────────────────────────────────────
@@ -2230,10 +2242,9 @@ class EnemyWarningTests(unittest.TestCase):
         self.assertIn("unexpected branch state in log", result.warnings[0])
         self.assertFalse(result.reliable)
 
-    def test_a_waterfall_giant_makes_the_position_unreliable(self) -> None:
-        # The emulator does not play its forced death explosion: SteamEruptionPower.
-        # AfterDeath forces ABOUT_TO_BLOW (decompiled SteamEruptionPower.cs:19), one of the
-        # states WaterfallGiant.cs:200-204 declares.
+    def test_a_waterfall_giant_before_its_death_converts_reliably(self) -> None:
+        # The emulator plays the giant's death now (EnemyAI.cs TriggerAboutToBlow), so a
+        # giant on its ring is an exact position like any other.
         doc = load("enemy")
         doc["enemies"] = [
             {
@@ -2243,7 +2254,7 @@ class EnemyWarningTests(unittest.TestCase):
                 "hp": 250,
                 "max_hp": 250,
                 "block": 0,
-                "powers": [],
+                "powers": [{"id": "STEAM_ERUPTION_POWER", "amount": 15}],
                 "intents": [
                     {"type": "ATTACK", "damage": 15, "base_damage": 15, "hits": 1},
                 ],
@@ -2253,9 +2264,80 @@ class EnemyWarningTests(unittest.TestCase):
             },
         ]
         result = convert.convert(doc)
-        self.assertEqual(len(result.warnings), 1)
-        self.assertIn("Waterfall Giant's death", result.warnings[0])
-        self.assertFalse(result.reliable)
+        self.assertEqual(result.warnings, [])
+        self.assertTrue(result.reliable)
+        giant = result.doc["enemies"][0]
+        self.assertEqual(giant["ai"]["move_index"], 1)
+        self.assertEqual(giant["buffs"], [buff("SteamEruption", 15)])
+
+    def test_a_giant_about_to_blow_converts_reliably_and_loads(self) -> None:
+        # Killed on the player's turn at round 4, SIPHON announced, holding PRESSURIZE's
+        # 15 and STOMP's and RAM's 3 each: TriggerAboutToBlowState revived it at 999999999
+        # and forced ABOUT_TO_BLOW, logging nothing (decompiled WaterfallGiant.cs:301-313,
+        # MonsterMoveStateMachine.cs:46-49). The loaded giant spends the next enemy phase
+        # on ABOUT_TO_BLOW and EXPLODEs for the 21 in the one after, which ends the fight
+        # (EnemyAI.cs TriggerAboutToBlow, PerformAboutToBlow).
+        doc = load("enemy")
+        doc["round"] = 4
+        doc["player"].update(block=0, relics=[])
+        doc["enemies"] = [
+            {
+                "entity_id": "WATERFALL_GIANT_0",
+                "id": "WATERFALL_GIANT",
+                "slot": 0,
+                "hp": 999_999_999,
+                "max_hp": 999_999_999,
+                "block": 0,
+                "powers": [{"id": "STEAM_ERUPTION_POWER", "amount": 21}],
+                "intents": [
+                    {"type": "STUN", "damage": None, "base_damage": None, "hits": None},
+                ],
+                "move_id": "ABOUT_TO_BLOW_MOVE",
+                "state_log": [
+                    "PRESSURIZE_MOVE",
+                    "STOMP_MOVE",
+                    "RAM_MOVE",
+                    "SIPHON_MOVE",
+                ],
+                "ai_fields": {
+                    "_currentPressureGunDamage": 20,
+                    "_steamEruptionDamage": 0,
+                    "_isAboutToBlow": True,
+                    "_pressureBuildupIdx": 3,
+                },
+            },
+        ]
+        result = convert.convert(doc)
+        self.assertEqual(result.warnings, [])
+        self.assertTrue(result.reliable)
+        giant = result.doc["enemies"][0]
+        self.assertEqual((giant["hp"], giant["max_hp"]), (999_999_999, 999_999_999))
+        self.assertEqual(giant["buffs"], [buff("SteamEruption", 21)])
+        self.assertEqual(giant["intent"], emu_intent("Unknown", 0))
+        self.assertEqual(giant["ai"]["move_index"], 1000)
+
+        defaults = loader_defaults()
+        obs = (ctypes.c_int * native.OBS_SIZE)()
+        reward = (ctypes.c_float * 1)()
+        handle = native.load_combat_snapshot(result.doc, 1)
+        try:
+            exported = native.get_state_json(handle)
+            self.assertEqual(
+                normalized(result.doc, defaults, exported),
+                normalized(exported, defaults, exported),
+            )
+            # The hand is empty, so ending the turn is action 0. ABOUT_TO_BLOW deals
+            # nothing and turns the banked Steam into EXPLODE's intent.
+            self.assertFalse(native.step(handle, 0, obs, reward))
+            after = native.get_state_json(handle)
+            self.assertEqual(after["player"]["hp"], 64)
+            self.assertEqual(after["enemies"][0]["intent"], emu_intent("Attack", 21))
+            self.assertEqual(after["enemies"][0]["buffs"], [])
+            self.assertTrue(native.step(handle, 0, obs, reward))
+            self.assertEqual(native.get_state_json(handle)["player"]["hp"], 64 - 21)
+            self.assertTrue(native.player_won(handle))
+        finally:
+            native.destroy(handle)
 
 
 class PoweredHitsTests(unittest.TestCase):
