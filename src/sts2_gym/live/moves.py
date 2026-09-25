@@ -15,14 +15,22 @@ emulator enemies are the live enemies, in order, a dead or reviving enemy keepin
 place. Potion slot N is the same slot on both sides. A selection's candidates are
 places in a pile, so each is found again as the live card at that place.
 
+A move the search merged covers every live copy it stands for: `hand_indices`,
+`potion_slots` and `select_indices` list them. `check_identity` holds each covered card
+against the def id the search played, so a mapping that drifted fails loudly instead of
+naming the wrong card.
+
 Below the root the line plays through the hand, and the roster loses whoever dies (the
 emulator, like the game, removes a dead creature unless a power keeps it: CombatEngine.cs,
 `ShouldRemoveOnDeath`), so `LineTracker` names the rest of the expected line from the
 hand the moves before left and from the roster as it stands at each move.
+
+Labels use the game's names, read off the live id: `STRIKE_IRONCLAD` is "Strike".
 """
 
 from __future__ import annotations
 
+import json
 import operator
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -30,6 +38,12 @@ from typing import Any, Protocol
 
 from sts2_gym import names
 from sts2_gym.live import cards, ids, selection
+from sts2_gym.live.convert import CHARACTERS, POTION_SLOT_CAPACITY
+
+# Words a title keeps in lower case unless they lead it: "Touch of Insanity".
+_MINOR_WORDS = frozenset(
+    {"a", "an", "and", "at", "for", "in", "of", "on", "or", "the", "to", "with"},
+)
 
 
 class MappingError(Exception):
@@ -46,6 +60,7 @@ class SearchChild(Protocol):
     action: int
     target: int
     kind: str
+    card_def_id: int | None
     merged_actions: list[int]
 
 
@@ -167,6 +182,88 @@ def hand_indices(
     )
 
 
+def potion_slots(
+    child: SearchChild,
+    live: Mapping[str, Any],
+    *,
+    maps: IndexMaps | None = None,
+) -> list[int]:
+    """List the live potion slots a potion move covers: its slot and every merged one.
+
+    The search merges the potions of one kind into one move (`live_search`, "collapse").
+    Anything but a potion covers no slot. A slot that is empty or past the potion belt
+    raises `MappingError`.
+    """
+    if child.kind != "potion":
+        return []
+    hand = len(maps.hand) if maps is not None else len(live["hand"])
+    belt = maps.potion_ids if maps is not None else _live_potions(live)
+    slots = sorted(
+        action - hand - 1 for action in (child.action, *child.merged_actions)
+    )
+    for slot in slots:
+        _potion_in(belt, slot)
+    return slots
+
+
+def select_indices(child: SearchChild, maps: IndexMaps) -> list[int]:
+    """List the live candidates a pick covers: its own and every merged identical one.
+
+    Only candidates the maps found are listed, so a pick none of whose candidates was
+    found covers none, and `to_move` refuses it.
+    """
+    if child.kind != "select":
+        return []
+    covered = {
+        maps.candidates[action]
+        for action in (child.action, *child.merged_actions)
+        if 0 <= action < len(maps.candidates)
+    }
+    return sorted(index for index in covered if index is not None)
+
+
+def check_identity(
+    child: SearchChild,
+    live: Mapping[str, Any],
+    maps: IndexMaps,
+) -> None:
+    """Check that every live card a move covers is the card the search played.
+
+    A card or pick carries the def id the search read at its action (`card_def_id`);
+    every live hand card or candidate the move covers must have that id. Merged potions
+    must all be one potion. A pick past the observation's candidate slots has no def id,
+    and nothing to hold it to.
+
+    Raises:
+        MappingError: For a covered card with another def id, or potions of two kinds.
+
+    """
+    if child.kind == "potion":
+        held = {maps.potion_ids[slot] for slot in potion_slots(child, live, maps=maps)}
+        if len(held) != 1:
+            raise MappingError(
+                f"potion move {child.action} covers potions {sorted(held)}",
+            )
+        return
+    if child.card_def_id is None:
+        return
+    if child.kind == "card":
+        covered = [live["hand"][i] for i in hand_indices(child, live, maps=maps)]
+    elif child.kind == "select":
+        screen = live["pending_selection"]["candidates"]
+        covered = [screen[i] for i in select_indices(child, maps)]
+    else:
+        return
+    wrong = [
+        card["id"] for card in covered if ids.card_id(card["id"]) != child.card_def_id
+    ]
+    if wrong:
+        raise MappingError(
+            f"{child.kind} move {child.action} names {', '.join(wrong)}, but the search "
+            f"played {names.card_name(child.card_def_id)} (def id {child.card_def_id})",
+        )
+
+
 class LineTracker:
     """Name the expected line's moves as it plays through the hand, potions and roster.
 
@@ -176,6 +273,10 @@ class LineTracker:
     `hand_ids` is what that assumption says the emulator hand holds, so the caller can
     check it against the emulator before trusting the next move's index. A move's target
     indexes the roster as it stands then, which the caller reads off the emulator too.
+
+    A live enemy is known by its def id in its slot for as long as it stays in the roster.
+    Once it has left -- dead, and not kept by a power -- its place is forgotten, so a
+    creature a split or a summon puts in that slot later is not taken for it.
     """
 
     def __init__(self, live: Mapping[str, Any], maps: IndexMaps) -> None:
@@ -202,6 +303,8 @@ class LineTracker:
         """Name one move of the line, from the hand and potions as they stand now.
 
         `roster` is the emulator's enemies now, as `native.get_state_json` writes them.
+        Every move of the line after the first is named, so every roster the line passes
+        through is seen here, and an enemy that left one is forgotten for good.
 
         Raises:
             MappingError: If the action is past the hand or names an empty potion slot,
@@ -209,6 +312,12 @@ class LineTracker:
                 candidates the live snapshot never showed.
 
         """
+        present = {(enemy["def_id"], enemy["slot"]) for enemy in roster}
+        self._places = {
+            place: entity_id
+            for place, entity_id in self._places.items()
+            if place in present
+        }
         entity_id = self._aimed_at(target, roster)
         if kind == "card":
             return _card_move(
@@ -303,15 +412,33 @@ def _potions(
         MappingError: If an emulator slot does not hold the live slot's potion.
 
     """
-    held = {potion["slot"]: potion["id"] for potion in live["player"]["potions"]}
+    live_ids = _live_potions(live)
     slots = emu_doc["potions"]["slots"]
-    live_ids = tuple(held.get(slot) for slot in range(len(slots)))
     expected = [0 if entry is None else ids.potion_id(entry) for entry in live_ids]
     if list(slots) != expected:
         raise MappingError(
             f"the emulator potion slots {list(slots)} are not the live ones {expected}",
         )
     return live_ids
+
+
+def _live_potions(live: Mapping[str, Any]) -> tuple[str | None, ...]:
+    """Return the live potion in each slot of the belt, None where a slot is empty."""
+    held = {potion["slot"]: potion["id"] for potion in live["player"]["potions"]}
+    return tuple(held.get(slot) for slot in range(POTION_SLOT_CAPACITY))
+
+
+def _potion_in(belt: Sequence[str | None], slot: int) -> str:
+    """Return the live potion in a slot of the belt.
+
+    Raises:
+        MappingError: If the slot is empty. A slot past the belt raises it too.
+
+    """
+    potion = _at(belt, slot, "live potion slots")
+    if potion is None:
+        raise MappingError(f"no live potion is in slot {slot}")
+    return potion
 
 
 def _candidates(
@@ -458,15 +585,13 @@ def _potion_move(
     slot: int,
     entity_id: str | None,
 ) -> Move:
-    potion_id = potions[slot] if 0 <= slot < len(potions) else None
-    if potion_id is None:
-        raise MappingError(f"no live potion is in slot {slot}")
+    potion_id = _potion_in(potions, slot)
     return Move(
         kind="potion",
         potion_slot=slot,
         potion_id=potion_id,
         target=entity_id,
-        label=names.potion_name(ids.potion_id(potion_id)) + _aim(live, entity_id),
+        label=game_name(potion_id) + _aim(live, entity_id),
     )
 
 
@@ -517,20 +642,36 @@ def _enemy_name(enemies: Sequence[Mapping[str, Any]], entity_id: str) -> str:
     return f"{name} {kind.index(entity_id) + 1}"
 
 
+def game_name(entry: str) -> str:
+    """Name a card or potion from its live id as the game titles it.
+
+    The words of the id, capitalized the way a title is, less the character suffix only
+    the basic cards carry: `STRIKE_IRONCLAD` is "Strike", `TOUCH_OF_INSANITY` is "Touch of
+    Insanity". Punctuation the id cannot hold is lost ("Ascenders Bane").
+    """
+    words = entry.lower().split("_")
+    if len(words) > 1 and words[-1].upper() in CHARACTERS:
+        words = words[:-1]
+    return " ".join(
+        word if place and word in _MINOR_WORDS else word.capitalize()
+        for place, word in enumerate(words)
+    )
+
+
 def _card_name(card: Mapping[str, Any]) -> str:
-    return names.card_name(ids.card_id(card["id"]), card["upgraded"])
+    return game_name(card["id"]) + ("+" if card["upgraded"] else "")
 
 
 def _card_names(def_ids: Sequence[int]) -> list[str]:
     return [names.card_name(def_id) for def_id in def_ids]
 
 
-def _face(card: Mapping[str, Any]) -> tuple[Any, ...]:
-    """Return everything a live card shows but its uid (`cards.FACE`), hashable."""
-    return tuple(
-        tuple(sorted(card[key].items())) if key == "fields" else card[key]
-        for key in cards.FACE
-    )
+def _face(card: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return everything a live card shows but its uid (`cards.FACE`), hashable.
+
+    Each part is JSON with sorted keys, so fields of any nesting compare by value.
+    """
+    return tuple(json.dumps(card[key], sort_keys=True) for key in cards.FACE)
 
 
 def _at(items: Sequence[Any], index: int, where: str) -> Any:

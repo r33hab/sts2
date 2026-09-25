@@ -7,21 +7,26 @@ str, "params": {...}}`, and reads one line back per request on its stdout: `{"id
 "ok": true, "result": {...}}` or `{"id": int, "ok": false, "error": {"type": str,
 "message": str}}`. A request whose id cannot be read is answered with id null.
 
-stdout carries those lines and nothing else. At start the process points its own
-descriptor 1 at stderr, where all logging goes, and keeps a private copy of the real
-stdout for the protocol, so neither a stray print nor a search worker, which inherits
-the descriptors, can corrupt the stream. The lines are strict JSON: a statistic with no
-data behind it (NaN, or an infinite standard error) goes out as null.
+stdout carries those lines and nothing else. The first thing `main` does is point the
+process's descriptor 1 at stderr, where all logging goes, keeping a private copy of the
+real stdout for the protocol, so neither a stray print nor a search worker, which
+inherits the descriptors, can corrupt the stream. The search is imported only after
+that. The lines are strict JSON: a statistic with no data behind it (NaN, or an infinite
+standard error) goes out as null.
 
-A bad request is answered, never fatal. The methods:
+A bad request is answered, never fatal. A param a method does not know is ignored, with
+one line in the log, so a newer coach still works with an older service. The methods:
 
   health    what is running: the service's version, the native API's, the simulator
             commit the service started from, the game version it targets, its workers.
   analyze   a `sts2-live-snapshot/1` document in; the search's best move, the rest of the
             turn it expects and every move's statistics out, all in game terms (`moves`).
-  shutdown  answer, then stop the worker pool and exit 0. EOF on stdin does the same.
+            A search worker that failed, died or hung during the call makes the answer
+            unreliable: that is how an emulator fault on the position shows.
+  shutdown  answer, then stop the worker pool and exit 0. EOF on stdin does the same, and
+            so does SIGTERM, with status 143.
 
-The error types: `bad_request` (not JSON, no id, a bad param), `unknown_method`,
+The error types: `bad_request` (not JSON, no id, a bad param value), `unknown_method`,
 `conversion` (the converter refused the snapshot, naming the field), `load` (the
 emulator refused the converted position), `mapping` (the emulator's position does not
 line up with the live one, so its moves cannot be named), `search` (the search failed)
@@ -39,6 +44,7 @@ import json
 import logging
 import math
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -46,19 +52,17 @@ import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Protocol, TextIO
 
+# The native library is loaded by the time this module runs: `python -m` imports the
+# `sts2_gym` package first, whose `env` imports `native`. The search is not, and waits
+# for `main` to claim stdout (`_search_module`).
 from sts2_gym import native
 from sts2_gym.live import ConversionError, moves
 from sts2_gym.live.convert import convert
 
 _ROOT = Path(__file__).resolve().parents[3]
-
-# `rl/` is a folder of scripts, not a package, and the search's worker processes import
-# `live_search` by that name, so the service does too.
-if str(_ROOT / "rl") not in sys.path:
-    sys.path.insert(0, str(_ROOT / "rl"))
-live_search = importlib.import_module("live_search")
 
 SERVICE_VERSION = "1"
 GAME_VERSION_TARGET = "v0.107.1"
@@ -75,12 +79,15 @@ ANALYZE_DEFAULTS: dict[str, float | int] = {
 # The seed is the loader's, a C int (`Sts2_LoadCombatSnapshot`).
 _MAX_SEED = 2**31 - 1
 
-# What the search pool says about itself (`live_search.ParallelSearcher`): a worker that
-# failed, restarted or was still restarting, and a line taken from no search. Those are
-# about how the search ran. Any other search warning is taken to be about the position,
-# something the search could not model, and makes the analysis unreliable.
-_POOL_WARNING_PREFIXES = ("search worker ", "no search chose the merged best move")
-_POOL_WARNING_PHRASE = "search workers were still restarting"
+# The two warnings of the search pool (`live_search.ParallelSearcher`) that say nothing
+# about the position: workers a previous call left restarting sat this one out, and the
+# line is the merged best move alone. Every other search warning makes the analysis
+# unreliable -- above all a worker that failed, died, hung or left a combat open during
+# this very call, which is how an emulator fault on the position shows.
+_STILL_RESTARTING = re.compile(r"\d+ of \d+ search workers were still restarting")
+_LINE_FROM_NO_SEARCH = (
+    "no search chose the merged best move, so the line is that move alone"
+)
 
 _LOG = logging.getLogger("sts2_gym.live.service")
 
@@ -163,7 +170,7 @@ class Service:
         return handler(params)
 
     def _health(self, params: dict[str, Any]) -> dict[str, Any]:
-        _no_params("health", params)
+        _ignore_unknown("health", params, known=())
         return {
             "service_version": SERVICE_VERSION,
             "native_api_version": _native_api_version(),
@@ -175,7 +182,7 @@ class Service:
         }
 
     def _shutdown(self, params: dict[str, Any]) -> dict[str, Any]:
-        _no_params("shutdown", params)
+        _ignore_unknown("shutdown", params, known=())
         self.stopping = True
         return {}
 
@@ -244,6 +251,8 @@ def serve(service: Service, lines: Iterable[str], out: TextIO) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     """Serve stdin and stdout until a shutdown or EOF; return the exit status."""
+    # First: from here on nothing but protocol lines reaches the real stdout.
+    protocol = _claim_stdout()
     parser = argparse.ArgumentParser(
         prog="python -m sts2_gym.live.service",
         description=(
@@ -261,7 +270,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.workers < 1:
         parser.error("--workers must be at least 1")
 
-    protocol = _claim_stdout()
     logging.basicConfig(
         stream=sys.stderr,
         level=logging.INFO,
@@ -271,7 +279,10 @@ def main(argv: list[str] | None = None) -> int:
     # so the workers are stopped rather than left to notice their pipes have closed.
     signal.signal(signal.SIGTERM, _exit_on_signal)
     sim_commit = _sim_commit()
-    searcher = live_search.ParallelSearcher(workers=args.workers, nice=WORKER_NICE)
+    searcher = _search_module().ParallelSearcher(
+        workers=args.workers,
+        nice=WORKER_NICE,
+    )
     try:
         _LOG.info(
             "serving with %d search workers, simulator %s",
@@ -338,11 +349,22 @@ def _method_and_params(request: Mapping[str, Any]) -> tuple[str, dict[str, Any]]
     return method, params
 
 
-def _no_params(method: str, params: Mapping[str, Any]) -> None:
-    if params:
-        raise RequestError(
-            "bad_request",
-            f"{method} takes no params, not {sorted(params)}",
+def _ignore_unknown(
+    method: str,
+    params: Mapping[str, Any],
+    known: Iterable[str],
+) -> None:
+    """Log, in one line, the params a method does not know; it goes on without them.
+
+    A newer coach may send params this service does not have yet, and must still be
+    answered, so an unknown param is never refused.
+    """
+    unknown = sorted(set(params) - set(known))
+    if unknown:
+        _LOG.warning(
+            "%s ignores params it does not know: %s",
+            method,
+            ", ".join(unknown),
         )
 
 
@@ -351,21 +373,20 @@ def _analyze_params(
 ) -> tuple[dict[str, Any], dict[str, float | int]]:
     """Check `analyze`'s params: the live snapshot, and the search settings with defaults.
 
+    A param `analyze` does not know is ignored (`_ignore_unknown`).
+
     Raises:
-        RequestError: For an unknown param, a `live` that is not an object, or a setting
-            of the wrong type or out of range ("bad_request").
+        RequestError: For a `live` that is not an object, or a setting of the wrong type
+            or out of range ("bad_request").
 
     """
-    unknown = sorted(set(params) - {"live", *ANALYZE_DEFAULTS})
-    if unknown:
-        raise RequestError(
-            "bad_request",
-            f"analyze takes no param {', '.join(unknown)}",
-        )
+    _ignore_unknown("analyze", params, known=("live", *ANALYZE_DEFAULTS))
     live = params.get("live")
     if not isinstance(live, dict):
         raise RequestError("bad_request", "params.live must be a live snapshot object")
-    settings = {**ANALYZE_DEFAULTS, **{k: v for k, v in params.items() if k != "live"}}
+    settings = {
+        key: params.get(key, default) for key, default in ANALYZE_DEFAULTS.items()
+    }
     budget = settings["time_budget_s"]
     if not _is_number(budget) or not math.isfinite(budget) or budget <= 0:
         raise RequestError(
@@ -420,8 +441,10 @@ def _analysis(
     A pick the mapping cannot name is left out of `moves` and counted in
     `select_mapping_failures`. Any other move that cannot be named raises
     `moves.MappingError`, and so does a best move that cannot, since then nothing can be
-    advised.
+    advised. So does a move that names a card the search did not play
+    (`moves.check_identity`): each is checked against the def id the search read.
     """
+    moves.check_identity(result.best, live, maps)
     best = moves.to_move(result.best, live, emu_doc, maps=maps)
     stats = []
     unmapped = 0
@@ -431,10 +454,9 @@ def _analysis(
         except moves.UnmappedSelectionError:
             unmapped += 1
             continue
-        stats.append(
-            _move_stat(move, child, moves.hand_indices(child, live, maps=maps)),
-        )
-    line = _line(result.line, best, live, maps, handle)
+        moves.check_identity(child, live, maps)
+        stats.append(_move_stat(move, child, live, maps))
+    line = _line(result.line, result.best, best, live, maps, handle)
     search_warnings = list(result.warnings)
     return {
         "reliable": converted.reliable and all(map(_about_the_pool, search_warnings)),
@@ -454,11 +476,17 @@ def _analysis(
     }
 
 
-def _move_stat(move: moves.Move, child: Any, hand: list[int]) -> dict[str, Any]:
-    """Build the protocol's `MoveStat`: the move, its search statistics, the hand it covers.
+def _move_stat(
+    move: moves.Move,
+    child: Any,
+    live: Mapping[str, Any],
+    maps: moves.IndexMaps,
+) -> dict[str, Any]:
+    """Build the protocol's `MoveStat`: the move, its search statistics, what it covers.
 
     Only the paired fields compare two moves; `value_mean` and `p_death` are the move's
-    own, informational, and never differences.
+    own, informational, and never differences. A merged move covers every live copy it
+    stands for: hand cards, potion slots or candidates.
     """
     return {
         **asdict(move),
@@ -470,12 +498,15 @@ def _move_stat(move: moves.Move, child: Any, hand: list[int]) -> dict[str, Any]:
         "paired_n": child.paired_n,
         "paired_death_diff_vs_best": child.paired_death_diff_vs_best,
         "paired_death_diff_stderr": child.paired_death_diff_stderr,
-        "hand_indices": hand,
+        "hand_indices": moves.hand_indices(child, live, maps=maps),
+        "potion_slots": moves.potion_slots(child, live, maps=maps),
+        "select_indices": moves.select_indices(child, maps),
     }
 
 
 def _line(
     search_line: Sequence[tuple[int, int, str]],
+    best_child: Any,
     best: moves.Move,
     live: Mapping[str, Any],
     maps: moves.IndexMaps,
@@ -484,25 +515,37 @@ def _line(
     """Name the search's expected line, replaying it on the loaded position as it goes.
 
     The line is (action, target, kind) along the most visited moves, and its first move
-    is the best one (`live_search._line`). Below the root an action indexes the hand as
-    the moves before it left it, which `moves.LineTracker` follows on the assumption that
-    a move only takes the card it plays, and a target indexes the roster as it stands,
-    less whoever died. The line stops where the emulator's hand is not the one the
-    tracker names -- after a move that exhausts, adds, transforms or draws a card, or at
-    a random effect on the hand -- because past that the line's indices name cards the
-    live snapshot does not hold in those places. It stops, too, at a move the loaded
-    position does not allow, at a target that is not a living enemy of the snapshot, and
-    at a pick from a selection the line opened, whose candidates it never showed.
+    is the best one (`live_search._line`), `best_child`, named `best`. Below the root an
+    action indexes the hand as the moves before it left it, which `moves.LineTracker`
+    follows on the assumption that a move only takes the card it plays, and a target
+    indexes the roster as it stands, less whoever died. The line stops where the
+    emulator's hand is not the one the tracker names -- after a move that exhausts, adds,
+    transforms or draws a card, or at a random effect on the hand -- because past that the
+    line's indices name cards the live snapshot does not hold in those places. It stops,
+    too, at a move the loaded position does not allow, at a target that is not a living
+    enemy of the snapshot, and at a pick from a selection the line opened, whose
+    candidates it never showed.
+
+    Raises:
+        moves.MappingError: If the line does not start with the best move.
+
     """
+    starts = tuple(search_line[0][:2]) if search_line else None
+    if starts != (best_child.action, best_child.target):
+        raise moves.MappingError(
+            f"the search's line starts with (action, target) {starts}, not with its best "
+            f"move {(best_child.action, best_child.target)}",
+        )
     tracker = moves.LineTracker(live, maps)
     named = [best]
     obs = (ctypes.c_int * native.OBS_SIZE)()
     reward = (ctypes.c_float * 1)()
+    max_actions = _search_module().MAX_ACTIONS
     for step, (action, target, kind) in enumerate(search_line):
         if step:
             now = native.get_state_json(handle)
             held = [card["def_id"] for card in now["piles"]["hand"]]
-            legal = native.valid_actions(handle, live_search.MAX_ACTIONS)
+            legal = native.valid_actions(handle, max_actions)
             if held != tracker.hand_ids() or not legal[action]:
                 break
             try:
@@ -516,7 +559,11 @@ def _line(
 
 
 def _about_the_pool(warning: str) -> bool:
-    return warning.startswith(_POOL_WARNING_PREFIXES) or _POOL_WARNING_PHRASE in warning
+    """Say whether a search warning is one of the two that leave an analysis reliable."""
+    return (
+        warning == _LINE_FROM_NO_SEARCH
+        or _STILL_RESTARTING.fullmatch(warning) is not None
+    )
 
 
 # ── Responses ────────────────────────────────────────────────────────────────
@@ -559,12 +606,25 @@ def _claim_stdout() -> TextIO:
 
     Whatever else writes to stdout -- a stray print, the native library, a search worker,
     which inherits the descriptor -- then lands in the log, not in the protocol stream.
-    The copy is not inherited (`os.dup`), so no worker holds the protocol open.
+    The copy is not inherited (`os.dup`), so no worker holds the protocol open. The flush
+    comes after the switch, so what an import left in the stdout buffer goes to stderr.
     """
-    sys.stdout.flush()
     protocol = os.fdopen(os.dup(sys.stdout.fileno()), "w", encoding="utf-8")
     os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+    sys.stdout.flush()
     return protocol
+
+
+def _search_module() -> ModuleType:
+    """Import `rl/live_search.py`, the search, which `main` does after claiming stdout.
+
+    `rl/` is a folder of scripts, not a package, and the search's worker processes import
+    `live_search` by that name, so the service does too. A second call finds it imported.
+    """
+    rl = str(_ROOT / "rl")
+    if rl not in sys.path:
+        sys.path.insert(0, rl)
+    return importlib.import_module("live_search")
 
 
 def _exit_on_signal(signum: int, _frame: object) -> None:

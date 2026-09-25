@@ -14,9 +14,11 @@ last the process itself is started, spoken to and stopped.
 from __future__ import annotations
 
 import importlib
+import inspect
 import io
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -41,6 +43,9 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "live"
 CAPTURED = sorted((FIXTURES / "captured").glob("*.json"))
 SELECTIONS = sorted((FIXTURES / "selection").glob("*.json"))
 
+STRIKE = ids.card_id("STRIKE_IRONCLAD")
+DEFEND = ids.card_id("DEFEND_IRONCLAD")
+
 MOVE_FIELDS = {
     "kind",
     "card_index",
@@ -62,6 +67,8 @@ MOVE_STAT_FIELDS = MOVE_FIELDS | {
     "paired_death_diff_vs_best",
     "paired_death_diff_stderr",
     "hand_indices",
+    "potion_slots",
+    "select_indices",
 }
 ANALYSIS_FIELDS = {
     "reliable",
@@ -104,13 +111,14 @@ def child(
     *,
     target: int = -1,
     merged: tuple[int, ...] = (),
+    card_def_id: int | None = None,
 ) -> Any:
     """Build a search move as `live_search` reports one; its statistics do not matter here."""
     return live_search.ChildStat(
         action=action,
         target=target,
         kind=kind,
-        card_def_id=None,
+        card_def_id=card_def_id,
         visits=10,
         value_mean=40.0,
         value_stderr=1.0,
@@ -119,6 +127,23 @@ def child(
         paired_diff_vs_best=None,
         paired_diff_stderr=None,
         merged_actions=list(merged),
+    )
+
+
+def canned(
+    best: Any,
+    children: list[Any],
+    line: list[tuple[int, int, str]],
+) -> Any:
+    """Build a search result by hand, for a searcher that answers with it."""
+    return live_search.SearchResult(
+        best=best,
+        children=children,
+        line=line,
+        sims=len(children),
+        elapsed_s=0.0,
+        budget_exhausted=False,
+        truncated_rollouts=0,
     )
 
 
@@ -151,6 +176,20 @@ def request(method: str, params: object = None, req_id: int = 1) -> str:
     )
 
 
+def fail_in_lane_one(job: Any) -> Any:
+    """Search as a worker does, except in lane 1, which raises as an emulator fault would.
+
+    A `ParallelSearcher` worker function: module level, so a spawned worker can import it.
+
+    Raises:
+        RuntimeError: In lane 1, before any combat is built there.
+
+    """
+    if job.lane == 1:
+        raise RuntimeError("an emulator fault in lane 1")
+    return live_search._search_worker(job)
+
+
 class NoSearch:
     """A searcher for the tests that must never reach the search."""
 
@@ -160,6 +199,29 @@ class NoSearch:
         **kw: object,
     ) -> None:
         raise AssertionError("this request should have been answered before any search")
+
+
+class FixedSearcher:
+    """A searcher that answers every search with the same result."""
+
+    def __init__(self, result: Any) -> None:
+        self.result = result
+
+    def search(self, snapshot_doc: dict, **kw: object) -> Any:
+        return self.result
+
+
+class RecordingSearcher:
+    """The real search, keeping every raw result it answered with."""
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+        self.results: list[Any] = []
+
+    def search(self, snapshot_doc: dict, **kw: object) -> Any:
+        result = self.inner.search(snapshot_doc, **kw)
+        self.results.append(result)
+        return result
 
 
 def dead_enemy_position() -> dict[str, Any]:
@@ -216,6 +278,16 @@ def reviving_enemy_position() -> dict[str, Any]:
     return live
 
 
+def two_flex_potions() -> dict[str, Any]:
+    """Return the captured two-Toadpole opening holding a Flex Potion in both slots."""
+    live = load("captured/floor4_toadpoles_round1")
+    live["player"]["potions"] = [
+        {"slot": 0, "id": "FLEX_POTION"},
+        {"slot": 1, "id": "FLEX_POTION"},
+    ]
+    return live
+
+
 # ── The mapping, on moves built by hand ──────────────────────────────────────
 
 
@@ -235,7 +307,7 @@ class CardMoveTests(unittest.TestCase):
             ("card", strikes[0], hand[strikes[0]]["uid"], "STRIKE_IRONCLAD"),
         )
         self.assertEqual(move.target, live["enemies"][0]["entity_id"])
-        self.assertEqual(move.label, "Strike Ironclad → Sludge Spinner")
+        self.assertEqual(move.label, "Strike → Sludge Spinner")
         self.assertEqual(
             (move.potion_slot, move.potion_id, move.select_index),
             (None,) * 3,
@@ -248,7 +320,7 @@ class CardMoveTests(unittest.TestCase):
             i for i, card in enumerate(live["hand"]) if card["id"] == "DEFEND_IRONCLAD"
         )
         move = moves.to_move(child(defend, "card"), live, loaded(live)[0])
-        self.assertEqual((move.target, move.label), (None, "Defend Ironclad"))
+        self.assertEqual((move.target, move.label), (None, "Defend"))
 
     def test_a_target_is_the_live_enemy_at_that_place_behind_a_dead_one(self) -> None:
         live = dead_enemy_position()
@@ -258,7 +330,7 @@ class CardMoveTests(unittest.TestCase):
         move = moves.to_move(child(strike, "card", target=1), live, loaded(live)[0])
         self.assertEqual(move.target, "CORPSE_SLUG_1")
         # Only the living are numbered: this is the one Corpse Slug left.
-        self.assertEqual(move.label, "Strike Ironclad → Corpse Slug")
+        self.assertEqual(move.label, "Strike → Corpse Slug")
 
     def test_two_living_enemies_of_a_kind_are_numbered_left_to_right(self) -> None:
         live = load("captured/floor3_corpse_slugs_round1")
@@ -274,8 +346,8 @@ class CardMoveTests(unittest.TestCase):
         self.assertEqual(
             {move.target: move.label for move in named},
             {
-                "CORPSE_SLUG_0": "Strike Ironclad → Corpse Slug 1",
-                "CORPSE_SLUG_1": "Strike Ironclad → Corpse Slug 2",
+                "CORPSE_SLUG_0": "Strike → Corpse Slug 1",
+                "CORPSE_SLUG_1": "Strike → Corpse Slug 2",
             },
         )
 
@@ -287,10 +359,46 @@ class CardMoveTests(unittest.TestCase):
             i for i, card in enumerate(live["hand"]) if card["id"] == "STRIKE_IRONCLAD"
         )
         move = moves.to_move(child(strike, "card", target=1), live, loaded(live)[0])
-        self.assertEqual(
-            (move.target, move.label),
-            ("FOGMOG_0", "Strike Ironclad → Fogmog"),
+        self.assertEqual((move.target, move.label), ("FOGMOG_0", "Strike → Fogmog"))
+
+    def test_a_card_the_search_did_not_play_is_a_mapping_error(self) -> None:
+        # Strike, Defend, Bash, Defend, Strike.
+        live = load("captured/floor2_sludge_spinner_round1")
+        maps = moves.index_maps(live, loaded(live)[0])
+        moves.check_identity(
+            child(0, "card", merged=(4,), card_def_id=STRIKE),
+            live,
+            maps,
         )
+        for case, played in (
+            ("the card itself", child(0, "card", card_def_id=DEFEND)),
+            ("a merged copy", child(0, "card", merged=(1,), card_def_id=STRIKE)),
+        ):
+            with self.subTest(case=case), self.assertRaises(moves.MappingError):
+                moves.check_identity(played, live, maps)
+
+
+class LabelTests(unittest.TestCase):
+    """A move is labelled with the game's names: the live id, less a character suffix."""
+
+    def test_a_card_or_potion_id_reads_as_the_game_names_it(self) -> None:
+        for entry, name in (
+            ("STRIKE_IRONCLAD", "Strike"),
+            ("DEFEND_SILENT", "Defend"),
+            ("IRON_WAVE", "Iron Wave"),
+            ("TOUCH_OF_INSANITY", "Touch of Insanity"),
+            ("BLESSING_OF_THE_FORGE", "Blessing of the Forge"),
+            ("FLEX_POTION", "Flex Potion"),
+        ):
+            with self.subTest(entry=entry):
+                self.assertEqual(moves.game_name(entry), name)
+
+    def test_an_upgraded_card_carries_a_plus(self) -> None:
+        live = load("captured/floor2_sludge_spinner_round1")
+        emu_doc, _ = loaded(live)
+        live["hand"][2]["upgraded"] = True  # Bash
+        move = moves.to_move(child(2, "card", target=0), live, emu_doc)
+        self.assertEqual(move.label, "Bash+ → Sludge Spinner")
 
 
 class OtherMoveTests(unittest.TestCase):
@@ -309,6 +417,7 @@ class OtherMoveTests(unittest.TestCase):
         )
         self.assertEqual((move.card_index, move.card_uid, move.card_id), (None,) * 3)
         self.assertEqual(moves.hand_indices(potion, live), [])
+        self.assertEqual(moves.potion_slots(potion, live), [slot])
 
     def test_a_potion_past_an_empty_slot_is_found_by_its_slot(self) -> None:
         live = load("captured/floor4_toadpoles_round1")
@@ -323,6 +432,14 @@ class OtherMoveTests(unittest.TestCase):
             (1, "FIRE_POTION", "TOADPOLE_1", "Fire Potion → Toadpole 2"),
         )
 
+    def test_a_merged_potion_covers_every_slot_holding_one_like_it(self) -> None:
+        live = two_flex_potions()
+        maps = moves.index_maps(live, loaded(live)[0])
+        first = len(live["hand"]) + 1
+        potion = child(first, "potion", merged=(first + 1,))
+        self.assertEqual(moves.to_move(potion, live, {}, maps=maps).potion_slot, 0)
+        self.assertEqual(moves.potion_slots(potion, live, maps=maps), [0, 1])
+
     def test_end_turn_and_a_skip_name_nothing_else(self) -> None:
         live = load("captured/floor2_sludge_spinner_round1")
         emu_doc, _ = loaded(live)
@@ -330,6 +447,8 @@ class OtherMoveTests(unittest.TestCase):
         self.assertEqual(end_turn, moves.Move(kind="end_turn", label="End turn"))
         skip = moves.to_move(child(3, "skip"), live, emu_doc)
         self.assertEqual(skip, moves.Move(kind="skip", label="Skip"))
+        for covered in (moves.potion_slots, moves.hand_indices):
+            self.assertEqual(covered(child(3, "skip"), live), [])
 
 
 class SelectMoveTests(unittest.TestCase):
@@ -353,6 +472,7 @@ class SelectMoveTests(unittest.TestCase):
             ("select", 1, chosen["uid"], "BASH", "Choose Bash"),
         )
         self.assertEqual((move.card_index, move.target), (None, None))
+        self.assertEqual(moves.select_indices(child(1, "select"), maps), [1])
 
     def test_a_pile_pick_follows_the_pile_not_the_screen(self) -> None:
         # Headbutt's screen lists Shrug It Off, Iron Wave, Strike; the discard pile holds
@@ -363,9 +483,11 @@ class SelectMoveTests(unittest.TestCase):
         for emu_index, position in enumerate(
             emu_doc["pending_selection"]["candidates"],
         ):
-            move = moves.to_move(child(emu_index, "select"), live, emu_doc, maps=maps)
+            pick = child(emu_index, "select")
+            move = moves.to_move(pick, live, emu_doc, maps=maps)
             self.assertEqual(move.card_uid, pile[position]["uid"])
             self.assertEqual(screen[move.select_index]["uid"], pile[position]["uid"])
+            self.assertEqual(moves.select_indices(pick, maps), [move.select_index])
         self.assertEqual(maps.candidates, (1, 2, 0))
 
     def test_a_generated_pick_is_the_candidate_at_that_place(self) -> None:
@@ -401,6 +523,33 @@ class SelectMoveTests(unittest.TestCase):
             "no seed moved the middle; the test is vacuous",
         )
 
+    def test_a_merged_pick_covers_every_identical_candidate(self) -> None:
+        # The two Strikes: c6 on top (screen index 2) and c5 in the middle (screen 1).
+        name = "selection/droplet_of_precognition"
+        live, emu_doc, maps = self.candidate_map(name, 0)
+        screen = live["pending_selection"]["candidates"]
+        order = self.draw_order(name, 0)
+        positions = emu_doc["pending_selection"]["candidates"]
+        middle_strike = next(
+            k
+            for k in range(1, len(positions))
+            if order[positions[k]] == (STRIKE, False)
+        )
+        pick = child(0, "select", merged=(middle_strike,), card_def_id=STRIKE)
+        strikes = [
+            i for i, card in enumerate(screen) if card["id"] == "STRIKE_IRONCLAD"
+        ]
+        self.assertEqual(strikes, [1, 2])
+        self.assertEqual(moves.select_indices(pick, maps), strikes)
+        self.assertEqual(moves.to_move(pick, live, emu_doc, maps=maps).select_index, 2)
+        moves.check_identity(pick, live, maps)
+        with self.assertRaises(moves.MappingError):
+            moves.check_identity(
+                child(0, "select", merged=(middle_strike,), card_def_id=DEFEND),
+                live,
+                maps,
+            )
+
     def test_a_draw_pile_pick_is_not_found_without_the_loaded_order(self) -> None:
         live = load("selection/droplet_of_precognition")
         emu_doc, _ = loaded(live)
@@ -411,6 +560,37 @@ class SelectMoveTests(unittest.TestCase):
         # A merged move is found through any of its candidates.
         move = moves.to_move(child(1, "select", merged=(0,)), live, emu_doc, maps=maps)
         self.assertEqual(move.card_uid, "c6")
+        self.assertEqual(
+            moves.select_indices(child(1, "select", merged=(0,)), maps),
+            [2],
+        )
+
+
+class FaceTests(unittest.TestCase):
+    """Cards are compared by face; a face must hold whatever primitive nesting it carries."""
+
+    def test_a_face_with_nested_fields_is_hashable_and_ignores_key_order(self) -> None:
+        card = {
+            "id": "STRIKE_IRONCLAD",
+            "upgraded": False,
+            "uid": None,
+            "cost": 1,
+            "enchantment": None,
+            "enchant_amount": None,
+            "fields": {"b": [1, {"c": 2}], "a": {"x": None}},
+        }
+        reordered = {**card, "fields": {"a": {"x": None}, "b": [1, {"c": 2}]}}
+        self.assertEqual(hash(moves._face(card)), hash(moves._face(reordered)))
+        self.assertEqual(moves._face(card), moves._face(reordered))
+
+    def test_candidates_with_nested_fields_are_found_without_error(self) -> None:
+        name = "selection/droplet_of_precognition"
+        live = load(name)
+        emu_doc, draw = loaded(live)
+        for candidate in live["pending_selection"]["candidates"]:
+            candidate["fields"] = {"nested": {"deep": [1, 2]}}
+        maps = moves.index_maps(live, emu_doc, draw_order=draw)
+        self.assertEqual(sorted(maps.candidates), [0, 1, 2])
 
 
 class InvariantTests(unittest.TestCase):
@@ -501,7 +681,7 @@ class LineTrackerTests(unittest.TestCase):
         move = tracker.move(strike, 0, "card", roster[1:])
         self.assertEqual(
             (move.target, move.label),
-            ("CORPSE_SLUG_1", "Strike Ironclad → Corpse Slug"),
+            ("CORPSE_SLUG_1", "Strike → Corpse Slug"),
         )
 
     def test_a_target_that_is_no_living_snapshot_enemy_cannot_be_named(self) -> None:
@@ -515,6 +695,38 @@ class LineTrackerTests(unittest.TestCase):
         ):
             with self.subTest(case=case), self.assertRaises(moves.MappingError):
                 tracker.move(0, target, "card", now)
+
+    def test_a_creature_in_a_departed_enemys_place_is_not_that_enemy(self) -> None:
+        # Both starting positions, the dead slug listed and the slug alive: once slug 0
+        # has left the roster, a Corpse Slug that a split or a summon puts in its slot is
+        # a new creature, not CORPSE_SLUG_0.
+        for case, live in (
+            ("listed dead", dead_enemy_position()),
+            ("killed in the line", load("captured/floor3_corpse_slugs_round1")),
+        ):
+            with self.subTest(case=case):
+                tracker, roster = self.tracker(live)
+                slug_0, slug_1 = roster
+                strike = tracker.move(0, 0, "card", [slug_1])
+                self.assertEqual(strike.target, "CORPSE_SLUG_1")
+                tracker.play(0, "card")
+                newcomer = {**slug_0, "hp": 12}
+                now = [newcomer, slug_1]
+                with self.assertRaises(moves.MappingError):
+                    tracker.move(3, 0, "card", now)
+                self.assertEqual(
+                    tracker.move(3, 1, "card", now).target,
+                    "CORPSE_SLUG_1",
+                )
+
+    def test_a_reviving_creature_that_never_left_keeps_its_name(self) -> None:
+        live = reviving_enemy_position()
+        tracker, roster = self.tracker(live)
+        eye, fogmog = roster
+        self.assertEqual(tracker.move(0, 1, "card", roster).target, "FOGMOG_0")
+        tracker.play(0, "card")
+        revived = [{**eye, "hp": 6}, fogmog]
+        self.assertEqual(tracker.move(3, 0, "card", revived).target, "EYE_WITH_TEETH_1")
 
     def test_a_used_potion_is_gone_from_its_slot(self) -> None:
         live = load("captured/floor4_toadpoles_round1")
@@ -598,7 +810,6 @@ class ProtocolTests(unittest.TestCase):
                 json.dumps({"id": 6, "method": "health", "params": [1]}),
                 6,
             ),
-            "health with params": (request("health", {"x": 1}, req_id=8), 8),
         }
         for case, (line, req_id) in malformed.items():
             with self.subTest(case=case):
@@ -607,6 +818,18 @@ class ProtocolTests(unittest.TestCase):
                 self.assertEqual(answer["error"]["type"], "bad_request")
                 self.assertTrue(answer["error"]["message"])
         self.assertTrue(self.ask(request("health", req_id=9))["ok"])
+
+    def test_an_unknown_param_is_ignored_with_one_log_line(self) -> None:
+        # A newer coach may send params this service does not know yet.
+        for method in ("health", "shutdown"):
+            with (
+                self.subTest(method=method),
+                self.assertLogs("sts2_gym.live.service", level="WARNING") as logs,
+            ):
+                answer = self.ask(request(method, {"from_the_future": 1}))
+                self.assertTrue(answer["ok"], answer)
+            self.assertEqual(len(logs.records), 1)
+            self.assertIn("from_the_future", logs.output[0])
 
     def test_an_unknown_method_is_refused(self) -> None:
         answer = self.ask(request("frobnicate", req_id=3))
@@ -648,7 +871,6 @@ class AnalyzeRefusalTests(unittest.TestCase):
             "a seed too big for the loader": {"live": live, "seed": 2**31},
             "a negative minimum sweep": {"live": live, "min_child_sims": -1},
             "confirm pairs as text": {"live": live, "confirm_pairs": "50"},
-            "an unknown param": {"live": live, "max_sims": 10},
         }
         for case, params in cases.items():
             with self.subTest(case=case):
@@ -689,6 +911,75 @@ class AnalyzeRefusalTests(unittest.TestCase):
             error = self.refusal({"live": live})
         self.assertEqual(error["type"], "mapping")
         self.assertIn("hand", error["message"])
+
+
+class CannedSearchTests(unittest.TestCase):
+    """`analyze` on search results built by hand, against the real loaded position."""
+
+    @staticmethod
+    def analyze(live: dict[str, Any], result: Any) -> dict[str, Any]:
+        svc = service.Service(FixedSearcher(result), workers=2, sim_commit="abc1234")
+        return strict(svc.handle(request("analyze", {"live": live, **QUICK})) or "")
+
+    def test_the_line_follows_a_death_the_engine_really_plays(self) -> None:
+        # Strike, Ascender's Bane, Iron Wave, Defend, Strike; slug 0 dead but listed.
+        # Strike on enemy 1, then -- the engine having dropped the dead slug -- the other
+        # Strike (hand index 3 by then) on enemy 0: the same living slug both times.
+        live = dead_enemy_position()
+        hand = live["hand"]
+        best = child(0, "card", target=1, merged=(4,), card_def_id=STRIKE)
+        result = canned(
+            best,
+            [best, child(5, "end_turn")],
+            [(0, 1, "card"), (3, 0, "card")],
+        )
+        self.assertEqual(result.line[0][:2], (best.action, best.target))
+
+        answer = self.analyze(live, result)
+
+        self.assertTrue(answer["ok"], answer)
+        line = answer["result"]["line"]
+        self.assertEqual(line[0], answer["result"]["best"])
+        self.assertEqual(
+            [(move["target"], move["card_uid"]) for move in line],
+            [("CORPSE_SLUG_1", hand[0]["uid"]), ("CORPSE_SLUG_1", hand[4]["uid"])],
+        )
+        self.assertEqual(
+            [move["label"] for move in line],
+            ["Strike → Corpse Slug", "Strike → Corpse Slug"],
+        )
+
+    def test_a_line_that_does_not_start_with_the_best_move_is_a_mapping_error(
+        self,
+    ) -> None:
+        live = dead_enemy_position()
+        best = child(0, "card", target=1, merged=(4,), card_def_id=STRIKE)
+        result = canned(best, [best], [(3, -1, "card"), (0, 1, "card")])
+        answer = self.analyze(live, result)
+        self.assertFalse(answer["ok"])
+        self.assertEqual(answer["error"]["type"], "mapping")
+        self.assertIn("line", answer["error"]["message"])
+
+    def test_a_move_naming_a_card_the_search_did_not_play_is_a_mapping_error(
+        self,
+    ) -> None:
+        live = dead_enemy_position()  # hand index 0 is a Strike
+        for case, best, other in (
+            ("the best move", child(0, "card", target=1, card_def_id=DEFEND), None),
+            (
+                "another move",
+                child(5, "end_turn"),
+                child(3, "card", card_def_id=STRIKE),
+            ),
+        ):
+            with self.subTest(case=case):
+                children = [best] if other is None else [best, other]
+                answer = self.analyze(
+                    live,
+                    canned(best, children, [(5, -1, "end_turn")]),
+                )
+                self.assertFalse(answer["ok"])
+                self.assertEqual(answer["error"]["type"], "mapping")
 
 
 # ── analyze, with the real search ────────────────────────────────────────────
@@ -736,75 +1027,106 @@ class AnalyzeTests(unittest.TestCase):
         self.assertEqual(result["line"][0], result["best"])
         return result
 
-    def assert_names_live_things(
+    def assert_names_what_the_search_played(
         self,
         live: dict[str, Any],
+        raw: Any,
         result: dict[str, Any],
     ) -> None:
+        """Hold each move against the raw search move it came from, in the same order."""
         hand = live["hand"]
         entity_ids = {enemy["entity_id"] for enemy in live["enemies"]}
         potions = {p["slot"]: p["id"] for p in live["player"]["potions"] if p["id"]}
-        for move in [result["best"], *result["line"], *result["moves"]]:
-            if move["target"] is not None:
-                self.assertIn(move["target"], entity_ids)
-            if move["kind"] == "card":
-                card = hand[move["card_index"]]
-                self.assertEqual(
-                    (card["id"], card["uid"]),
-                    (move["card_id"], move["card_uid"]),
-                )
-            if move["kind"] == "potion":
-                self.assertEqual(potions[move["potion_slot"]], move["potion_id"])
-        for stat in result["moves"]:
-            if stat["kind"] != "card":
-                self.assertEqual(stat["hand_indices"], [])
-                continue
-            # Every live copy identical to the card, and only those, share its move.
-            copies = [
-                i
-                for i, card in enumerate(hand)
-                if face(card) == face(hand[stat["card_index"]])
-            ]
-            self.assertEqual(stat["hand_indices"], copies)
-        played = [move["card_uid"] for move in result["line"] if move["kind"] == "card"]
-        self.assertEqual(len(played), len(set(played)), "the line plays a card twice")
+        self.assertEqual(len(result["moves"]), len(raw.children))
+        for played, stat in zip(raw.children, result["moves"], strict=True):
+            covered = sorted([played.action, *played.merged_actions])
+            with self.subTest(move=stat["label"]):
+                self.assertEqual(stat["kind"], played.kind)
+                self.assertEqual(stat["visits"], played.visits)
+                if stat["target"] is not None:
+                    self.assertIn(stat["target"], entity_ids)
+                if played.kind == "card":
+                    # The card the search played, by the search's own def id.
+                    self.assertEqual(ids.card_id(stat["card_id"]), played.card_def_id)
+                    self.assertEqual(stat["hand_indices"], covered)
+                    self.assertEqual(
+                        {ids.card_id(hand[i]["id"]) for i in stat["hand_indices"]},
+                        {played.card_def_id},
+                    )
+                else:
+                    self.assertEqual(stat["hand_indices"], [])
+                if played.kind == "potion":
+                    slots = [action - len(hand) - 1 for action in covered]
+                    self.assertEqual(stat["potion_slots"], slots)
+                    self.assertEqual(stat["potion_slot"], slots[0])
+                    self.assertEqual({potions[s] for s in slots}, {stat["potion_id"]})
+                else:
+                    self.assertEqual(stat["potion_slots"], [])
+        played_uids = [m["card_uid"] for m in result["line"] if m["kind"] == "card"]
+        self.assertEqual(len(played_uids), len(set(played_uids)), "a card played twice")
 
-    def test_captured_positions_name_live_cards_enemies_and_copies(self) -> None:
+    def test_captured_positions_name_what_the_search_played(self) -> None:
         self.assertGreaterEqual(len(CAPTURED), 3)
         for path in CAPTURED:
             live = json.loads(path.read_text(encoding="utf-8"))
+            recording = RecordingSearcher(self.searcher)
             with self.subTest(position=path.stem):
-                result = self.analyze(live)
+                result = self.analyze(live, recording)
                 self.assertEqual((result["reliable"], result["warnings"]), (True, []))
                 self.assertEqual(result["select_mapping_failures"], 0)
                 self.assertGreater(result["sims"], 0)
-                self.assert_names_live_things(live, result)
-                best = result["best"]
-                if best["kind"] == "card":
+                raw = recording.results[-1]
+                self.assert_names_what_the_search_played(live, raw, result)
+                if raw.best.kind == "card":
                     self.assertEqual(
-                        live["hand"][best["card_index"]]["id"],
-                        best["card_id"],
+                        ids.card_id(result["best"]["card_id"]),
+                        raw.best.card_def_id,
                     )
 
     def test_every_merged_copy_is_listed(self) -> None:
-        # Two Strikes and two Defends: each pair is one move covering both live copies.
-        live = load("captured/floor2_sludge_spinner_round1")
+        # Strike, Defend, Strike, Defend, Ascender's Bane: not a palindrome, so a hand
+        # read back to front would not pass.
+        live = load("captured/floor4_toadpoles_round1")
+        self.assertEqual(
+            [card["id"] for card in live["hand"]],
+            [
+                "STRIKE_IRONCLAD",
+                "DEFEND_IRONCLAD",
+                "STRIKE_IRONCLAD",
+                "DEFEND_IRONCLAD",
+                "ASCENDERS_BANE",
+            ],
+        )
         result = self.analyze(live)
-        covered = sorted(
-            tuple(stat["hand_indices"])
+        covered = {
+            (stat["card_id"], tuple(stat["hand_indices"]))
             for stat in result["moves"]
             if stat["kind"] == "card"
-        )
-        self.assertEqual(covered, [(0, 4), (1, 3), (2,)])
-
-    def test_a_potion_is_offered_by_its_live_slot(self) -> None:
-        live = load("captured/floor4_toadpoles_round1")
-        result = self.analyze(live)
-        potion = [stat for stat in result["moves"] if stat["kind"] == "potion"]
+        }
         self.assertEqual(
-            [(p["potion_slot"], p["potion_id"]) for p in potion],
-            [(0, "FLEX_POTION")],
+            covered,
+            {("STRIKE_IRONCLAD", (0, 2)), ("DEFEND_IRONCLAD", (1, 3))},
         )
+
+    def test_the_second_identical_potion_is_covered(self) -> None:
+        result = self.analyze(two_flex_potions())
+        potions = [
+            (stat["potion_slot"], stat["potion_slots"], stat["potion_id"])
+            for stat in result["moves"]
+            if stat["kind"] == "potion"
+        ]
+        self.assertEqual(potions, [(0, [0, 1], "FLEX_POTION")])
+
+    def test_the_other_identical_pick_is_covered(self) -> None:
+        # Droplet of Precognition: the Strikes c5 and c6 are screen candidates 1 and 2.
+        live = load("selection/droplet_of_precognition")
+        result = self.analyze(live)
+        strikes = [
+            stat["select_indices"]
+            for stat in result["moves"]
+            if stat["kind"] == "select" and stat["card_id"] == "STRIKE_IRONCLAD"
+        ]
+        self.assertEqual(strikes, [[1, 2]])
 
     def test_every_selection_names_a_live_candidate(self) -> None:
         for path in SELECTIONS:
@@ -812,20 +1134,31 @@ class AnalyzeTests(unittest.TestCase):
             if convert.convert(live).doc["pending_selection"] is None:
                 continue  # the converter could not carry it: no selection to answer
             screen = live["pending_selection"]["candidates"]
+            recording = RecordingSearcher(self.searcher)
             with self.subTest(selection=path.stem):
-                result = self.analyze(live)
+                result = self.analyze(live, recording)
                 self.assertEqual(result["select_mapping_failures"], 0)
                 self.assertIn(result["best"]["kind"], {"select", "skip"})
-                picks = [stat for stat in result["moves"] if stat["kind"] == "select"]
+                raw = recording.results[-1]
+                picks = [
+                    (played, stat)
+                    for played, stat in zip(raw.children, result["moves"], strict=True)
+                    if stat["kind"] == "select"
+                ]
                 self.assertTrue(picks)
-                for stat in picks:
+                for played, stat in picks:
                     chosen = screen[stat["select_index"]]
                     self.assertEqual(
                         (stat["card_id"], stat["card_uid"]),
                         (chosen["id"], chosen["uid"]),
                     )
-                chosen_indices = [stat["select_index"] for stat in picks]
-                self.assertEqual(len(chosen_indices), len(set(chosen_indices)))
+                    self.assertIn(stat["select_index"], stat["select_indices"])
+                    self.assertEqual(
+                        {ids.card_id(screen[i]["id"]) for i in stat["select_indices"]},
+                        {played.card_def_id},
+                    )
+                covered = [i for _, stat in picks for i in stat["select_indices"]]
+                self.assertEqual(len(covered), len(set(covered)))
 
     def test_an_unreliable_position_still_gets_a_best_effort_analysis(self) -> None:
         for name in ("selection/toolbox", "powers"):
@@ -853,33 +1186,73 @@ class AnalyzeTests(unittest.TestCase):
                 self.assertTrue(aimed, "nothing was aimed; the test is vacuous")
                 self.assertEqual({move["target"] for move in aimed}, {alive})
 
-    def test_a_search_warning_about_the_position_makes_it_unreliable(self) -> None:
+    def test_an_unknown_param_is_ignored_with_one_log_line(self) -> None:
         live = load("captured/floor2_sludge_spinner_round1")
-        for warning, reliable in (
-            ("search worker 1 did not answer in time; restarted", True),
+        with self.assertLogs("sts2_gym.live.service", level="WARNING") as logs:
+            result = self.analyze(live, max_sims=10, from_the_future=True)
+        self.assertTrue(result["moves"])
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("from_the_future", logs.output[0])
+        self.assertIn("max_sims", logs.output[0])
+
+
+class WorkerFailureTests(unittest.TestCase):
+    """A worker that fails in the call is how an emulator fault on the position shows."""
+
+    searcher: ClassVar[Any]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.searcher = live_search.ParallelSearcher(
+            workers=2,
+            nice=10,
+            _worker_fn=fail_in_lane_one,
+        )
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.searcher.close()
+
+    def test_a_worker_that_fails_in_the_call_makes_the_analysis_unreliable(
+        self,
+    ) -> None:
+        live = load("captured/floor2_sludge_spinner_round1")
+        svc = service.Service(self.searcher, workers=2, sim_commit="abc1234")
+        with self.assertLogs("live_search", level="ERROR"):
+            answer = strict(
+                svc.handle(request("analyze", {"live": live, **QUICK})) or "",
+            )
+        self.assertTrue(answer["ok"], answer)
+        result = answer["result"]
+        self.assertFalse(result["reliable"])
+        # The pool's own words: a change to them fails here, not silently in the coach.
+        self.assertIn(
+            "search worker 1 failed (RuntimeError: an emulator fault in lane 1)",
+            result["warnings"],
+        )
+        self.assertTrue(result["moves"], "lane 0 searched; its analysis still answers")
+
+    def test_only_the_pools_word_on_itself_leaves_an_analysis_reliable(self) -> None:
+        # The two warnings that say nothing about the position, as the pool words them.
+        source = inspect.getsource(live_search)
+        self.assertIn('"search workers were still restarting"', source)
+        self.assertIn(
+            '"no search chose the merged best move, so the line is that move alone"',
+            source,
+        )
+        for warning, about_the_pool in (
             ("1 of 2 search workers were still restarting", True),
-            ("the emulator has no model for this card", False),
+            (
+                "no search chose the merged best move, so the line is that move alone",
+                True,
+            ),
+            ("search worker 1 did not answer in time; restarted", False),
+            ("search worker 0 died (exit code -11); restarted", False),
+            ("search worker 1 failed (X) and left a combat open; restarted", False),
+            ("anything else a search may say", False),
         ):
             with self.subTest(warning=warning):
-                result = self.analyze(
-                    live,
-                    searcher=WarningSearcher(self.searcher, warning),
-                )
-                self.assertEqual(result["reliable"], reliable)
-                self.assertIn(warning, result["warnings"])
-
-
-class WarningSearcher:
-    """The real search, with one more warning on its result."""
-
-    def __init__(self, inner: Any, warning: str) -> None:
-        self.inner = inner
-        self.warning = warning
-
-    def search(self, doc: dict[str, Any], **params: Any) -> Any:
-        result = self.inner.search(doc, **params)
-        result.warnings = [*result.warnings, self.warning]
-        return result
+                self.assertEqual(service._about_the_pool(warning), about_the_pool)
 
 
 # ── The process ──────────────────────────────────────────────────────────────
@@ -888,15 +1261,22 @@ class WarningSearcher:
 class ProcessTests(unittest.TestCase):
     """`python -m sts2_gym.live.service`, spoken to over its pipes as the coach does."""
 
-    @staticmethod
-    def start() -> subprocess.Popen[bytes]:
+    ENV: ClassVar[dict[str, str]] = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+
+    @classmethod
+    def start(cls, *args: str) -> subprocess.Popen[bytes]:
         # Its own process group, so every process it starts can be found again.
         return subprocess.Popen(
-            [sys.executable, "-m", "sts2_gym.live.service", "--workers", "2"],
+            [
+                sys.executable,
+                *(args or ("-m", "sts2_gym.live.service")),
+                "--workers",
+                "2",
+            ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
+            env=cls.ENV,
             start_new_session=True,
         )
 
@@ -934,7 +1314,7 @@ class ProcessTests(unittest.TestCase):
             return proc.communicate(timeout=30)
         finally:
             if proc.poll() is None:
-                os.killpg(proc.pid, 9)
+                os.killpg(proc.pid, signal.SIGKILL)
                 proc.wait()
 
     def test_health_then_shutdown_exits_zero_with_no_orphans(self) -> None:
@@ -964,6 +1344,26 @@ class ProcessTests(unittest.TestCase):
         self.assertEqual(out, b"", "stdout carries protocol lines only")
         self.assert_no_orphans(proc)
 
+    def test_analyze_round_trip_on_a_captured_position(self) -> None:
+        live = load("captured/floor4_toadpoles_round1")
+        proc = self.start()
+        try:
+            answer = self.send(proc, request("analyze", {"live": live, **QUICK}))
+            self.assertEqual((answer["id"], answer["ok"]), (1, True), answer)
+            result = answer["result"]
+            self.assertEqual(set(result), ANALYSIS_FIELDS)
+            self.assertTrue(result["reliable"])
+            self.assertIn(result["best"]["kind"], {"card", "potion", "end_turn"})
+            self.assertEqual(result["line"][0], result["best"])
+            self.send(proc, request("shutdown", req_id=2))
+            out, err = self.stop(proc)
+        finally:
+            if proc.poll() is None:
+                self.stop(proc)
+        self.assertEqual(proc.returncode, 0, err.decode("utf-8", "replace"))
+        self.assertEqual(out, b"", "stdout carries protocol lines only")
+        self.assert_no_orphans(proc)
+
     def test_stdin_eof_exits_zero_with_no_orphans(self) -> None:
         proc = self.start()
         try:
@@ -975,6 +1375,26 @@ class ProcessTests(unittest.TestCase):
                 self.stop(proc)
         self.assertEqual(proc.returncode, 0, err.decode("utf-8", "replace"))
         self.assertEqual(out, b"")
+        self.assert_no_orphans(proc)
+
+    def test_sigterm_stops_the_pool_with_no_orphans(self) -> None:
+        proc = self.start()
+        try:
+            self.assertTrue(self.send(proc, request("health"))["ok"])
+            self.assertGreaterEqual(len(self.group(proc)), 3)
+            proc.terminate()
+            # Wait before closing stdin, whose EOF would stop it the other way.
+            proc.wait(timeout=30)
+            _, err = self.stop(proc)
+        finally:
+            if proc.poll() is None:
+                self.stop(proc)
+        # 128 + SIGTERM: the handler ran and unwound through the pool's shutdown.
+        self.assertEqual(
+            proc.returncode,
+            128 + signal.SIGTERM,
+            err.decode("utf-8", "replace"),
+        )
         self.assert_no_orphans(proc)
 
     def test_a_bad_line_is_answered_and_the_process_stays_up(self) -> None:
@@ -991,6 +1411,42 @@ class ProcessTests(unittest.TestCase):
                 self.stop(proc)
         self.assertEqual(proc.returncode, 0, err.decode("utf-8", "replace"))
         self.assert_no_orphans(proc)
+
+    def test_output_buffered_before_the_claim_goes_to_stderr(self) -> None:
+        # Anything written to stdout before `main` claims it, and still in the buffer,
+        # must not reach the protocol stream.
+        script = (
+            "print('stray output before the service starts')\n"
+            "import sys\n"
+            "from sts2_gym.live import service\n"
+            "raise SystemExit(service.main(sys.argv[1:]))\n"
+        )
+        proc = self.start("-c", script)
+        try:
+            self.assertTrue(self.send(proc, request("health"))["ok"])
+            self.send(proc, request("shutdown", req_id=2))
+            out, err = self.stop(proc)
+        finally:
+            if proc.poll() is None:
+                self.stop(proc)
+        self.assertEqual(proc.returncode, 0, err.decode("utf-8", "replace"))
+        self.assertEqual(out, b"")
+        self.assertIn(b"stray output before the service starts", err)
+        self.assert_no_orphans(proc)
+
+    def test_importing_the_service_does_not_import_the_search(self) -> None:
+        done = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys, sts2_gym.live.service; print('live_search' in sys.modules)",
+            ],
+            capture_output=True,
+            text=True,
+            env=self.ENV,
+            check=True,
+        )
+        self.assertEqual(done.stdout.strip(), "False")
 
 
 if __name__ == "__main__":
