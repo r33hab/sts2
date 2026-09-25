@@ -104,7 +104,7 @@ correspondence.
 | 10 Treasure                       | 3 only (`RunEngine.cs:836-838`).                                                                                                                                                                                         | **auto** (see 1.5: the chest relic is not modelled).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | `treasure.relics`; `take_chest_relic` (`commands.py:259-262`).                                                                       |
 | 12 BundleSelect                   | 0, 1, and 2 = confirm once one is picked (`RunEngine.cs:773-786`).                                                                                                                                                       | `bundle.pick` per bundle (3 card ids each, list 18). The confirm is **auto**.                                                                                                                                                                                                                                                                                                                                                                                                                                                                | `select_bundle` / `confirm_bundle_selection` (`commands.py:139-142`).                                                                |
 | 11 CrystalSphere, 13 FakeMerchant | Act 2+ events (`scripts/soak_act_one.py:40-50`).                                                                                                                                                                         | Not reachable before the Act 1 boss. If one appears: rules fallback, counted.                                                                                                                                                                                                                                                                                                                                                                                                                                                                | n/a                                                                                                                                  |
-| anything else                     | whatever the mask says                                                                                                                                                                                                   | **unknown**: rules fallback (the lowest legal action), counted by (phase, kind) into `status.json`.                                                                                                                                                                                                                                                                                                                                                                                                                                          | n/a                                                                                                                                  |
+| anything else                     | whatever the mask says                                                                                                                                                                                                   | **unknown**: rules fallback (the lowest legal action), counted by (phase, reason) into `status.json`; the reason is `sel_none`, `purpose_<ordinal>`, `eternal_transform_stopgap` or `unhandled_phase`.                                                                                                                                                                                                                                                                                                                                       | n/a                                                                                                                                  |
 
 The rewards screen, the card screen and card-select screens can nest (Neow's
 Kaleidoscope, Brain Leech, the shop's removal). The engine's phase always names the
@@ -676,6 +676,7 @@ class Option:
 class Decision:
     type: str      # neow map card_reward rewards shop rest event card_select bundle unknown
     options: tuple[Option, ...]
+    view: RunView | None = None   # set when the options index another view (3.7, E3)
 ```
 
 Kinds: `neow.relic`, `map.node`, `card.take`, `card.skip`, `card.sacrifice`,
@@ -690,12 +691,16 @@ the game's chest has one relic. `engine.py` builds these from the engine (1.2), 
 `decision_from_live` builds them from mod screens (3.7). `select.enchant` options are
 always `scorable=False`: enchant targets go to the rules policy (section 4).
 
-`deck_index` always indexes `view.deck` in its sorted order. The engine side maps it back
-to `State.Deck`, whose order the selection screens use (the observation's deck block is in
-`State.Deck` order, `RunConstants.cs:51-58`). The live side maps a grid card to the first
-`view.deck` entry with the same (id, upgraded, enchantment). Options with identical
-afterstates (the five Strikes of a removal screen) are collapsed to one, keeping the
-lowest index.
+`deck_index` always indexes the deck of `decision.view or view` in its sorted order, where
+`view` is the view the decision was built from. `decision.view` is set only when the
+options index another view: a later pick of a multi-card selection, scored on the reduced
+deck (3.7, erratum E3). `score_options(decision, view)` and
+`RulesPolicy.choose(view, decision, rng)` both read `decision.view or view`. The engine
+side maps `deck_index` back to `State.Deck`, whose order the selection screens use (the
+observation's deck block is in `State.Deck` order, `RunConstants.cs:51-58`). The live side
+maps a grid card to the first entry of that deck with the same (id, upgraded,
+enchantment). Options with identical afterstates (the five Strikes of a removal screen)
+are collapsed to one, keeping the lowest index.
 
 **Flattened options** (`shop.remove`, `rest.smith`) take their candidates from the screen
 that follows. `engine.py` steps the screen action (13, or 1) on a **faithful** clone
@@ -922,7 +927,7 @@ other characters before calling `from_live`.
    here is a front-end bug, not an emulator one.
 
    Where the payload does not pin the position, the test asserts `NotReadyError`. Without
-   `run.map_coord`, that is 35% of the fixtures' map moves (3.7). It then repeats the screen
+   `run.map_coord`, that is 37% of the fixtures' map moves (3.7). It then repeats the screen
    with `run.map_coord` injected from the trace's own `choose_map_node`, which is what the
    mod field will carry. At the same screens it builds
    `decision_from_live(tracker.screen(payload), view)` and
@@ -954,6 +959,16 @@ screen, for the tests. `screen` is the settled payload's `state_type` and screen
 coach shows the option without a number (and may show the rules policy's pick, labelled
 as a rule). A screen type the table does not know returns `Decision(type="unknown")`
 with every option unscorable, and the coach counts it.
+
+A screen with nothing to decide returns a decision with **no options**: `type="none"` for
+treasure, combat and game over, `type="unknown"` for a screen outside the table, and a
+decision of the screen's own type for a page that is auto on the engine side (a rewards
+screen holding only gold and card items, an event page whose only option is proceed, a
+rest site's result page, a selection whose picks are made). Callers skip such decisions;
+`RulesPolicy.choose` raises `ValueError("no options: ...")` on one rather than failing on
+an index. At a later pick of a multi-card selection (erratum E3) the cards the mod marks
+`selected` are applied first, the options index that reduced view, and the decision
+carries it as `decision.view` (3.4).
 
 The mod screen fields used, for the screen types the table below builds options from.
 `decision_from_live` does not validate: a `state_type` outside this enum yields
@@ -1085,10 +1100,12 @@ The mod screen fields used, for the screen types the table below builds options 
             "properties": {
               "index": { "type": "integer" },
               "id": { "type": "string" },
-              "is_enabled": { "type": "boolean" }
+              "is_enabled": { "type": "boolean" },
+              "has_button": { "type": "boolean" }
             }
           }
-        }
+        },
+        "can_proceed": { "type": "boolean" }
       }
     },
     "event": {
@@ -1124,7 +1141,9 @@ The mod screen fields used, for the screen types the table below builds options 
         "cards": { "type": "array", "items": { "$ref": "#/$defs/card" } },
         "can_skip": { "type": "boolean" },
         "min_select": { "type": "integer" },
-        "max_select": { "type": "integer" }
+        "max_select": { "type": "integer" },
+        "selected_count": { "type": "integer" },
+        "preview_showing": { "type": "boolean" }
       }
     },
     "bundle_select": {
@@ -1141,7 +1160,8 @@ The mod screen fields used, for the screen types the table below builds options 
               "cards": { "type": "array", "items": { "$ref": "#/$defs/card" } }
             }
           }
-        }
+        },
+        "preview_showing": { "type": "boolean" }
       }
     }
   },
@@ -1160,12 +1180,24 @@ The mod screen fields used, for the screen types the table below builds options 
             "id": { "type": "string" },
             "amount": { "type": "integer" }
           }
-        }
+        },
+        "selected": { "type": "boolean" }
       }
     }
   }
 }
 ```
+
+Beyond the fields listed first, the schema carries visible mod fields that the rows below
+read; each is on the screen the player sees:
+
+- a card's `selected` and the selection's `selected_count` (the picks already made at a
+  multi-card selection, erratum E3);
+- the selection's and the bundle screen's `preview_showing` (the picks are made; only the
+  confirm remains, so there is nothing to decide);
+- a rest option's `has_button` (an option the game holds but draws no button for is not
+  offered) and the rest site's `can_proceed` (true once an option has been taken, which
+  is when leaving becomes an option; 1.2).
 
 How each screen becomes options (field names are the mod's; "unscorable" means
 `scorable=False`):
@@ -1212,8 +1244,10 @@ How each screen becomes options (field names are the mod's; "unscorable" means
   last map screen's `next_options`. That works when only one option was offered, or only
   one option's type matches the room entered (a `?` matches any room). Otherwise the
   tracker raises `NotReadyError` until the next map screen names the position. In the
-  captured runs that happens on 88 of 251 map moves (35%). The inference is exact on the
-  other 163: 133 moves had one option and 30 were unique by room type.
+  captured runs that happens on 92 of 251 map moves (37%). The inference is exact on the
+  other 159: 133 moves had one option and 26 were unique by room type. These are the
+  replay test's counts under the rule as written; an earlier figure of 30 unique moves
+  (163 inferred) could not be reproduced from it.
 
 **Not buildable from live payloads**, collected from the table: transform targets and
 the upgraded flag (unscorable unless the source is known to be a plain random transform),
@@ -1535,7 +1569,7 @@ values, so the first generation after the change trains on its own runs only (2.
 runs_this_generation, games_played_total, runs_per_hour, champion {generation,
 checkpoint, eval {mean_floor, ci95, boss_kill_rate, wilson95, mean_value},
 selfplay_boss_kill_rate, W, eval_meta}, last_challenger {the same fields, promoted,
-rolled_back, guard {n01, n10}}, excluded_eval_seeds, unknown_decisions {"phase/kind":
+rolled_back, guard {n01, n10}}, excluded_eval_seeds, unknown_decisions {"phase/reason":
 count}, forced_skips, worker_restarts, quarantined_seeds {"encounter": count},
 combat_budget, ascension, budget_check (2.7), last_update (ISO 8601, UTC).
 
@@ -1754,7 +1788,7 @@ plus the multiprocess runner. The other changes follow from sections 1-6:
   - the live side gains `decision_from_live`, `LiveRunTracker` and two JSON Schemas
     (3.5, 3.7).
 - **A mod field the live side needs:** `run.map_coord` on every payload (3.7), requested
-  from the mod plan. Until it lands, the coach shows "not ready" on the 35% of rooms whose
+  from the mod plan. Until it lands, the coach shows "not ready" on the 37% of rooms whose
   node it cannot infer. Optional: `map` on every payload, which would let the coach score
   Neow (3.1).
 

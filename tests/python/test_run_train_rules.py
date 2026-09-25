@@ -18,10 +18,10 @@ sys.path.insert(0, str(ROOT / "rl"))
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import combat_mcts  # noqa: E402
+import combat_mcts  # noqa: E402  # ty: ignore[unresolved-import] -- rl/ is on sys.path
 from test_run_train_features import make_view  # noqa: E402
 
-from rl.run_train import engine, rules, seeding, vocab  # noqa: E402
+from rl.run_train import rules, seeding, vocab  # noqa: E402
 from rl.run_train.engine import CombatBudget, RunSession  # noqa: E402
 from rl.run_train.features import CardRef, Decision, Option  # noqa: E402
 from sts2_gym import run_constants as rc  # noqa: E402
@@ -371,6 +371,50 @@ class UnscorableOptionTests(unittest.TestCase):
         )
 
 
+class CountedFallbackTests(unittest.TestCase):
+    """A choice the rules can only make by falling back is counted (Review Focus 5)."""
+
+    def test_neow_and_bundle_without_slot_zero_fall_back_counted(self):
+        for decision in (
+            Decision(
+                "neow",
+                tuple(Option("neow.relic", i, relic=r) for i, r in ((1, 5), (2, 6))),
+            ),
+            Decision(
+                "bundle",
+                (Option("bundle.pick", 1, cards=(CardRef(INFLAME, False),) * 3),),
+            ),
+        ):
+            with self.subTest(decision=decision.type):
+                policy = rules.RulesPolicy()
+                index = policy.choose(make_view(), decision, None)
+                self.assertEqual(decision.options[index].action, 1)  # the lowest action
+                self.assertEqual(policy.stats.fallbacks[decision.type], 1)
+
+    def test_an_unknown_rest_option_falls_back_counted(self):
+        # A live rest site with an option the contract does not know (MEND, say) and
+        # nothing the rules want: the pick is the counted fallback, never silent.
+        policy = rules.RulesPolicy()
+        decision = Decision(
+            "rest",
+            (Option("unknown", 3, scorable=False), Option("rest.leave", 5)),
+        )
+        index = policy.choose(make_view(), decision, None)
+        self.assertEqual(decision.options[index].action, 3)
+        self.assertEqual(policy.stats.fallbacks["rest"], 1)
+        # A known option is still taken without falling back.
+        decision = Decision(
+            "rest",
+            (Option("unknown", 0, scorable=False), Option("rest.lift", 4)),
+        )
+        policy = rules.RulesPolicy()
+        self.assertEqual(
+            decision.options[policy.choose(make_view(), decision, None)].kind,
+            "rest.lift",
+        )
+        self.assertEqual(dict(policy.stats.fallbacks), {})
+
+
 class BundleAndUnknownTests(unittest.TestCase):
     def test_bundle_zero(self):
         decision = Decision(
@@ -381,6 +425,14 @@ class BundleAndUnknownTests(unittest.TestCase):
             ),
         )
         self.assertEqual(choose(decision).action, 0)
+
+    def test_a_decision_without_options_is_refused_clearly(self):
+        # decision_from_live returns option-less decisions for screens with nothing to
+        # decide; callers skip them, and the rules say so rather than failing on an index.
+        policy = rules.RulesPolicy()
+        for decision_type in ("none", "unknown", "rewards"):
+            with self.assertRaisesRegex(ValueError, "no options"):
+                policy.choose(make_view(), Decision(decision_type, ()), None)
 
     def test_unknown_takes_the_lowest_legal_action_and_counts_it(self):
         policy = rules.RulesPolicy()
@@ -429,14 +481,6 @@ class WholeRunTests(unittest.TestCase):
                     self.assertGreater(session.floor, 1)
                 finally:
                     session.close()
-
-
-class EngineAutoTreasureTests(unittest.TestCase):
-    def test_rf1_chest_relic(self):
-        self.assertEqual(
-            engine.treasure_action([engine.TREASURE_TAKE_RELIC_ACTION, 3]),
-            0,
-        )
 
 
 if __name__ == "__main__":

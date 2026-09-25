@@ -59,7 +59,6 @@ import sys
 import time
 from collections import Counter
 from dataclasses import asdict, dataclass, field
-from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -72,6 +71,7 @@ sys.path.insert(0, str(_RL.parent / "src"))
 import combat_mcts  # noqa: E402
 
 from run_train.engine import new_run_env  # noqa: E402
+from run_train.rules import card_scores, removal_score, upgrade_score  # noqa: E402
 from run_train.seeding import MAX_SIMS, RUN_STEP_CAP, run_streams  # noqa: E402
 from sts2_gym import names, native  # noqa: E402
 from sts2_gym import run_constants as rc  # noqa: E402
@@ -194,81 +194,6 @@ class RunCombat:
 # --------------------------------------------------------------------------------------
 # The rules policy
 # --------------------------------------------------------------------------------------
-
-
-def _names(text: str) -> tuple[str, ...]:
-    """Card class names, written as one space-separated string so the table stays short."""
-    return tuple(text.split())
-
-
-# Hand-picked from the Ironclad pool by what a card does, 0 (never take) to 5 (always).
-# A baseline has to be reasonable, not good: the point is runs of realistic length.
-_IRONCLAD_TIERS = {
-    5: _names("Inflame DemonForm Offering Feed BattleTrance ShrugItOff"),
-    4: _names(
-        "PommelStrike Uppercut Whirlwind Hemokinesis Impervious FlameBarrier "
-        "FeelNoPain DarkEmbrace Bludgeon Thunderclap Headbutt Cinder Stomp "
-        "Unrelenting Rupture Aggression Brand Mangle PactsEnd Corruption Break",
-    ),
-    3: _names(
-        "TwinStrike IronWave Anger MoltenFist Breakthrough SetupStrike Rampage "
-        "Dismantle EvilEye SecondWind BurningPact TrueGrit Armaments BloodWall "
-        "Bloodletting Dominate DrumOfBattle Colossus Taunt Spite Pillage "
-        "FightMe HowlFromBeyond Inferno StoneArmor Juggernaut Tank Cruelty "
-        "Hellraiser FiendFire TearAsunder Thrash Conflagration OneTwoPunch "
-        "Stoke PrimalForce NotYet Pyre CrimsonMantle Vicious Stampede Juggling "
-        "InfernalBlade ExpectAFight DemonicShield Rage ForgottenRitual "
-        "AshenStrike Bully Cascade Unmovable",
-    ),
-    2: _names("SwordBoomerang PerfectedStrike BodySlam Tremble Barricade"),
-    1: _names("Havoc StrikeIronclad DefendIronclad Bash"),
-}
-_RARITY_DEFAULT = {"Rare": 3.0, "Uncommon": 2.5, "Common": 2.0, "Ancient": 3.0}
-_BAD_TYPES = ("Curse", "Status", "Quest")
-
-
-@cache
-def card_scores() -> dict[int, float]:
-    """Card id -> how much the rules policy wants it."""
-    by_name = {info.name: cid for cid, info in names.cards().items()}
-    scores: dict[int, float] = {}
-    for cid, info in names.cards().items():
-        if info.card_type in _BAD_TYPES:
-            scores[cid] = -5.0
-        else:
-            scores[cid] = _RARITY_DEFAULT.get(info.rarity, 1.0) - 0.5
-    for tier, card_names in _IRONCLAD_TIERS.items():
-        for name in card_names:
-            if name in by_name:
-                scores[by_name[name]] = float(tier)
-    return scores
-
-
-def _upgrade_score(card_id: int) -> float:
-    """How much upgrading this card is worth to the rules policy. Bash first."""
-    info = names.cards().get(card_id)
-    if info is None:
-        return 0.0
-    if info.name == "Bash":
-        return 6.0
-    base = card_scores().get(card_id, 0.0)
-    if info.name in {"StrikeIronclad", "DefendIronclad"}:
-        return 0.5
-    return base
-
-
-def _removal_score(card_id: int) -> float:
-    """How much removing this card is worth. Curses, then Strikes, then Defends."""
-    info = names.cards().get(card_id)
-    if info is None:
-        return 0.0
-    if info.card_type in _BAD_TYPES:
-        return 10.0
-    if info.name == "StrikeIronclad":
-        return 5.0
-    if info.name == "DefendIronclad":
-        return 4.0
-    return 3.0 - card_scores().get(card_id, 0.0)
 
 
 @dataclass
@@ -465,7 +390,7 @@ class RulesPolicy:
             return abs(int(deck[a])) if a < len(deck) else 0
 
         if rest_upgrade or kind == SEL_UPGRADE:
-            return max(legal, key=lambda a: (_upgrade_score(card(a)), -a))
+            return max(legal, key=lambda a: (upgrade_score(card(a)), -a))
         if kind in {
             SEL_REMOVE,
             SEL_REMOVE_UPGRADABLE,
@@ -475,7 +400,7 @@ class RulesPolicy:
             SEL_TRANSFORM_TO_RANDOM,
             SEL_TRANSFORM_TO_RANDOM_UPGRADED,
         }:
-            return max(legal, key=lambda a: (_removal_score(card(a)), -a))
+            return max(legal, key=lambda a: (removal_score(card(a)), -a))
         # Enchant, duplicate and anything newer: the card the policy likes best.
         return max(legal, key=lambda a: (card_scores().get(card(a), 0.0), -a))
 

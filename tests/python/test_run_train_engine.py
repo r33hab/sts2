@@ -9,6 +9,7 @@ import re
 import sys
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 import numpy as np
@@ -18,10 +19,11 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "rl"))
 sys.path.insert(0, str(ROOT / "src"))
 
-import combat_mcts  # noqa: E402
+import combat_mcts  # noqa: E402  # ty: ignore[unresolved-import] -- rl/ is on sys.path
 
 from rl.run_train import engine, features, rules, seeding, vocab  # noqa: E402
 from rl.run_train.engine import CombatBudget, RunSession  # noqa: E402
+from rl.run_train.features import Decision  # noqa: E402
 from sts2_gym import native  # noqa: E402
 from sts2_gym import run_constants as rc  # noqa: E402
 
@@ -70,6 +72,19 @@ def play_combat(session: RunSession, sims: int, rng, move: list[int]) -> None:
         move[0] += 1
 
 
+def deck_card(view, option) -> features.CardRef:
+    """Return the deck card an option names, which the caller expects it to name."""
+    assert option.deck_index is not None, option
+    return view.deck[option.deck_index]
+
+
+def next_decision(session: RunSession) -> Decision:
+    """Return the session's next decision, which the caller expects to exist."""
+    decision = session.decision()
+    assert decision is not None, session.info
+    return decision
+
+
 def drive_until(
     seed: str,
     predicate,
@@ -77,7 +92,7 @@ def drive_until(
     sims: int = 5,
     max_steps: int = 3000,
     prefer_node: int | None = None,
-):
+) -> RunSession | None:
     """Advance a rules-policy session until `predicate(session, decision)` holds.
 
     `prefer_node` steers the map toward that node type and gives the run 999 HP
@@ -88,7 +103,7 @@ def drive_until(
     session = RunSession(seed, ascension=A8, budget=CombatBudget(sims, sims))
     if prefer_node is not None:
         native.run_debug_set_hp(
-            session.env._run_handle,
+            session.handle,
             999,
             999,
             session.env._run_obs_buf,
@@ -109,7 +124,9 @@ def drive_until(
         index = policy.choose(session.view(), decision, explore)
         if decision.type == "map" and prefer_node is not None:
             preferred = [
-                i for i, o in enumerate(decision.options) if o.node[2] == prefer_node
+                i
+                for i, o in enumerate(decision.options)
+                if o.node is not None and o.node[2] == prefer_node
             ]
             index = preferred[0] if preferred else index
         session.apply(decision.options[index])
@@ -290,13 +307,13 @@ class SessionTests(unittest.TestCase):
     def test_the_run_opens_on_neows_three_relics(self):
         session = RunSession("NEOW0001", ascension=A8)
         try:
-            decision = session.decision()
+            decision = next_decision(session)
             self.assertEqual(decision.type, "neow")
             self.assertEqual([o.kind for o in decision.options], ["neow.relic"] * 3)
             self.assertEqual([o.action for o in decision.options], [0, 1, 2])
             self.assertEqual(
                 tuple(o.relic for o in decision.options),
-                native.run_state_list(session.env._run_handle, 3, 3),
+                native.run_state_list(session.handle, 3, 3),
             )
             self.assertEqual(session.info["phase"], rc.PHASE_ANCIENT)
         finally:
@@ -308,28 +325,27 @@ class SessionTests(unittest.TestCase):
         for seed in ("NEOW0001", "NEOW0002", "NEOW0003"):
             session = RunSession(seed, ascension=A8)
             try:
-                decision = session.decision()
-                session.apply(decision.options[0])
+                session.apply(next_decision(session).options[0])
                 for _ in range(20):
-                    decision = session.decision()
-                    if decision is None or decision.type == "map":
+                    decision = next_decision(session)
+                    if decision.type == "map":
                         break
                     self.assertNotEqual(decision.type, "neow")
                     session.apply(decision.options[0])
-                self.assertIsNotNone(decision)
                 self.assertEqual(decision.type, "map")
             finally:
                 session.close()
 
     def test_a_map_decision_names_the_nodes(self):
         session = drive_until("MAPS0001", lambda _s, d: d.type == "map")
-        self.assertIsNotNone(session)
+        assert session is not None
         try:
-            decision = session.decision()
+            decision = next_decision(session)
             view = session.view()
             nodes = {(n.col, n.row): n for n in view.map_nodes}
             here = nodes[view.position]
             for opt in decision.options:
+                assert opt.node is not None
                 col, row, node_type = opt.node
                 self.assertIn((col, row), here.children)
                 self.assertEqual(nodes[col, row].node_type, node_type)
@@ -342,7 +358,7 @@ class SessionTests(unittest.TestCase):
             policy = rules.RulesPolicy()
             rng = np.random.default_rng(0)
             while session.phase != rc.PHASE_COMBAT:
-                decision = session.decision()
+                decision = next_decision(session)
                 session.apply(
                     decision.options[policy.choose(session.view(), decision, rng)],
                 )
@@ -357,9 +373,40 @@ class SessionTests(unittest.TestCase):
             session.close()
 
 
+class UnknownDecisionTests(unittest.TestCase):
+    def test_an_unknown_decision_is_counted_under_its_reason(self):
+        # Each unknown screen names why (a purpose ordinal, `sel_none`, the Eternal
+        # transform stopgap, an unhandled phase), so status.json can bucket the rates.
+        session = RunSession("UNKNOWN1", ascension=A8)
+        real = engine._read_screen
+        calls = []
+
+        def unknown_first(*args: Any) -> engine._Screen:
+            calls.append(args)
+            if len(calls) == 1:
+                return engine._unknown_screen([0], "purpose_42")
+            return real(*args)
+
+        try:
+            with mock.patch.object(engine, "_read_screen", unknown_first):
+                decision = next_decision(session)
+                self.assertEqual(decision.type, "unknown")
+                self.assertEqual([o.scorable for o in decision.options], [False])
+                session.apply(decision.options[0])
+            self.assertEqual(
+                dict(session.stats.unknown_decisions),
+                {f"{rc.PHASE_ANCIENT}/purpose_42": 1},
+            )
+        finally:
+            session.close()
+
+
 class FlattenedOptionTests(unittest.TestCase):
-    def assert_enumeration_leaves_the_run_unchanged(self, session: RunSession) -> None:
-        handle = session.env._run_handle
+    def assert_enumeration_leaves_the_run_unchanged(
+        self,
+        session: RunSession,
+    ) -> Decision:
+        handle = session.handle
         before = (
             native.run_phase(handle),
             np.array(native.run_action_mask(handle, native.RUN_MAX_ACTIONS)),
@@ -377,6 +424,7 @@ class FlattenedOptionTests(unittest.TestCase):
         np.testing.assert_array_equal(before[1], after[1])
         np.testing.assert_array_equal(before[2], after[2])
         self.assertEqual(before[3], after[3])
+        assert decision is not None
         return decision
 
     def test_the_smith_follow_up_is_read_on_a_faithful_clone(self):
@@ -394,7 +442,7 @@ class FlattenedOptionTests(unittest.TestCase):
                 upgradable = {
                     c for c in view.deck if vocab.card_upgradable(c.card_id, c.upgraded)
                 }
-                self.assertEqual({view.deck[o.deck_index] for o in smiths}, upgradable)
+                self.assertEqual({deck_card(view, o) for o in smiths}, upgradable)
                 self.assertEqual(
                     len(smiths),
                     len(upgradable),
@@ -402,12 +450,27 @@ class FlattenedOptionTests(unittest.TestCase):
                 for o in smiths:
                     self.assertEqual(
                         o.deck_index,
-                        view.deck.index(view.deck[o.deck_index]),
+                        view.deck.index(deck_card(view, o)),
                     )
                 return
             finally:
                 session.close()
         self.fail("no seed reached a rest site")
+
+    def test_a_card_the_follow_up_screen_does_not_offer_is_a_clear_error(self):
+        session = drive_until(
+            "REST0001",
+            lambda _s, d: any(o.kind == "rest.smith" for o in d.options),
+            prefer_node=vocab.NODE_REST,
+        )
+        assert session is not None
+        try:
+            view = session.view()
+            bane = view.deck.index(features.CardRef(10001, False))  # never upgradable
+            with self.assertRaisesRegex(RuntimeError, r"10001.*phase 9"):
+                session.apply(features.Option("rest.smith", 1, deck_index=bane))
+        finally:
+            session.close()
 
     def test_the_removal_follow_up_is_read_on_a_faithful_clone(self):
         for seed in (
@@ -430,7 +493,7 @@ class FlattenedOptionTests(unittest.TestCase):
                 removals = [o for o in decision.options if o.kind == "shop.remove"]
                 view = session.view()
                 removable = {c for c in view.deck if vocab.card_removable(c.card_id)}
-                self.assertEqual({view.deck[o.deck_index] for o in removals}, removable)
+                self.assertEqual({deck_card(view, o) for o in removals}, removable)
                 self.assertNotIn(
                     features.CardRef(10001, False),
                     removable,
@@ -448,7 +511,7 @@ class RunCombatTests(unittest.TestCase):
         policy = rules.RulesPolicy()
         rng = np.random.default_rng(0)
         while session.phase != rc.PHASE_COMBAT:
-            decision = session.decision()
+            decision = next_decision(session)
             session.apply(
                 decision.options[policy.choose(session.view(), decision, rng)],
             )
@@ -456,13 +519,13 @@ class RunCombatTests(unittest.TestCase):
 
     def step_and_check(self, session: RunSession, combat, action: int) -> None:
         combat.step(action)
-        left = native.run_phase(session.env._run_handle) != rc.PHASE_COMBAT
+        left = native.run_phase(session.handle) != rc.PHASE_COMBAT
         self.assertEqual(combat.done, left)
 
     def test_done_flips_when_a_won_fight_leaves_combat(self):
         session = self.reach_first_fight("RCWIN001")
         try:
-            handle = session.env._run_handle
+            handle = session.handle
             native.run_debug_set_hp(handle, 999, 999, session.env._run_obs_buf)
             combat = session.combat()
             rng = np.random.default_rng(1)
@@ -486,7 +549,7 @@ class RunCombatTests(unittest.TestCase):
     def test_done_flips_when_a_lost_fight_ends_the_run(self):
         session = self.reach_first_fight("RCLOSE01")
         try:
-            handle = session.env._run_handle
+            handle = session.handle
             native.run_debug_set_hp(handle, 1, 80, session.env._run_obs_buf)
             combat = session.combat()
             for _ in range(combat_mcts.STEP_CAP):
@@ -514,7 +577,7 @@ class RunCombatTests(unittest.TestCase):
             self.assertEqual((combat.hp(), combat.legal()), before)
             child.close()
             combat.close()  # the session's own handle: a no-op
-            self.assertEqual(native.run_phase(session.env._run_handle), rc.PHASE_COMBAT)
+            self.assertEqual(native.run_phase(session.handle), rc.PHASE_COMBAT)
         finally:
             session.close()
 

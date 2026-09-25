@@ -24,10 +24,11 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-import replay_full_run_trace as replay  # noqa: E402
+import replay_full_run_trace as replay  # noqa: E402  # ty: ignore[unresolved-import] -- scripts/ is on sys.path
 
 from rl.run_train import engine, features, vocab  # noqa: E402
 from rl.run_train.features import NotReadyError  # noqa: E402
+from sts2_gym import native  # noqa: E402
 from sts2_gym.commands import peek_deferred_selection  # noqa: E402
 
 FIXTURES = sorted((ROOT / "tests" / "fixtures" / "run_trace").glob("*.json"))
@@ -85,7 +86,9 @@ class _Fixture:
         self.last_options: list[dict] = []
         self.coord: dict | None = None
         self.seen_map = False
-        self.engine_event_step = 0
+        # The session's own per-visit bookkeeping, driven by the captured actions.
+        self.visit = engine.VisitTracker()
+        self.moves: list[dict] = []  # one per map move: what the plain tracker knew
         self.previous_payload: dict | None = None
         self.records: list[dict] = []
 
@@ -102,25 +105,24 @@ class _Fixture:
         payload = step.get("raw_state") or {}
         action = step.get("action") or {}
         previous = self.previous_payload or {}
-        if action.get("action") == "choose_map_node" and self.last_options:
+        moved = action.get("action") == "choose_map_node" and bool(self.last_options)
+        if moved:
             choice = self.last_options[int(action.get("index", 0))]
             self.coord = {"col": choice["col"], "row": choice["row"]}
-        if (
-            action.get("action") == "choose_event_option"
-            and previous.get("state_type") == "event"
-            and not (previous.get("event") or {}).get("is_ancient")
-        ):
-            self.engine_event_step += 1
+        kind = _option_kind(action, previous)
+        if kind is not None:
+            self.visit.took(kind)
+        if env is not None:
+            handle = env._run_handle
+            self.visit.see(native.run_phase(handle), int(native.run_info(handle)[9]))
         state_type = payload.get("state_type")
-        if state_type == "map" or (payload.get("run") or {}).get("floor") != (
-            previous.get("run") or {}
-        ).get("floor"):
-            self.engine_event_step = 0
         injected = copy.deepcopy(payload)
         if self.coord is not None and "run" in injected:
             injected["run"]["map_coord"] = dict(self.coord)
         self.plain.update(payload)
         self.injected.update(injected)
+        if moved:
+            self.moves.append(_move(self.last_options, state_type, self.plain, payload))
         if state_type == "map":
             self.seen_map = True
             self.last_options = list(payload["map"].get("next_options") or ())
@@ -180,25 +182,73 @@ class _Fixture:
         )
         if record["same_screen"]:
             screen = self.injected.screen(injected)
-            scored_view = features.view_for_screen(screen, live_view)
             live_decision = features.decision_from_live(screen, live_view)
+            # The ruling on E3: a decision's deck indices index `decision.view or view`.
+            scored_view = live_decision.view or live_view
             engine_decision = engine.decision_of(
                 env,
                 self.ascension,
-                event_step=self.engine_event_step,
+                event_step=self.visit.event_step,
+                rest_option_taken=self.visit.rest_option_taken,
             )
             # Kinds the live screen could build none of are left out on the engine side.
             excluded = {o.kind for o in live_decision.options if not o.scorable} - {
                 o.kind for o in live_decision.options if o.scorable
             }
-            mask = not record["has_enchantments"]
+            # Erratum E2: only where the engine's deck is enchanted and the payload
+            # cannot say so is D's enchanted count masked; everywhere else the two sides
+            # are held to equal multisets (E1).
+            mask = record["engine_enchanted"] and not record["has_enchantments"]
+            record["masked"] = mask
             record["decisions"] = (live_decision, engine_decision)
             record["afterstates"] = (
                 _afterstates(scored_view, live_decision, set(), mask),
                 _afterstates(engine_view, engine_decision, excluded, mask),
             )
-            record["event_steps"] = (screen.get("event_step"), self.engine_event_step)
+            record["event_steps"] = (screen.get("event_step"), self.visit.event_step)
+            if payload.get("state_type") == "rest_site":
+                record["rest_taken"] = (
+                    bool(payload["rest_site"].get("can_proceed")),
+                    self.visit.rest_option_taken,
+                )
         return record
+
+
+def _option_kind(action: dict, previous: dict) -> str | None:
+    """Return the engine option kind a captured action took, or None for an auto step.
+
+    A map move, an event option that is not a proceed (the finished page is auto on the
+    engine side), and a rest option are what `RunSession.apply` reports to its tracker.
+    """
+    name = action.get("action")
+    if name == "choose_map_node":
+        return "map.node"
+    index = action.get("index")
+    if name == "choose_event_option" and previous.get("state_type") == "event":
+        event = previous.get("event") or {}
+        chosen = [o for o in event.get("options") or () if o.get("index") == index]
+        if not event.get("is_ancient") and chosen and not chosen[0].get("is_proceed"):
+            return "event.option"
+    if name == "choose_rest_option" and previous.get("state_type") == "rest_site":
+        chosen = [
+            o
+            for o in previous["rest_site"].get("options") or ()
+            if o.get("index") == index
+        ]
+        if chosen and chosen[0].get("id") in vocab.REST_OPTIONS:
+            return vocab.REST_OPTIONS[chosen[0]["id"]][0]
+    return None
+
+
+def _move(options: list[dict], state_type: str | None, plain, payload: dict) -> dict:
+    """Record what the plain tracker (no `run.map_coord`) knew after a map move."""
+    room = features._ROOM_OF_STATE.get(str(state_type))
+    matching = [o for o in options if o.get("type") in {room, "Unknown"}]
+    return {
+        "ready": _ready(plain, payload),
+        "single": len(options) == 1,
+        "unique_by_type": len(options) > 1 and len(matching) == 1,
+    }
 
 
 def _ready(tracker, payload) -> bool:
@@ -299,22 +349,33 @@ class ReplayAgreementTests(unittest.TestCase):
         self.assertEqual(compared, 958)
 
     def test_without_map_coord_the_position_is_inferred_exactly_or_not_at_all(self):
-        # DESIGN.md 3.7: 163 of the 251 map moves pin the node; the rest wait for the next
-        # map screen. Wherever the plain tracker is ready it agrees with the injected one.
-        waiting = 0
+        # DESIGN.md 3.7: without `run.map_coord` the tracker pins the node entered when one
+        # option was offered, or one option's type matches the room (a `?` matches any);
+        # otherwise it waits for the next map screen. Wherever it is ready it agrees with
+        # the injected position.
+        moves = Counter()
         for fixture in replayed():
+            for move in fixture.moves:
+                moves["moves"] += 1
+                if not move["ready"]:
+                    moves["waiting"] += 1
+                else:
+                    moves["single" if move["single"] else "unique_by_type"] += 1
+                    self.assertTrue(move["single"] or move["unique_by_type"])
             for record in fixture.records:
-                if record["kind"] != "compared":
-                    continue
-                if record["plain_view"] is None:
-                    waiting += 1
-                    continue
-                self.assertEqual(
-                    record["plain_view"].position,
-                    record["views"][1].position,
-                    (fixture.path.name, record["step"]),
-                )
-        self.assertGreater(waiting, 0)
+                if record["kind"] == "compared" and record["plain_view"] is not None:
+                    self.assertEqual(
+                        record["plain_view"].position,
+                        record["views"][1].position,
+                        (fixture.path.name, record["step"]),
+                    )
+        # The rule as written pins 159 of 251 moves: 133 with one option and 26 unique by
+        # type. DESIGN.md first said 163 (30 unique); that figure could not be reproduced
+        # from the rule, and 3.7 now carries these counts.
+        self.assertEqual(
+            dict(moves),
+            {"moves": 251, "waiting": 92, "single": 133, "unique_by_type": 26},
+        )
 
     def test_decisions_agree_as_equal_multisets_of_afterstates(self):
         # Erratum E1: equal multisets, so an extra option on either side fails. Kinds the
@@ -323,24 +384,32 @@ class ReplayAgreementTests(unittest.TestCase):
         # count is masked (the engine's deck carries one after an enchant, the fixture's
         # cannot).
         compared = 0
+        strict = 0
         masked = Counter()
+        post_enchant = set()
         for fixture in replayed():
             for record in fixture.records:
                 if record["kind"] == "compared" and record["engine_enchanted"]:
                     self.assertFalse(
                         record["has_enchantments"],
-                    )  # no fixture carries them
-                    masked[fixture.path.name] += 1
+                    )  # none of them carry it
+                    post_enchant.add((fixture.path.name, record["step"]))
                 if "afterstates" not in record:
                     continue
                 live, eng = record["afterstates"]
                 where = (fixture.path.name, record["step"], record["state_type"])
                 self.assertEqual(live, eng, (where, record["decisions"]))
                 compared += 1
+                if record["masked"]:
+                    masked[fixture.path.name] += 1
+                    post_enchant.discard((fixture.path.name, record["step"]))
+                else:
+                    strict += 1
         # Every compared screen but the 4 card-select screens after a click (the replay's
         # held selection, above).
         self.assertEqual(compared, 954)
-        # Erratum E2: 44 compared screens after an enchant, in these three fixtures.
+        # Erratum E2: the mask is applied on exactly the 44 compared screens after an
+        # enchant, in these three fixtures, and on no other screen.
         self.assertEqual(
             dict(masked),
             {
@@ -349,9 +418,13 @@ class ReplayAgreementTests(unittest.TestCase):
                 "ZY1E5128P6-a8-scrollboxes.json": 5,
             },
         )
+        self.assertEqual(post_enchant, set())  # every post-enchant screen was masked
+        self.assertEqual(strict, 910)
 
     def test_event_steps_agree_on_every_captured_event(self):
-        checked = 0
+        # The session's own page count (`VisitTracker`, driven by the captured actions)
+        # against the live tracker's, on every event page that is a decision.
+        pages = visits = 0
         for fixture in replayed():
             for record in fixture.records:
                 if "event_steps" not in record or record["state_type"] != "event":
@@ -359,14 +432,34 @@ class ReplayAgreementTests(unittest.TestCase):
                 live_decision, _ = record["decisions"]
                 if live_decision.type != "event" or not live_decision.options:
                     continue
-                live_step, engine_step = record["event_steps"]
+                live_step, session_step = record["event_steps"]
                 self.assertEqual(
                     live_step,
-                    engine_step,
+                    session_step,
                     (fixture.path.name, record["step"]),
                 )
-                checked += 1
-        self.assertGreater(checked, 20)
+                pages += 1
+                visits += live_step == 0
+        # 21 visits here; with the 2 in QS2GYXRKWN-a8's screens captured before the mod
+        # sent `player.deck` (not compared), the 23 of DESIGN.md 3.7.
+        self.assertEqual((pages, visits), (44, 21))
+
+    def test_the_session_tracks_rest_sites_as_the_game_does(self):
+        # `VisitTracker.rest_option_taken` against the game's own signal: a rest site's
+        # `can_proceed` turns true once an option has been taken.
+        seen = Counter()
+        for fixture in replayed():
+            for record in fixture.records:
+                if "rest_taken" not in record:
+                    continue
+                live_taken, session_taken = record["rest_taken"]
+                self.assertEqual(
+                    live_taken,
+                    session_taken,
+                    (fixture.path.name, record["step"]),
+                )
+                seen["taken" if live_taken else "fresh"] += 1
+        self.assertEqual(dict(seen), {"fresh": 26, "taken": 26})
 
 
 class FixtureSchemaTests(unittest.TestCase):
@@ -434,7 +527,7 @@ class NameMatchingTests(unittest.TestCase):
                     relic_id = vocab.relic_id_by_display().get(
                         vocab.normalize_display(name),
                     )
-                    self.assertIsNotNone(relic_id, (path.name, step["step"], name))
+                    assert relic_id is not None, (path.name, step["step"], name)
                     occurrences += 1
                     distinct.add(relic_id)
                     if index == chosen:
@@ -576,6 +669,7 @@ class TwoCardRemovalTests(unittest.TestCase):
                 select["min_select"] = select["max_select"] = 2
                 tracker.update(raw)
                 held = peek_deferred_selection(env)
+                assert held is not None  # the first click is held until the confirm
                 clone = env.clone(resample_hidden=False)
                 try:
                     clone.step(held[0])  # the engine applies the first pick at once
@@ -592,10 +686,12 @@ class TwoCardRemovalTests(unittest.TestCase):
         replay.replay_trace(payload, emulator_seed=payload["seed"], observer=observe)
         self.assertIn("screen", seen)
         live_view = seen["live_view"]
-        reduced = features.view_for_screen(seen["screen"], live_view)
+        live_decision = features.decision_from_live(seen["screen"], live_view)
+        reduced = live_decision.view
+        assert reduced is not None
+        self.assertEqual(reduced, features.view_for_screen(seen["screen"], live_view))
         self.assertEqual(len(reduced.deck), len(live_view.deck) - 1)
         self.assertEqual(_deck_multiset(reduced), _deck_multiset(seen["engine_view"]))
-        live_decision = features.decision_from_live(seen["screen"], live_view)
         self.assertTrue(live_decision.options)
         self.assertTrue(
             all(

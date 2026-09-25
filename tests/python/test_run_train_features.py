@@ -5,6 +5,7 @@ DESIGN.md 3.2-3.4 and section 4. Expected numbers come from the design's layout 
 code under test.
 """
 
+import ast
 import math
 import re
 import sys
@@ -73,7 +74,7 @@ SMALL_MAP = (
 
 
 def make_view(**overrides: Any) -> RunView:
-    fields = {
+    fields: dict[str, Any] = {
         "ascension": 8,
         "act_index": 0,
         "act_region": vocab.REGION_OVERGROWTH,
@@ -778,21 +779,67 @@ class FightBlockTests(unittest.TestCase):
 
 
 class HiddenInformationTests(unittest.TestCase):
-    def test_features_never_reads_the_hidden_state_lists(self):
-        # DESIGN.md 1.1: lists 11-13 are the future encounter and event sequences, and
-        # `_info()["encounter_id"]` names a fight before it has started.
-        for path in (
-            ROOT / "rl" / "run_train" / "features.py",
-            ROOT / "rl" / "run_train" / "engine.py",
-        ):
-            text = path.read_text(encoding="utf-8")
-            self.assertIsNone(
-                re.search(r"run_state_list\(\s*[^,()]+,\s*(11|12|13)\b", text),
-                path.name,
-            )
-            self.assertNotIn('encounter_id"]', text, path.name)
-            self.assertNotIn("._info(", text, path.name)
-            self.assertNotIn("_sequence", text.lower(), path.name)
+    """DESIGN.md 1.1: the feature code reads only what the game shows the player.
+
+    State lists 11-13 are the future encounter and event sequences, `_info()`'s
+    `encounter_id` names a fight before it starts, and no random stream is the player's to
+    read. Every state list the two modules read is a literal id from the visible lists.
+    """
+
+    # 1-10: deck, relics, belt, Neow options, shop prices, card-reward flags, reward
+    # screen, map options, shop stock; 14-18: act summary, map nodes and edges, offer
+    # grid, bundles; 20: card-select purpose; 21: map position (RunNativeExports.cs).
+    VISIBLE_LISTS = frozenset({*range(1, 11), *range(14, 19), 20, 21})
+    MODULES = ("features.py", "engine.py")
+
+    @staticmethod
+    def source(name: str) -> str:
+        return (ROOT / "rl" / "run_train" / name).read_text(encoding="utf-8")
+
+    def test_only_visible_state_lists_are_read_by_literal_id(self):
+        for name in self.MODULES:
+            calls = [
+                node
+                for node in ast.walk(ast.parse(self.source(name)))
+                if isinstance(node, ast.Call)
+                and getattr(node.func, "attr", getattr(node.func, "id", None))
+                == "run_state_list"
+            ]
+            self.assertTrue(calls, name)
+            for call in calls:
+                list_id = call.args[1] if len(call.args) > 1 else None
+                with self.subTest(module=name, line=call.lineno):
+                    assert isinstance(list_id, ast.Constant), ast.dump(call)
+                    self.assertIn(list_id.value, self.VISIBLE_LISTS)
+
+    def test_the_encounter_is_read_only_inside_a_fight(self):
+        # `run_encounter_id` names the ACTIVE fight's encounter, visible once it starts:
+        # only `RunCombat`, which exists only in Combat, may ask.
+        self.assertNotIn("run_encounter_id", self.source("features.py"))
+        tree = ast.parse(self.source("engine.py"))
+        combat = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ClassDef) and node.name == "RunCombat"
+        )
+        uses = [
+            node.lineno
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute) and node.attr == "run_encounter_id"
+        ]
+        self.assertTrue(uses)
+        assert combat.end_lineno is not None
+        for line in uses:
+            self.assertTrue(combat.lineno <= line <= combat.end_lineno, line)
+
+    def test_features_touches_no_random_stream_and_no_raw_export(self):
+        text = self.source("features.py")
+        self.assertIsNone(re.search(r"rng", text, re.IGNORECASE))
+        for forbidden in ("_lib", "._info(", 'encounter_id"]', "_sequence"):
+            self.assertFalse(forbidden in text, forbidden)
+        engine_text = self.source("engine.py")
+        for forbidden in ("_lib", "Sts2Run_GetStateList", "._info(", "_sequence"):
+            self.assertFalse(forbidden in engine_text, forbidden)
 
 
 if __name__ == "__main__":

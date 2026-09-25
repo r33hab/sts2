@@ -7,6 +7,7 @@ Schemas of 3.5 and 3.7. Payloads here are shaped like the mod's own (`STS2MCP`
 
 import copy
 import json
+import re
 import sys
 import unittest
 from collections import Counter
@@ -22,7 +23,7 @@ sys.path.insert(0, str(ROOT / "rl"))
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import combat_mcts  # noqa: E402
+import combat_mcts  # noqa: E402  # ty: ignore[unresolved-import] -- rl/ is on sys.path
 from test_run_train_features import make_view  # noqa: E402
 
 from rl.run_train import features, rules, seeding, vocab  # noqa: E402
@@ -33,6 +34,7 @@ from rl.run_train.features import (  # noqa: E402
     Decision,
     NotReadyError,
     Option,
+    RunView,
     UnknownIdError,
 )
 from sts2_gym import run_constants as rc  # noqa: E402
@@ -69,7 +71,7 @@ def live_run(**overrides: Any) -> dict:
     """Build a live-run object (DESIGN.md 3.5) holding `make_view()`'s state."""
     run = features.to_live_run(make_view())
     for path, value in overrides.items():
-        target = run
+        target: Any = run
         *parents, leaf = path.split(".")
         for part in parents:
             target = target[part]
@@ -97,6 +99,24 @@ class SchemaTests(unittest.TestCase):
         run = live_run()
         jsonschema.validate(run, features.LIVE_RUN_SCHEMA)
         self.assertEqual(run["map"]["current_position"], run["run"]["map_coord"])
+
+    def test_the_design_documents_the_same_schemas(self):
+        # DESIGN.md 3.5 and 3.7: the schema is the contract, so the documented one and
+        # the module constant must be the same object.
+        design = (ROOT / "rl" / "run_train" / "DESIGN.md").read_text(encoding="utf-8")
+        documented = {
+            schema["$id"]: schema
+            for schema in (
+                json.loads(block)
+                for block in re.findall(r"```json\n(.*?)```", design, re.DOTALL)
+            )
+            if "$id" in schema
+        }
+        self.assertEqual(documented["spire-coach/live-run/1"], features.LIVE_RUN_SCHEMA)
+        self.assertEqual(
+            documented["spire-coach/live-screen/1"],
+            features.LIVE_SCREEN_SCHEMA,
+        )
 
     def test_schemas_are_plain_json(self):
         for schema in (features.LIVE_RUN_SCHEMA, features.LIVE_SCREEN_SCHEMA):
@@ -242,8 +262,18 @@ class ViewFromLiveTests(unittest.TestCase):
                 self.assertEqual(caught.exception.path, path)
 
 
+def deck_card(view: RunView, option: Option) -> CardRef:
+    """Return the deck card an option names, which the caller expects it to name."""
+    assert option.deck_index is not None, option
+    return view.deck[option.deck_index]
+
+
 def screen(state_type: str, body: dict | None = None, **tracker_fields: Any) -> dict:
-    payload = {"state_type": state_type, "event_step": None, "source": None}
+    payload: dict[str, Any] = {
+        "state_type": state_type,
+        "event_step": None,
+        "source": None,
+    }
     if body is not None:
         payload[state_type] = body
     payload.update(tracker_fields)
@@ -308,7 +338,7 @@ class DecisionFromLiveTests(unittest.TestCase):
         self.assertEqual(kinds(decision), ["card.take"])
 
     def test_rewards(self):
-        body = {
+        body: dict[str, Any] = {
             "items": [
                 {"index": 0, "type": "gold", "gold_amount": 20},
                 {"index": 1, "type": "potion", "potion_id": "FIRE_POTION"},
@@ -378,8 +408,8 @@ class DecisionFromLiveTests(unittest.TestCase):
         self.assertEqual(decision.options, ())
 
     @staticmethod
-    def shop(gold: int = 200, **view_fields: Any) -> tuple[Decision, object]:
-        body = {
+    def shop(gold: int = 200, **view_fields: Any) -> tuple[Decision, RunView]:
+        body: dict[str, Any] = {
             "items": [
                 {
                     "index": 0,
@@ -449,7 +479,7 @@ class DecisionFromLiveTests(unittest.TestCase):
             ],
         )
         removals = [o for o in decision.options if o.kind == "shop.remove"]
-        self.assertEqual({view.deck[o.deck_index] for o in removals}, set(view.deck))
+        self.assertEqual({deck_card(view, o) for o in removals}, set(view.deck))
         self.assertTrue(all(o.price == 75 for o in removals))
 
     def test_shop_row_follows_the_engine_mask(self):
@@ -464,7 +494,7 @@ class DecisionFromLiveTests(unittest.TestCase):
             deck=(CardRef(ASCENDERS_BANE, False), CardRef(STRIKE, False)),
         )
         removals = [
-            view.deck[o.deck_index] for o in decision.options if o.kind == "shop.remove"
+            deck_card(view, o) for o in decision.options if o.kind == "shop.remove"
         ]
         self.assertEqual(removals, [CardRef(STRIKE, False)])
         body = {
@@ -480,6 +510,31 @@ class DecisionFromLiveTests(unittest.TestCase):
             "can_proceed": True,
         }
         decision = features.decision_from_live(screen("shop", body), make_view(gold=50))
+        self.assertEqual(kinds(decision), ["shop.leave"])
+
+    def test_an_unmapped_potion_is_offered_only_into_a_free_slot(self):
+        # E1: a shop potion needs a free belt slot, whatever the potion; one with no
+        # emulator counterpart is then shown unscorable.
+        body = {
+            "items": [
+                {
+                    "index": 4,
+                    "category": "potion",
+                    "price": 60,
+                    "is_stocked": True,
+                    "can_afford": True,
+                    "potion_id": "NOT_A_POTION",
+                },
+            ],
+            "can_proceed": True,
+        }
+        free = features.decision_from_live(screen("shop", body), make_view(potions=()))
+        self.assertEqual(
+            [(o.kind, o.action, o.scorable) for o in free.options],
+            [("unknown", 4, False), ("shop.leave", LIVE_PROCEED, True)],
+        )
+        full = make_view(potions=(BLOCK_POTION, BLOCK_POTION))
+        decision = features.decision_from_live(screen("shop", body), full)
         self.assertEqual(kinds(decision), ["shop.leave"])
 
     def test_rest_site(self):
@@ -510,7 +565,7 @@ class DecisionFromLiveTests(unittest.TestCase):
             ],
         )
         smiths = [
-            view.deck[o.deck_index] for o in decision.options if o.kind == "rest.smith"
+            deck_card(view, o) for o in decision.options if o.kind == "rest.smith"
         ]
         self.assertEqual(set(smiths), {CardRef(STRIKE, False), CardRef(BASH, False)})
 
@@ -717,7 +772,7 @@ class CardSelectFromLiveTests(unittest.TestCase):
                 self.assertEqual({o.scorable for o in decision.options}, {scorable})
                 if scorable:
                     self.assertEqual(
-                        {view.deck[o.deck_index] for o in decision.options},
+                        {deck_card(view, o) for o in decision.options},
                         {
                             CardRef(STRIKE, False),
                             CardRef(DEFEND, False),
@@ -774,12 +829,53 @@ class CardSelectFromLiveTests(unittest.TestCase):
         self.assertEqual(reduced.deck, (CardRef(BASH, False), CardRef(STRIKE, False)))
         decision = features.decision_from_live(payload, view)
         self.assertEqual(
-            {reduced.deck[o.deck_index] for o in decision.options},
+            {deck_card(reduced, o) for o in decision.options},
             {CardRef(STRIKE, False), CardRef(BASH, False)},
         )
         after = [features.apply_option(reduced, o).deck for o in decision.options]
         self.assertIn((CardRef(BASH, False),), after)
         self.assertIn((CardRef(STRIKE, False),), after)
+
+    def test_a_later_pick_carries_the_view_its_deck_indices_index(self):
+        # Ruling on E3: `Decision.view` is set whenever the options index a view other
+        # than the one passed in, and the rules (like `score_options`) read
+        # `decision.view or view`. Here the wrong deck would pick index 1, which is
+        # Inflame in the reduced deck; the right one picks Strike.
+        view = make_view(
+            deck=(
+                CardRef(BASH, False),
+                CardRef(DEFEND, False),
+                CardRef(INFLAME, False),
+                CardRef(STRIKE, False),
+            ),
+        )
+        grid = [
+            card("BASH", 0),
+            card("DEFEND_IRONCLAD", 1, selected=True),
+            card("INFLAME", 2),
+            card("STRIKE_IRONCLAD", 3),
+        ]
+        payload = self.select_screen(
+            "select",
+            "Choose 2 cards to Remove.",
+            grid,
+            selected_count=1,
+            min_select=2,
+            max_select=2,
+        )
+        decision = features.decision_from_live(payload, view)
+        reduced = decision.view
+        assert reduced is not None
+        self.assertEqual(reduced, features.view_for_screen(payload, view))
+        self.assertNotIn(CardRef(DEFEND, False), reduced.deck)
+        index = rules.RulesPolicy().choose(view, decision, np.random.default_rng(0))
+        self.assertEqual(
+            deck_card(reduced, decision.options[index]),
+            CardRef(STRIKE, False),
+        )
+        # A screen that indexes the view it was given carries none.
+        first_pick = self.select_screen("select", "Choose a card to Remove.", grid[:1])
+        self.assertIsNone(features.decision_from_live(first_pick, view).view)
 
     def test_a_multi_pick_random_transform_after_a_pick_is_unscorable(self):
         grid = [
@@ -798,7 +894,7 @@ class CardSelectFromLiveTests(unittest.TestCase):
         self.assertEqual([o.scorable for o in decision.options], [False])
 
     def test_bundles(self):
-        body = {
+        body: dict[str, Any] = {
             "bundles": [
                 {
                     "index": 0,
@@ -1142,6 +1238,7 @@ class SyntheticRoundTripTests(unittest.TestCase):
                 or not features.live_buildable(option)
             ):
                 self.assertFalse(any(o.scorable and o == option for o in back.options))
+        self.assertIsNone(back.view)  # engine screens are never a later pick
         for option in back.options:
             if option.scorable:
                 np.testing.assert_array_equal(

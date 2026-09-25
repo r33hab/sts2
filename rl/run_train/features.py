@@ -167,8 +167,17 @@ class Option:
 
 @dataclass(frozen=True)
 class Decision:
+    """The options on one screen (DESIGN.md 3.4).
+
+    The options' `deck_index` index `view.deck` when `view` is set, and otherwise the deck
+    of the view the decision was built from: `decision_from_live` sets `view` at a later
+    pick of a multi-card selection, whose options index the reduced deck (erratum E3).
+    Every consumer reads `decision.view or view`.
+    """
+
     type: str  # neow map card_reward rewards shop rest event card_select bundle unknown
     options: tuple[Option, ...]
+    view: RunView | None = None
 
 
 # The live screen's own proceed / skip / leave control has no index of its own.
@@ -1588,11 +1597,14 @@ def decision_from_live(screen: dict, view: RunView) -> Decision:
 
     `screen` is the settled payload's `state_type` and screen object plus the fields
     `LiveRunTracker.screen` adds. Nothing here raises for content it cannot build: such an
-    option is `scorable=False` and the rules policy decides it. A screen outside the table
-    is `Decision("unknown")`; treasure, combat and game over are `Decision(NO_DECISION)`;
-    a screen with nothing to decide has no options. `deck_index` refers to
-    `view_for_screen(screen, view)`, which is `view` except at a later pick of a multi-card
-    selection (erratum E3).
+    option is `scorable=False` and the rules policy decides it.
+
+    A screen with nothing to decide returns a decision with no options, and callers skip
+    it (`RulesPolicy.choose` refuses one): `Decision(NO_DECISION)` for treasure, combat
+    and game over, `Decision("unknown")` for a screen outside the table, and the screen's
+    own type for a page that is auto on the engine side. At a later pick of a multi-card
+    selection the options index the reduced deck and the decision carries that view as
+    `decision.view` (erratum E3); every consumer reads `decision.view or view`.
     """
     state_type = screen.get("state_type")
     builder = {
@@ -1765,10 +1777,13 @@ def _live_shop(screen: dict, body: dict, view: RunView) -> Decision:
             else:
                 options.append(Option("shop.relic", index, relic=relic, price=price))
         elif category == "potion":
+            # A potion needs a free usable slot, whatever it is (E1; `RunEngine.cs:704-747`).
+            if not _free_slot(view):
+                continue
             potion = vocab.potion_id_by_slug().get(item.get("potion_id"))
             if potion is None:
                 options.append(_unscorable("unknown", index))
-            elif _free_slot(view):
+            else:
                 options.append(Option("shop.potion", index, potion=potion, price=price))
         elif category == "card_removal" and len(view.deck) > 1:
             options += [
@@ -1947,11 +1962,9 @@ def _live_card_select(screen: dict, body: dict, view: RunView) -> Decision:
     if "max_select" in body and len(selected) >= int(body["max_select"]) > 0:
         return Decision("card_select", ())
     kind, scorable = _select_purpose(screen, body)
-    scored_view = view
-    if selected:
-        applied = _apply_selected(screen, view)
-        scorable = scorable and applied is not None
-        scored_view = view if applied is None else applied
+    applied = _apply_selected(screen, view) if selected else None
+    scorable = scorable and (applied is not None or not selected)
+    scored_view = view if applied is None else applied
     options = []
     for card in cards:
         if card.get("selected"):
@@ -1967,7 +1980,8 @@ def _live_card_select(screen: dict, body: dict, view: RunView) -> Decision:
             options.append(_unscorable(kind, index, deck_index=deck_index))
         else:
             options.append(Option(kind, index, deck_index=deck_index))
-    return Decision("card_select", _live_collapse(options))
+    # The options index the reduced deck once earlier picks are applied: say so (E3).
+    return Decision("card_select", _live_collapse(options), view=applied)
 
 
 def _live_bundle(screen: dict, body: dict, view: RunView) -> Decision:

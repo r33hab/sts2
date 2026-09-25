@@ -298,12 +298,13 @@ class _Screen:
     """What is on screen.
 
     The decision it offers (auto items left out), the action the session takes without
-    asking first, and what taking that action counts.
+    asking first, what taking that action counts, and why an unknown decision is unknown.
     """
 
     decision: Decision | None
     auto: int | None = None
     auto_stat: str | None = None
+    reason: str | None = None
 
 
 def decision_of(
@@ -369,7 +370,7 @@ def _read_screen(
     if reader is None:
         # Crystal Sphere and the Fake Merchant are Act 2+ events (DESIGN.md 1.2), and
         # anything newer is unknown too: the rules fallback decides, and it is counted.
-        return _Screen(_unknown(legal))
+        return _unknown_screen(legal, "unhandled_phase")
     view = features.view_from_engine(env, ascension)
     context = _Context(env, handle, legal, view, event_step, rest_option_taken)
     return reader(context)
@@ -393,11 +394,14 @@ class _Context:
         return self.view.deck.index(card)
 
 
-def _unknown(legal: list[int]) -> Decision:
-    return Decision(
-        "unknown",
-        tuple(Option("unknown", action, scorable=False) for action in legal),
-    )
+def _unknown_screen(legal: list[int], reason: str) -> _Screen:
+    """Return a decision the contract does not know, every option unscorable.
+
+    The rules fallback decides it, and the session counts it under "phase/reason", so
+    each bucket's rate is readable in the run statistics (Review Focus 5).
+    """
+    options = tuple(Option("unknown", action, scorable=False) for action in legal)
+    return _Screen(Decision("unknown", options), reason=reason)
 
 
 def _collapse(options: list[Option]) -> tuple[Option, ...]:
@@ -683,7 +687,7 @@ def _card_select(ctx: _Context) -> _Screen:
     if rest_upgrade:
         return _Screen(_deck_selection(ctx, deck, "select.upgrade"))
     if kind == SEL_NONE:
-        return _Screen(_unknown(ctx.legal))
+        return _unknown_screen(ctx.legal, "sel_none")
     if kind == SEL_ENCHANT:
         # Enchant targets go to the rules policy (DESIGN.md section 4).
         return _Screen(
@@ -699,7 +703,7 @@ def _card_select(ctx: _Context) -> _Screen:
         # show is unknown, decided by the rules fallback and counted.
         legal = [i for i in legal if vocab.card_transformable(deck[i].card_id)]
         if not legal:
-            return _Screen(_unknown(ctx.legal))
+            return _unknown_screen(ctx.legal, "eternal_transform_stopgap")
     if kind in {SEL_TRANSFORM_TO, SEL_TRANSFORM_TO_CARRYING}:
         options = [
             Option(
@@ -726,7 +730,7 @@ def _card_select(ctx: _Context) -> _Screen:
         SEL_DUPLICATE: ("select.duplicate", 0),
     }.get(kind)
     if purpose is None:
-        return _Screen(_unknown(ctx.legal))
+        return _unknown_screen(ctx.legal, f"purpose_{kind}")
     return _Screen(_deck_selection(ctx, deck, purpose[0], arg=purpose[1], legal=legal))
 
 
@@ -812,11 +816,46 @@ def _bundle(ctx: _Context) -> _Screen:
 # --------------------------------------------------------------------------------------
 
 
+class VisitTracker:
+    """What the engine does not export about the room being visited.
+
+    `event_step` counts the event options taken in this visit -- the pages answered, as
+    the live tracker counts them (DESIGN.md 3.7) -- and `rest_option_taken` says whether a
+    rest option has been taken at this rest site, after which leaving is an option (1.2).
+    `RunSession` keeps one; the replay test drives another from captured runs and holds
+    it to `LiveRunTracker`, so the session's own bookkeeping is what is compared.
+    """
+
+    def __init__(self) -> None:
+        self.event_id: int | None = None
+        self.event_step = 0
+        self.rest_option_taken = False
+
+    def see(self, phase: int, event_id: int) -> None:
+        """Note the screen about to be read: a new event starts its page count."""
+        if phase == rc.PHASE_EVENT and event_id not in {
+            EVENT_RESULT_PENDING,
+            self.event_id,
+        }:
+            self.event_id, self.event_step = event_id, 0
+
+    def took(self, kind: str) -> None:
+        """Note that an option of `kind` was taken; a map move starts a new visit."""
+        if kind == "map.node":
+            self.event_id, self.event_step, self.rest_option_taken = None, 0, False
+        elif kind == "event.option":
+            self.event_step += 1
+        elif kind.startswith("rest.") and kind != "rest.leave":
+            self.rest_option_taken = True
+
+
 @dataclass
 class SessionStats:
     """What the session did without the policy, for the run record (DESIGN.md 5.7)."""
 
-    unknown_decisions: Counter = field(default_factory=Counter)  # "phase/kind" -> count
+    unknown_decisions: Counter = field(
+        default_factory=Counter,
+    )  # "phase/reason" -> count
     forced_skips: Counter = field(default_factory=Counter)  # "event" / "rest" -> count
     potion_left_full_belt: int = 0
     auto_steps: int = 0
@@ -860,9 +899,8 @@ class RunSession:
         self.env = new_run_env(seed, ascension)
         self.env.reset()
         # What the engine does not export, kept per room visit (reset on every map move).
-        self._event_id: int | None = None
-        self._event_step = 0
-        self._rest_option_taken = False
+        self.visit = VisitTracker()
+        self._unknown_reason: str | None = None
 
     @property
     def handle(self) -> int:
@@ -926,13 +964,15 @@ class RunSession:
                 raise RuntimeError(
                     f"phase {self.phase}: neither a decision nor an auto step",
                 )
+            self._unknown_reason = screen.reason
             return screen.decision
         raise RuntimeError(f"{AUTO_STEP_CAP} auto steps in a row: the engine is stuck")
 
     def apply(self, option: Option) -> None:
         phase = self.phase
         if option.kind == "unknown":
-            self.stats.unknown_decisions[f"{phase}/{option.kind}"] += 1
+            reason = self._unknown_reason or "unknown"
+            self.stats.unknown_decisions[f"{phase}/{reason}"] += 1
         if option.kind in {"shop.remove", "rest.smith"}:
             if option.deck_index is None:
                 raise ValueError(f"{option.kind} needs the card it flattens")
@@ -940,16 +980,16 @@ class RunSession:
             self._step(option.action)
             deck = features.engine_deck(self.env)
             legal = _legal(self.handle)
-            self._step(next(i for i in legal if i < len(deck) and deck[i] == card))
+            index = next((i for i in legal if i < len(deck) and deck[i] == card), None)
+            if index is None:
+                raise RuntimeError(
+                    f"{option.kind}: the follow-up screen does not offer {card} "
+                    f"(phase {self.phase})",
+                )
+            self._step(index)
         else:
             self._step(option.action)
-        if option.kind == "map.node":
-            self._event_id, self._event_step = None, 0
-            self._rest_option_taken = False
-        elif option.kind == "event.option":
-            self._event_step += 1
-        elif option.kind.startswith("rest.") and option.kind != "rest.leave":
-            self._rest_option_taken = True
+        self.visit.took(option.kind)
 
     def combat(self) -> RunCombat:
         if self.phase != rc.PHASE_COMBAT:
@@ -966,15 +1006,13 @@ class RunSession:
         self.env.close()
 
     def _screen(self) -> _Screen:
-        if self.phase == rc.PHASE_EVENT:
-            event_id = self.info["event_id"]
-            if event_id not in {EVENT_RESULT_PENDING, self._event_id}:
-                self._event_id, self._event_step = event_id, 0
+        info = self.info
+        self.visit.see(info["phase"], info["event_id"])
         return _read_screen(
             self.env,
             self.ascension,
-            self._event_step,
-            self._rest_option_taken,
+            self.visit.event_step,
+            self.visit.rest_option_taken,
         )
 
     def _count(self, stat: str | None) -> None:

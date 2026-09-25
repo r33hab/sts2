@@ -76,8 +76,10 @@ def card_score(card_id: int) -> float:
 
 
 def upgrade_score(card_id: int) -> float:
-    """How much upgrading this card is worth. Bash first."""
-    facts = vocab.card(card_id)
+    """How much upgrading this card is worth. Bash first; an unknown id is worth 0."""
+    facts = vocab.cards().get(card_id)
+    if facts is None:
+        return 0.0
     if facts.name == "Bash":
         return 6.0
     if facts.name in {"StrikeIronclad", "DefendIronclad"}:
@@ -90,9 +92,12 @@ def removal_score(card_id: int) -> float:
 
     A curse, then a Strike, then a Defend, then the lowest tier. An Eternal card cannot
     be removed at all (`CardModel.IsRemovable`, erratum E4), so it scores below
-    everything and is never chosen while anything else is offered.
+    everything and is never chosen while anything else is offered. An unknown id is
+    worth 0.
     """
-    facts = vocab.card(card_id)
+    facts = vocab.cards().get(card_id)
+    if facts is None:
+        return 0.0
     if facts.eternal:
         return -100.0
     if facts.card_type in _BAD_TYPES:
@@ -118,9 +123,6 @@ _MAP_SCORES = {
     vocab.NODE_TREASURE: 2.5,
     vocab.NODE_UNKNOWN: 1.1,
 }
-_REMOVAL_KINDS = frozenset(
-    {"select.remove", "select.transform", "select.transform_to", "shop.remove"},
-)
 
 
 class RulesPolicy:
@@ -140,15 +142,22 @@ class RulesPolicy:
         decision: Decision,
         rng: np.random.Generator | None,
     ) -> int:
-        """`rng` is accepted for parity with the learned policy; the rules draw nothing.
+        """Return the index of the option to take.
+
+        `rng` is accepted for parity with the learned policy; the rules draw nothing. The
+        options' deck indices index `decision.view or view` (erratum E3).
 
         Raises:
-            ValueError: If the decision offers no option.
+            ValueError: If the decision has no options: `decision_from_live` returns such
+                decisions for screens with nothing to decide, and callers skip them.
 
         """
         options = decision.options
         if not options:
-            raise ValueError(f"a {decision.type} decision with no option")
+            raise ValueError(
+                f"no options: a {decision.type!r} decision has nothing to decide",
+            )
+        view = decision.view or view
         self.stats.decisions[decision.type] += 1
         handler = {
             "neow": self._neow,
@@ -229,9 +238,16 @@ class RulesPolicy:
             return heal
         if smith is not None:
             return smith
-        # Anything else the site offers (lift, dig, cook...), and leaving last.
-        extras = [i for i, o in enumerate(options) if o.kind != "rest.leave"]
-        return extras[0] if extras else _first(options, "rest.leave")
+        # Anything else the site offers (lift, dig, cook...), and leaving last. An option
+        # the contract does not know is never taken silently: the counted fallback does.
+        extras = [
+            i for i, o in enumerate(options) if o.kind not in {"rest.leave", "unknown"}
+        ]
+        if extras:
+            return extras[0]
+        if any(o.kind == "unknown" for o in options):
+            return None
+        return _first(options, "rest.leave")
 
     @staticmethod
     def _event(_view: RunView, options: tuple[Option, ...]) -> int | None:
@@ -279,8 +295,9 @@ def _first(options: tuple[Option, ...], kind: str) -> int | None:
 
 
 def _with_action(options: tuple[Option, ...], action: int) -> int | None:
+    """Return the option at `action`, or None so that the counted fallback decides."""
     found = [i for i, option in enumerate(options) if option.action == action]
-    return found[0] if found else _lowest(options)
+    return found[0] if found else None
 
 
 def _best(options: tuple[Option, ...], kind: str, score) -> int | None:
