@@ -22,3 +22,6 @@ traces/full-run/*.json
 
 # Self-play datasets and model checkpoints: regenerate with rl/train_combat.py.
 rl/data/
+
+# Stage-2 training runs: shards, checkpoints, evaluations, status (rl/run_train/DESIGN.md 5.7).
+runs/
