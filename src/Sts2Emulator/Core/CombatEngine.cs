@@ -2725,11 +2725,13 @@ public static class CombatEngine
                 break;
 
             case CardSelectionKind.DiscardToHand:
+                // `CardPileCmd.Add(card, PileType.Hand)`: on a full hand the pick moves to the
+                // end of the discard pile instead (CardPileCmd.cs:420-423).
                 if (index < state.DiscardPile.Count)
                 {
                     var recovered = state.DiscardPile[index];
                     state.DiscardPile.RemoveAt(index);
-                    state.Hand.Add(recovered);
+                    Effects.CardEffects.AddToHandOrDiscard(state, recovered);
                 }
 
                 // Neow's Fury takes up to 2/3, so the screen reopens until they are spent

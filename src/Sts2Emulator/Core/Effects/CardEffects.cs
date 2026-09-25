@@ -2785,19 +2785,21 @@ public static class CardEffects
             || state.DiscardPile.Any(c => c.DefId == SovereignBladeId);
         if (!anyLive)
         {
+            // Made in hand, or at the end of the discard pile when the hand is full.
+            var landed = state.Hand.Count < MaxCardsInHand ? state.Hand : state.DiscardPile;
             AddGeneratedCardToHand(state, SovereignBladeId);
 
             // `SwordSagePower.AfterCardEnteredCombat` gives a blade its replays as it
-            // arrives, so one forged later is not short of them.
+            // arrives -- wherever it arrives -- so one forged later is not short of them.
             int sage = BuffSystem.Get(state.PlayerBuffs, BuffId.SwordSage);
-            if (sage > 0 && state.Hand.Count > 0)
+            if (sage > 0 && landed.Count > 0)
             {
-                int last = state.Hand.Count - 1;
-                if (state.Hand[last].DefId == SovereignBladeId)
+                int last = landed.Count - 1;
+                if (landed[last].DefId == SovereignBladeId)
                 {
-                    state.Hand[last] = state.Hand[last] with
+                    landed[last] = landed[last] with
                     {
-                        ReplayCount = state.Hand[last].ReplayCount + sage,
+                        ReplayCount = landed[last].ReplayCount + sage,
                     };
                 }
             }
@@ -3913,9 +3915,10 @@ public static class CardEffects
     /// The fallback must not roll. The game asks the player here too: `CardCmd.AutoPlay`
     /// pushes no selector, and `CardSelectCmd` draws from no stream at all
     /// (CardSelectCmd.cs:376-436, 697-736). So a pick the emulator makes on the player's
-    /// behalf is a fixed one -- the first candidate, or the first card -- and a draw from
-    /// the selection stream for it moves every later reader of that stream, in the combat
-    /// and in the run it is synced back to.
+    /// behalf is a fixed one -- the first candidate or card, or for Headbutt, Hologram and
+    /// Hotfix the LAST card of the discard pile, the one most recently discarded -- and a
+    /// draw from the selection stream for it moves every later reader of that stream, in
+    /// the combat and in the run it is synced back to.
     /// </summary>
     /// <summary>Also the entry point potions with a hand- or draw-pile-wide choice use
     /// (Ashwater, Droplet of Precognition): they are not cards and answer the same
@@ -4538,7 +4541,7 @@ public static class CardEffects
             {
                 var picked = state.DiscardPile[index];
                 state.DiscardPile.RemoveAt(index);
-                state.Hand.Add(picked);
+                AddToHandOrDiscard(state, picked);
                 break;
             }
 
@@ -9165,21 +9168,15 @@ public static class CardEffects
 
     /// <summary>
     /// `CardPileCmd.AddGeneratedCardToCombat(card, PileType.Hand, ...)`: a generated card
-    /// goes to hand if there is room, and is dropped if there is not.
+    /// goes to hand if there is room, and to the end of the discard pile if there is not
+    /// (CardPileCmd.cs:420-423). It is generated either way, so it counts as generated.
     /// </summary>
     internal static void AddGeneratedCardToHand(CombatState state, int defId)
     {
-        if (state.Hand.Count < MaxCardsInHand)
-        {
-            state.Hand.Add(new CardInstance(defId, false));
-            NoteGeneratedCard(state);
-        }
+        AddToHandOrDiscard(state, new CardInstance(defId, false));
+        NoteGeneratedCard(state);
     }
 
-    /// <summary>
-    /// Call of the Void's card: one from the character's own combat pool, granted ETHEREAL,
-    /// into hand. Rolled on the card-generation stream, as `GetDistinctForCombat` is.
-    /// </summary>
     /// <summary>
     /// `DampenPower.AfterApplied`: every UPGRADED card its owner holds is downgraded, and
     /// the power remembers which so that losing it puts them back.
@@ -9285,16 +9282,27 @@ public static class CardEffects
         };
     }
 
+    /// <summary>
+    /// Call of the Void's card: one from the character's own combat pool, granted Ethereal,
+    /// into hand. Rolled on the card-generation stream, as `GetDistinctForCombat` is.
+    /// </summary>
+    /// <remarks>
+    /// `CallOfTheVoidPower.BeforeHandDraw` rolls the card and adds it with
+    /// `AddGeneratedCardsToCombat(..., PileType.Hand, ...)` whatever the hand holds
+    /// (CallOfTheVoidPower.cs:39-45): on a full hand the roll is still made, and the card
+    /// lands at the end of the discard pile.
+    /// </remarks>
     internal static void AddEtherealPoolCardToHand(CombatState state, Random rng)
     {
         var pool = CombatGenerationPool(GeneratedData.CardPools.Necrobinder);
-        if (pool.Count == 0 || state.Hand.Count >= MaxCardsInHand)
+        if (pool.Count == 0)
         {
             return;
         }
 
         var stream = state.CardGenerationRng ?? rng;
-        state.Hand.Add(
+        AddToHandOrDiscard(
+            state,
             new CardInstance(pool[stream.Next(pool.Count)], false) { EtherealForCombat = true }
         );
     }

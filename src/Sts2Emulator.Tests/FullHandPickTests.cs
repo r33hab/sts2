@@ -196,6 +196,145 @@ public class FullHandPickTests
     }
 
     /// <summary>
+    /// "Onto the end" is `CardPilePosition.Bottom`, whatever the discard pile already
+    /// holds: Droplet of Precognition's pick lands behind the Iron Wave already there.
+    /// </summary>
+    [Fact]
+    public void ADrawPilePickLandsAtTheEndOfANonEmptyDiscardPile()
+    {
+        var fight = Fight
+            .Hand(TenDefends())
+            .Draw(Card(IC.Bash), Card(IC.Anger))
+            .Discard(Card(IC.IronWave))
+            .Enemy(hp: 40);
+        fight.State.PotionSlots[0] = DropletOfPrecognition;
+        fight.Potion(0);
+
+        fight.Choose(1); // the Anger
+
+        Assert.Equal([IC.IronWave, IC.Anger], Fight.Ids(fight.State.DiscardPile));
+    }
+
+    /// <summary>The same for a generated pick: Attack Potion's card lands behind the Iron Wave.</summary>
+    [Fact]
+    public void AGeneratedPickLandsAtTheEndOfANonEmptyDiscardPile()
+    {
+        var fight = Fight.Hand(TenDefends()).Discard(Card(IC.IronWave)).Enemy(hp: 40);
+        fight.State.PotionSlots[0] = AttackPotion;
+        fight.Potion(0);
+        int chosen = fight.Pending!.GeneratedCandidates[0];
+
+        fight.Choose(0);
+
+        Assert.Equal([IC.IronWave, chosen], Fight.Ids(fight.State.DiscardPile));
+    }
+
+    /// <summary>
+    /// A DiscardToHand pick -- Hologram's and Graveblast's screen, `CardSelectCmd.FromCombatPile`
+    /// then `CardPileCmd.Add(card, PileType.Hand)` (Graveblast.cs) -- follows the same rule:
+    /// answered on a full hand, the card moves to the end of the discard pile instead of
+    /// making an eleventh card in hand.
+    /// </summary>
+    [Fact]
+    public void ADiscardToHandPickOnAFullHandGoesToTheEndOfTheDiscardPile()
+    {
+        var fight = Fight
+            .Hand(TenDefends())
+            .Discard(Card(IC.IronWave), Card(IC.Anger))
+            .Enemy(hp: 40);
+        fight.State.PendingSelection = new PendingCardSelection
+        {
+            Kind = CardSelectionKind.DiscardToHand,
+            Candidates = [0, 1],
+            SourceCardDefId = GeneratedData.Cards.FindId("Hologram")!.Value,
+        };
+
+        fight.Choose(0); // the Iron Wave
+
+        Assert.Equal(10, fight.State.Hand.Count);
+        Assert.Equal([IC.Anger, IC.IronWave], Fight.Ids(fight.State.DiscardPile));
+    }
+
+    /// <summary>
+    /// Auto-played on a full hand, Graveblast's fallback pick -- the first card of the
+    /// discard pile -- moves to the end of it. It used to make an eleventh card.
+    /// </summary>
+    [Fact]
+    public void AnAutoPlayedGraveblastOnAFullHandSendsItsPickToTheEndOfTheDiscardPile()
+    {
+        var fight = Fight
+            .Hand(TenDefends())
+            .Discard(Card(IC.IronWave), Card(IC.Anger))
+            .Enemy(hp: 40);
+        fight.State.AutoPlayQueue.Add(Card(GeneratedData.Cards.FindId("Graveblast")!.Value));
+
+        CombatEngine.ResolvePrePlayPhase(fight.State, new Random(0));
+
+        Assert.Equal(10, fight.State.Hand.Count);
+        Assert.Equal([IC.Anger, IC.IronWave], Fight.Ids(fight.State.DiscardPile));
+    }
+
+    /// <summary>
+    /// `ForgeCmd.Forge` makes a Sovereign Blade with `CardPileCmd.AddGeneratedCardToCombat(...,
+    /// PileType.Hand, ...)` when none is live (ForgeCmd.cs:47). On a full hand it is made in the
+    /// discard pile, where the Forge's damage still reaches it, and it counts as generated.
+    /// It used to be dropped, and the Forge built nothing. (King's Courage: ForgeVar(15).)
+    /// </summary>
+    [Fact]
+    public void AForgeOnAFullHandMakesItsBladeInTheDiscardPile()
+    {
+        const int KingsCourage = 35;
+        const int SovereignBlade = 448;
+        var fight = Fight.Hand(TenDefends()).Discard(Card(IC.IronWave)).Enemy(hp: 40);
+        fight.State.PotionSlots[0] = KingsCourage;
+
+        fight.Potion(0);
+
+        Assert.Equal(10, fight.State.Hand.Count);
+        Assert.Equal([IC.IronWave, SovereignBlade], Fight.Ids(fight.State.DiscardPile));
+        Assert.Equal(15, fight.State.DiscardPile[1].BonusDamage);
+        Assert.Equal(1, fight.State.CardsGeneratedThisCombat);
+    }
+
+    /// <summary>
+    /// `SwordSagePower.AfterCardEnteredCombat` gives a blade its replays as it enters the
+    /// combat, and that is wherever it lands: a blade made in the discard pile gets them too.
+    /// </summary>
+    [Fact]
+    public void ABladeMadeInTheDiscardPileStillGetsSwordSagesReplays()
+    {
+        const int KingsCourage = 35;
+        var fight = Fight.Hand(TenDefends()).Discard().Enemy(hp: 40);
+        fight.PlayerBuff(BuffId.SwordSage, 2);
+        fight.State.PotionSlots[0] = KingsCourage;
+
+        fight.Potion(0);
+
+        Assert.Equal(2, fight.State.DiscardPile.Single().ReplayCount);
+    }
+
+    /// <summary>
+    /// `CallOfTheVoidPower.BeforeHandDraw` rolls its card off `Rng.CombatCardGeneration`
+    /// (`GetDistinctForCombat`) and adds it with `AddGeneratedCardsToCombat(..., Hand, ...)`
+    /// (CallOfTheVoidPower.cs:39-45), whatever the hand holds. On a full hand the roll is
+    /// still made and the Ethereal card lands in the discard pile. It used to skip both --
+    /// one draw short on the generation stream.
+    /// </summary>
+    [Fact]
+    public void CallOfTheVoidOnAFullHandStillRollsAndDiscardsItsCard()
+    {
+        var fight = Fight.Hand(TenDefends()).Discard().Enemy(hp: 40);
+        var generation = new CountingRandom(8);
+        fight.State.CardGenerationRng = generation;
+
+        CardEffects.AddEtherealPoolCardToHand(fight.State, new Random(0));
+
+        Assert.Equal(1, generation.CallCount);
+        Assert.Equal(10, fight.State.Hand.Count);
+        Assert.True(fight.State.DiscardPile.Single().EtherealForCombat);
+    }
+
+    /// <summary>
     /// With room in the hand nothing changes: the pick goes to the hand, free this turn.
     /// </summary>
     [Fact]
