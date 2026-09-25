@@ -598,6 +598,38 @@ class CombatAscensionTests(unittest.TestCase):
             finally:
                 env.close()
 
+    def test_the_starting_values_are_published(self):
+        # What a run at the level starts with, so a caller building its own position
+        # (the arena) deals the same start instead of restating the rules.
+        for ascension, deck_size, hp, potion_slots in ((0, 10, 80, 3), (8, 11, 64, 2)):
+            deck = native.starting_deck(ascension)
+            self.assertEqual(deck_size, len(deck))
+            self.assertEqual(deck_size - 10, deck.count(ASCENDERS_BANE_OBS_ID))
+            self.assertEqual(hp, native.starting_hp(ascension))
+            self.assertEqual(potion_slots, native.starting_potion_slots(ascension))
+        self.assertEqual(80, native.STARTING_MAX_HP)
+
+    def test_a_level_the_reset_would_drop_is_refused(self):
+        # The rolled-encounter reset and reset_encounter without a total_floor take no
+        # ascension, so asking them for another level is an error that names the route
+        # that honours it, not a silent A8 fight.
+        env = Sts2CombatEnv(seed=0, ascension=0)
+        try:
+            with self.assertRaisesRegex(ValueError, "total_floor"):
+                env.reset()
+        finally:
+            env.close()
+        handle = native.create(0)
+        try:
+            obs = (ctypes.c_int * native.OBS_SIZE)()
+            with self.assertRaisesRegex(ValueError, "total_floor"):
+                native.reset_encounter(handle, 0, obs, ascension=0)
+            # The default level is what those resets deal, so it is not refused.
+            native.reset_encounter(handle, 0, obs, ascension=native.DEFAULT_ASCENSION)
+            native.reset_encounter(handle, 0, obs, total_floor=1, ascension=0)
+        finally:
+            native.destroy(handle)
+
 
 class CommittedRunTraceTests(unittest.TestCase):
     """The full-run capture replays end to end against the emulator.

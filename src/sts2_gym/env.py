@@ -134,7 +134,7 @@ class Sts2CombatEnv(gym.Env):
         encounter: int | str | None = None,
         completed_combat_rooms: int = -1,
         total_floor: int | None = None,
-        ascension: int = 8,
+        ascension: int = native.DEFAULT_ASCENSION,
         # Card ids appended to the starter deck, for a capture that has to reach a state
         # the starter deck cannot: a Phrog Parasite's Wrigglers only spawn when it dies.
         # The live side adds the same cards with debug_add_card, and both sides append in
@@ -157,6 +157,7 @@ class Sts2CombatEnv(gym.Env):
         # a capture at A10 is only comparable to an emulator told it is at A10. With an
         # encounter and a total_floor it also sets the player's start -- HP, belt and
         # Ascender's Bane -- as a run at that level has it (native.reset_encounter).
+        # Without them the reset takes no level, so reset() refuses any but the default.
         self._ascension = ascension
         self._elapsed_steps = 0
         self._handle: int | None = None
@@ -188,18 +189,26 @@ class Sts2CombatEnv(gym.Env):
             if options is not None and "completed_combat_rooms" in options
             else self._completed_combat_rooms
         )
+        ascension = (
+            options.get("ascension")
+            if options is not None and "ascension" in options
+            else self._ascension
+        )
         if encounter_id is None:
+            # The rolled-encounter reset takes no ascension: it deals the default level's
+            # fight, so another level would be dropped without a word.
+            if ascension != native.DEFAULT_ASCENSION:
+                raise ValueError(
+                    f"Sts2CombatEnv: ascension {ascension} needs an encounter and a "
+                    "total_floor (the floor-aware reset); the rolled-encounter reset "
+                    f"deals A{native.DEFAULT_ASCENSION}'s fight.",
+                )
             native.reset(self._handle, self._obs_buf)
         else:
             total_floor = (
                 options.get("total_floor")
                 if options is not None and "total_floor" in options
                 else self._total_floor
-            )
-            ascension = (
-                options.get("ascension")
-                if options is not None and "ascension" in options
-                else self._ascension
             )
             extra = (
                 options.get("extra_cards")

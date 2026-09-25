@@ -47,8 +47,9 @@ from combat_mcts import (
 )
 from combat_tokens import MAX_ACTIONS, Tokens, encode
 
+from sts2_gym import native
+
 STEP_CAP = 300
-STARTER_DECK_SIZE = 11
 
 
 @dataclass(frozen=True)
@@ -240,6 +241,9 @@ def run_jobs(payload: tuple[list[tuple[int, int, int]], GenConfig]) -> dict:
             )
             played.append((job, extra, relics, result))
 
+    # The deck every fight here opened with: the level's own starting deck (it carries
+    # Ascender's Bane only from A5) and the extra cards on top.
+    starting_deck_size = len(native.starting_deck(cfg.ascension))
     for (fight_id, encounter, index), extra, relics, result in played:
         (
             states,
@@ -262,7 +266,7 @@ def run_jobs(payload: tuple[list[tuple[int, int, int]], GenConfig]) -> dict:
             labels.append(end_hp)
             encounter_of.append(encounter)
             fight_of.append(fight_id)
-            deck_sizes.append(STARTER_DECK_SIZE + len(extra))
+            deck_sizes.append(starting_deck_size + len(extra))
             relic_counts.append(len(relics))
 
     empty = np.zeros(0, dtype=np.int64)

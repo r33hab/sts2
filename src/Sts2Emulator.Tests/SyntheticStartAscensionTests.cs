@@ -93,6 +93,86 @@ public class SyntheticStartAscensionTests
     }
 
     /// <summary>
+    /// The start a run at a level deals, published so a caller building its own position
+    /// (the arena) can deal the same one instead of restating the rules.
+    /// </summary>
+    [Theory]
+    [InlineData(0, 10, 80, 3)]
+    [InlineData(8, 11, 64, 2)]
+    public void TheStartingValuesArePublished(int ascension, int deckSize, int hp, int slots)
+    {
+        int[] deck = Native.StartingDeck(ascension);
+
+        Assert.Equal(deckSize, deck.Length);
+        Assert.Equal(deckSize - 10, deck.Count(id => id == IC.AscendersBane));
+        Assert.Equal(hp, Native.StartingHp(ascension));
+        Assert.Equal(80, Native.StartingMaxHp());
+        Assert.Equal(slots, Native.StartingPotionSlots(ascension));
+    }
+
+    /// <summary>
+    /// The arena takes a belt size. Negative is the level's starting belt; a belt a relic
+    /// widened is passed as it stands; and the belt never ends short of the potions it was
+    /// handed, which would strand one where no action reaches it.
+    /// </summary>
+    [Theory]
+    [InlineData(-1, 0, 0, 3)]
+    [InlineData(-1, 8, 0, 2)]
+    [InlineData(4, 8, 0, 4)]
+    [InlineData(2, 8, 3, 3)]
+    public void TheArenaTakesItsBelt(int requested, int ascension, int potions, int expected)
+    {
+        int handle = Native.Create(seed: 0);
+        try
+        {
+            int[] potionIds = [.. Enumerable.Repeat(BlockPotion, potions)];
+            Native.ResetArena(
+                handle,
+                Native.StartingDeck(ascension),
+                potionIds,
+                requested,
+                ascension
+            );
+
+            Assert.Equal(expected, Native.MaxPotionSlots(handle));
+        }
+        finally
+        {
+            Native.Destroy(handle);
+        }
+    }
+
+    /// <summary>
+    /// A plain reset deals the default level's start whatever the handle did before: a
+    /// floor reset at A0 left it three slots and level 0, and the plain reset after it is
+    /// A8's again -- its level, its belt, its HP and its curse.
+    /// </summary>
+    [Fact]
+    public void APlainResetDealsTheDefaultLevelWhateverCameBefore()
+    {
+        int handle = Native.Create(seed: 0);
+        try
+        {
+            Native.ResetEncounterAtFloor(handle, Encounter, ascension: 0);
+            Assert.Equal(3, Native.MaxPotionSlots(handle));
+
+            int[] observation = Native.ResetEncounter(handle, Encounter);
+
+            Assert.Equal(Native.DefaultAscension(), Native.Ascension(handle));
+            Assert.Equal(2, Native.MaxPotionSlots(handle));
+            Assert.Equal((64, 80), (observation[0], observation[1]));
+            Assert.Equal(1, Native.EveryCard(handle).Count(id => id == IC.AscendersBane));
+        }
+        finally
+        {
+            Native.Destroy(handle);
+        }
+    }
+
+    /// <summary>A potion the game knows (Block Potion), to fill slots with.</summary>
+    private const int BlockPotion = 5;
+
+    /// <summary>
     /// The native exports, called through the same unmanaged entry points ctypes uses.
     /// </summary>
     private static unsafe class Native
@@ -142,6 +222,124 @@ public class SyntheticStartAscensionTests
             return observation;
         }
 
+        public static int[] ResetEncounter(int handle, int encounterId)
+        {
+            delegate* unmanaged<int, int, int*, void> reset = &NativeExports.Sts2_ResetEncounter;
+            var observation = new int[NativeExports.OBS_SIZE];
+            fixed (int* obs = observation)
+            {
+                reset(handle, encounterId, obs);
+            }
+
+            return observation;
+        }
+
+        /// <summary>An arena fight at the level's starting HP, with no relics.</summary>
+        public static void ResetArena(
+            int handle,
+            int[] deck,
+            int[] potions,
+            int maxPotionSlots,
+            int ascension
+        )
+        {
+            delegate* unmanaged<
+                int,
+                int*,
+                int,
+                int*,
+                int,
+                int*,
+                int,
+                int,
+                int*,
+                int,
+                int*,
+                int,
+                int,
+                int,
+                int,
+                int,
+                int,
+                int,
+                int,
+                int*,
+                void> reset = &NativeExports.Sts2_ResetArena;
+            var observation = new int[NativeExports.OBS_SIZE];
+            int[] none = [0];
+            fixed (int* deckIds = deck)
+            fixed (int* empty = none)
+            fixed (int* potionIds = potions.Length > 0 ? potions : none)
+            fixed (int* obs = observation)
+            {
+                reset(
+                    handle,
+                    deckIds,
+                    deck.Length,
+                    empty,
+                    0,
+                    empty,
+                    0,
+                    Encounter,
+                    empty,
+                    0,
+                    potionIds,
+                    potions.Length,
+                    StartingHp(ascension),
+                    StartingMaxHp(),
+                    0,
+                    maxPotionSlots,
+                    ascension,
+                    1,
+                    -1,
+                    obs
+                );
+            }
+        }
+
+        public static int[] StartingDeck(int ascension)
+        {
+            delegate* unmanaged<int, int*, int, int> startingDeck =
+                &NativeExports.Sts2_StartingDeck;
+            int length = startingDeck(ascension, null, 0);
+            var deck = new int[length];
+            fixed (int* buffer = deck)
+            {
+                Assert.Equal(length, startingDeck(ascension, buffer, length));
+            }
+
+            return deck;
+        }
+
+        public static int StartingHp(int ascension)
+        {
+            delegate* unmanaged<int, int> startingHp = &NativeExports.Sts2_StartingHp;
+            return startingHp(ascension);
+        }
+
+        public static int StartingMaxHp()
+        {
+            delegate* unmanaged<int> startingMaxHp = &NativeExports.Sts2_StartingMaxHp;
+            return startingMaxHp();
+        }
+
+        public static int StartingPotionSlots(int ascension)
+        {
+            delegate* unmanaged<int, int> startingPotionSlots =
+                &NativeExports.Sts2_StartingPotionSlots;
+            return startingPotionSlots(ascension);
+        }
+
+        public static int DefaultAscension()
+        {
+            delegate* unmanaged<int> defaultAscension = &NativeExports.Sts2_DefaultAscension;
+            return defaultAscension();
+        }
+
+        /// <summary>The combat's ascension level, read off its own state document.</summary>
+        public static int Ascension(int handle) =>
+            StateDocument(handle)["ascension"]!.GetValue<int>();
+
         /// <summary>Every card the fight holds, over the draw pile, hand, discard and exhaust.</summary>
         public static int[] EveryCard(int handle)
         {
@@ -163,7 +361,10 @@ public class SyntheticStartAscensionTests
         }
 
         /// <summary>The belt's size, read off the combat's own state document.</summary>
-        public static int MaxPotionSlots(int handle)
+        public static int MaxPotionSlots(int handle) =>
+            StateDocument(handle)["potions"]!["max_slots"]!.GetValue<int>();
+
+        private static JsonNode StateDocument(int handle)
         {
             delegate* unmanaged<int, byte*, int, int> getStateJson = &NativeExports.GetStateJson;
             int needed = getStateJson(handle, null, 0);
@@ -173,9 +374,7 @@ public class SyntheticStartAscensionTests
                 getStateJson(handle, text, needed);
             }
 
-            return JsonNode.Parse(Encoding.UTF8.GetString(buffer))!["potions"]![
-                "max_slots"
-            ]!.GetValue<int>();
+            return JsonNode.Parse(Encoding.UTF8.GetString(buffer))!;
         }
     }
 }

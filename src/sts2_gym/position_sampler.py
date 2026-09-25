@@ -360,7 +360,8 @@ class PositionSampler:
 
     @staticmethod
     def _sample_potions(rng: random.Random) -> list[int]:  # noqa: ARG004
-        # Three slots, and always empty for now: whether a position holds a potion is a
+        # The level's starting belt (two slots at A8, which reset_arena gives by
+        # default), and always empty for now: whether a position holds a potion is a
         # decision the run policy makes, and modelling it as a coin flip here would put
         # free resources into the value function's training data that no run earned.
         return []
