@@ -73,6 +73,28 @@ public class TrueGritTests
         Assert.Null(fight.Pending);
     }
 
+    /// <summary>
+    /// Upgraded, the pick is the player's (`CardSelectCmd.FromHand`), which rolls nothing:
+    /// the selection stream stands still through the play and the answer. Only the
+    /// unupgraded card's random pick (`NextItem`) draws from it.
+    /// </summary>
+    [Fact]
+    public void UpgradedPickDrawsNothingFromTheCardSelectionStream()
+    {
+        var fight = Fight
+            .Hand(Card(IC.TrueGrit, upgraded: true), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .Energy(1)
+            .Enemy(hp: 40);
+        var selectionRng = new CountingRandom(11);
+        fight.State.CardSelectionRng = selectionRng;
+
+        fight.Play();
+        Assert.Equal(0, selectionRng.CallCount);
+
+        fight.Choose(0);
+        Assert.Equal(0, selectionRng.CallCount);
+    }
+
     [Fact]
     public void UnupgradedDrawsItsPickFromTheCardSelectionStream()
     {
