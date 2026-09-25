@@ -764,7 +764,7 @@ public static class CombatSnapshot
     {
         var candidates = fields.RequiredItems("candidates", ReadCandidate);
         var cards = fields.Items("candidate_cards", ReadCard);
-        if (!ChoosesFromDrawPile(kind))
+        if (!kind.ChoosesFromDrawPile())
         {
             return cards.Count == 0
                 ? candidates
@@ -894,17 +894,6 @@ public static class CombatSnapshot
 
         return [.. found];
     }
-
-    /// <summary>
-    /// The kinds whose answer takes a draw-pile index: <c>CombatEngine.ResolveCardSelection</c>
-    /// reads <c>state.DrawPile[index]</c> for exactly these.
-    /// </summary>
-    private static bool ChoosesFromDrawPile(CardSelectionKind kind) =>
-        kind
-            is CardSelectionKind.DrawPileToHand
-                or CardSelectionKind.TransformDrawPileToSoul
-                or CardSelectionKind.ExhaustFromDrawPile
-                or CardSelectionKind.TransformDrawToMinionDiveBomb;
 
     /// <summary>
     /// Where the unordered middle of the draw pile sits: past the known top and short of
@@ -1318,7 +1307,7 @@ public static class CombatSnapshot
         PendingCardSelection selection
     )
     {
-        if (!ChoosesFromDrawPile(selection.Kind))
+        if (!selection.Kind.ChoosesFromDrawPile())
         {
             return (selection.Candidates, []);
         }

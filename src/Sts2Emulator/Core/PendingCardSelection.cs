@@ -283,3 +283,19 @@ public sealed class PendingCardSelection
     /// </summary>
     public bool GeneratedRetained { get; init; }
 }
+
+public static class CardSelectionKindExtensions
+{
+    /// <summary>
+    /// Whether the kind's candidates index the draw pile: <c>CombatEngine.ResolveCardSelection</c>
+    /// reads <c>state.DrawPile[index]</c> for exactly these four. The observation shows their
+    /// candidates from the draw pile, and a snapshot names the ones in the unordered middle
+    /// by card (<c>CombatSnapshot</c>).
+    /// </summary>
+    public static bool ChoosesFromDrawPile(this CardSelectionKind kind) =>
+        kind
+            is CardSelectionKind.DrawPileToHand
+                or CardSelectionKind.TransformDrawPileToSoul
+                or CardSelectionKind.ExhaustFromDrawPile
+                or CardSelectionKind.TransformDrawToMinionDiveBomb;
+}
