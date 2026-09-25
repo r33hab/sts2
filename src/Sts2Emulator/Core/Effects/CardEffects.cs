@@ -743,7 +743,7 @@ public static class CardEffects
                         CardSelectionKind.ExhaustFromHand,
                         state.Hand.Count,
                         def.Id,
-                        autoPick: AutoPickFromHand(state, rng)
+                        autoPick: 0
                     );
                 }
                 break;
@@ -773,7 +773,7 @@ public static class CardEffects
                         CardSelectionKind.ExhaustFromHandThenDraw,
                         state.Hand.Count,
                         def.Id,
-                        autoPick: AutoPickFromHand(state, rng),
+                        autoPick: 0,
                         amount: upgraded ? 3 : 2
                     );
                 }
@@ -949,7 +949,7 @@ public static class CardEffects
                             CardSelectionKind.ExhaustFromHand,
                             state.Hand.Count,
                             def.Id,
-                            autoPick: AutoPickFromHand(state, rng)
+                            autoPick: 0
                         );
                     }
                     else
@@ -3909,6 +3909,13 @@ public static class CardEffects
     /// the engine is already draining, with no way to hand control back mid-drain, so it
     /// falls back to <paramref name="autoPick" /> — the behaviour every one of these
     /// choices had before selection existed.
+    ///
+    /// The fallback must not roll. The game asks the player here too: `CardCmd.AutoPlay`
+    /// pushes no selector, and `CardSelectCmd` draws from no stream at all
+    /// (CardSelectCmd.cs:376-436, 697-736). So a pick the emulator makes on the player's
+    /// behalf is a fixed one -- the first candidate, or the first card -- and a draw from
+    /// the selection stream for it moves every later reader of that stream, in the combat
+    /// and in the run it is synced back to.
     /// </summary>
     /// <summary>Also the entry point potions with a hand- or draw-pile-wide choice use
     /// (Ashwater, Droplet of Precognition): they are not cards and answer the same
@@ -4549,22 +4556,6 @@ public static class CardEffects
 
     private static Random CardSelectionRng(CombatState state, Random rng) =>
         state.CardSelectionRng ?? rng;
-
-    /// <summary>
-    /// The fallback pick for a hand-wide selection nobody can answer: one draw from the
-    /// selection stream over the hand, taken ONLY when the selection is about to resolve on
-    /// its own, which is exactly when `OpenCardSelection` sees `CombatState.AutoPlaying`.
-    /// </summary>
-    /// <remarks>
-    /// A pick the player makes (`CardSelectCmd.FromHand`) rolls nothing in the game. Passed
-    /// as a plain argument, this pick was drawn before the opener could see that the player
-    /// was about to choose. So every Brand, Burning Pact and upgraded True Grit the player
-    /// played drew one value nobody used, and every later reader of the stream drew one
-    /// place along: in the combat, and in the rest of the run, which the stream is synced
-    /// back to.
-    /// </remarks>
-    private static int AutoPickFromHand(CombatState state, Random rng) =>
-        state.AutoPlaying ? CardSelectionRng(state, rng).Next(state.Hand.Count) : 0;
 
     /// <summary>
     /// The stream an effect draws from when it rolls up a NEW card — Stoke, Splash,

@@ -209,6 +209,46 @@ public class BattleTranceTests
         );
     }
 
+    /// <summary>
+    /// `ConstrictPower.AfterSideTurnEnd` hits after the flush too, but in the SAME pass as
+    /// No Draw's lift, and `CombatState.IterateHookListeners` walks a creature's powers in
+    /// the order they were applied. A Constrict the Strangler put on in an enemy phase comes
+    /// before this turn's No Draw, so it hits while the gag stands: the Puzzle is spent and
+    /// draws nothing, and the new hand is the next five off the pile.
+    /// </summary>
+    [Fact]
+    public void ConstrictsPuzzleDrawIsRefusedWhileTheGagStands()
+    {
+        var fight = Fight
+            .Hand(Card(IC.BattleTrance))
+            .Energy(1)
+            .Draw(
+                Card(IC.Bash),
+                Card(IC.StrikeIronclad),
+                Card(IC.DefendIronclad),
+                Card(IC.Anger),
+                Card(IC.PommelStrike),
+                Card(IC.IronWave),
+                Card(IC.Headbutt),
+                Card(IC.TwinStrike),
+                Card(IC.ShrugItOff)
+            )
+            .PlayerHp(60, 80)
+            .Enemy(hp: 40);
+        fight.State.Relics.Add(new RelicInstance(RelicEffects.CentennialPuzzle));
+        fight.PlayerBuff(BuffId.Constrict, 6);
+        fight.Play();
+
+        fight.EndTurn();
+
+        Assert.Equal(54, fight.State.PlayerHp);
+        Assert.Equal(1, fight.State.Relics.Single().Counter);
+        Assert.Equal(
+            [IC.Anger, IC.PommelStrike, IC.IronWave, IC.Headbutt, IC.TwinStrike],
+            Fight.Ids(fight.State.Hand)
+        );
+    }
+
     [Fact]
     public void DrawsWhatItCanFromAShortDrawPile()
     {

@@ -95,6 +95,30 @@ public class TrueGritTests
         Assert.Equal(0, selectionRng.CallCount);
     }
 
+    /// <summary>
+    /// Auto-played, the upgraded pick is still the player's in the game
+    /// (`CardSelectCmd.FromHand`, no selector pushed by `CardCmd.AutoPlay`), so it rolls
+    /// nothing there either. The emulator takes the first card for the player.
+    /// </summary>
+    [Fact]
+    public void AnAutoPlayedUpgradedPickDrawsNothingFromTheCardSelectionStream()
+    {
+        var fight = Fight
+            .Hand(Card(IC.Havoc), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .Energy(1)
+            .Draw(Card(IC.TrueGrit, upgraded: true))
+            .Enemy(hp: 40);
+        var selectionRng = new CountingRandom(11);
+        fight.State.CardSelectionRng = selectionRng;
+
+        fight.Play();
+
+        Assert.Null(fight.Pending);
+        Assert.Equal(0, selectionRng.CallCount);
+        Assert.Equal([IC.StrikeIronclad], Fight.Ids(fight.State.Hand));
+        Assert.Equal(IC.Bash, fight.State.ExhaustPile[0].DefId);
+    }
+
     [Fact]
     public void UnupgradedDrawsItsPickFromTheCardSelectionStream()
     {
