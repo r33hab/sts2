@@ -85,6 +85,31 @@ public class BurningPactTests
         Assert.Equal([IC.StrikeIronclad, IC.Anger, IC.DefendIronclad], Fight.Ids(fight.State.Hand));
     }
 
+    /// <summary>
+    /// Auto-played by Havoc, the game still asks the player and rolls nothing
+    /// (`CardSelectCmd.FromHand`; `CardCmd.AutoPlay` pushes no selector). The emulator
+    /// takes the first card for the player, draws nothing from the selection stream, and
+    /// then draws the two.
+    /// </summary>
+    [Fact]
+    public void AnAutoPlayedPickDrawsNothingFromTheSelectionStream()
+    {
+        var fight = Fight
+            .Hand(Card(IC.Havoc), Card(IC.Bash), Card(IC.StrikeIronclad))
+            .Energy(1)
+            .Draw(Card(IC.BurningPact), Card(IC.Anger), Card(IC.DefendIronclad))
+            .Enemy(hp: 40);
+        var selectionRng = new CountingRandom(11);
+        fight.State.CardSelectionRng = selectionRng;
+
+        fight.Play();
+
+        Assert.Null(fight.Pending);
+        Assert.Equal(0, selectionRng.CallCount);
+        Assert.Equal([IC.StrikeIronclad, IC.Anger, IC.DefendIronclad], Fight.Ids(fight.State.Hand));
+        Assert.Equal(IC.Bash, fight.State.ExhaustPile[0].DefId);
+    }
+
     [Fact]
     public void DrawsWithoutAskingWhenTheHandIsEmpty()
     {

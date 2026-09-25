@@ -1,6 +1,7 @@
 using Sts2Emulator.Core;
 using Sts2Emulator.Core.Effects;
 using Xunit;
+using static Sts2Emulator.Tests.TestDeck;
 
 namespace Sts2Emulator.Tests;
 
@@ -146,5 +147,87 @@ public class TurnEndSelfDamageTests
         fight.EndTurn();
 
         Assert.Equal(before - 3, fight.State.PlayerHp);
+    }
+
+    /// <summary>
+    /// Both hit after the hand pass. `ConstrictPower.AfterSideTurnEnd` and
+    /// `DisintegrationPower.AfterSideTurnEndLate` are the two passes of `Hook.AfterTurnEnd`
+    /// (Hook.cs:1411-1436), which `EndPlayerTurnPhaseTwoInternal` calls once
+    /// `FlushPlayerHand` is done (CombatManager.cs:1281-1309). So the three cards a
+    /// Centennial Puzzle draws for the HP either one takes arrive after the flush, and the
+    /// hand keeps them for the next turn: the Puzzle's three, then the turn's five.
+    /// </summary>
+    [Theory]
+    [InlineData(BuffId.Constrict)]
+    [InlineData(BuffId.Disintegration)]
+    public void ThePuzzleDrawItTripsIsKeptPastTheFlush(BuffId debuff)
+    {
+        var fight = Fight
+            .Hand(Card(IC.StrikeIronclad), Card(IC.DefendIronclad))
+            .Draw(
+                Card(IC.Bash),
+                Card(IC.Anger),
+                Card(IC.PommelStrike),
+                Card(IC.IronWave),
+                Card(IC.Headbutt),
+                Card(IC.TwinStrike),
+                Card(IC.ShrugItOff),
+                Card(IC.Uppercut),
+                Card(IC.Thunderclap)
+            )
+            .PlayerHp(60, 80)
+            .Enemy(intent: new Intent(IntentType.Defend, 0));
+        fight.State.Relics.Add(new RelicInstance(RelicEffects.CentennialPuzzle));
+        fight.PlayerBuff(debuff, 6);
+
+        fight.EndTurn();
+
+        Assert.Equal(54, fight.State.PlayerHp);
+        Assert.Equal(1, fight.State.Relics.Single().Counter);
+        Assert.Equal([IC.StrikeIronclad, IC.DefendIronclad], Fight.Ids(fight.State.DiscardPile));
+        Assert.Equal(
+            [
+                IC.Bash,
+                IC.Anger,
+                IC.PommelStrike,
+                IC.IronWave,
+                IC.Headbutt,
+                IC.TwinStrike,
+                IC.ShrugItOff,
+                IC.Uppercut,
+            ],
+            Fight.Ids(fight.State.Hand)
+        );
+    }
+
+    /// <summary>
+    /// The same timing, read off the shuffle stream. The Puzzle takes the one card left in
+    /// the draw pile and then reshuffles the discard, which by then holds the flushed hand
+    /// too: three cards, two draws (`ShufflePile` is a Fisher-Yates, one draw per card past
+    /// the first). Hit before the flush, it would reshuffle the discard's one card for
+    /// nothing, and the next hand would reshuffle the other four for three.
+    /// </summary>
+    [Theory]
+    [InlineData(BuffId.Constrict)]
+    [InlineData(BuffId.Disintegration)]
+    public void ThePuzzlesReshuffleTakesInTheFlushedHand(BuffId debuff)
+    {
+        var fight = Fight
+            .Hand(Card(IC.StrikeIronclad), Card(IC.DefendIronclad))
+            .Draw(Card(IC.Bash))
+            .Discard(Card(IC.Anger))
+            .PlayerHp(60, 80)
+            .Enemy(intent: new Intent(IntentType.Defend, 0));
+        var shuffle = new CountingRandom(5);
+        fight.State.ShuffleRng = shuffle;
+        fight.State.Relics.Add(new RelicInstance(RelicEffects.CentennialPuzzle));
+        fight.PlayerBuff(debuff, 6);
+
+        fight.EndTurn();
+
+        Assert.Equal(2, shuffle.CallCount);
+        // Drawn before the reshuffle, so first; the other three came out of it.
+        Assert.Equal(IC.Bash, fight.State.Hand[0].DefId);
+        Assert.Equal(4, fight.State.Hand.Count);
     }
 }
