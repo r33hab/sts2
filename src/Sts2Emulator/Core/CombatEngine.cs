@@ -863,19 +863,14 @@ public static class CombatEngine
         // powers are the same shape and different rules -- see the note on the BuffId.
         BuffSystem.Remove(state.PlayerBuffs, BuffId.Duplication);
 
-        // Both of these deal DAMAGE (CreatureCmd.Damage with ValueProp.Unpowered), so
-        // block absorbs them. Taking it off HP directly is indistinguishable in a capture
-        // that plays no cards and so holds no block, and wrong in every fight that does.
+        // This deals DAMAGE (CreatureCmd.Damage with ValueProp.Unpowered), so block absorbs
+        // it. Taking it off HP directly is indistinguishable in a capture that plays no
+        // cards and so holds no block, and wrong in every fight that does. Disintegration
+        // is the same kind of damage in a later pass -- see the end of the player's turn.
         int constrict = BuffSystem.Get(state.PlayerBuffs, BuffId.Constrict);
         if (constrict > 0)
         {
             Effects.CardEffects.DealDamageToPlayer(state, constrict);
-        }
-
-        int disintegration = BuffSystem.Get(state.PlayerBuffs, BuffId.Disintegration);
-        if (disintegration > 0)
-        {
-            Effects.CardEffects.DealDamageToPlayer(state, disintegration);
         }
 
         // `RingingTriangle.ShouldFlush` is false on turn one, so the whole opening hand
@@ -995,7 +990,6 @@ public static class CombatEngine
         // `Hook.AfterFlush(cardsToFlush, cardsToRetain)`, dispatched once after the whole
         // hand has moved -- `nextHand` IS the retained list.
         Effects.RelicEffects.ApplyAfterFlush(state, rng);
-        Effects.RelicEffects.ApplyAfterEndOfPlayerTurnShared(state, rng);
 
         if (retainHand == 1)
         {
@@ -1069,6 +1063,22 @@ public static class CombatEngine
         // still refused: a Beckon's HP loss spends Centennial Puzzle and draws nothing.
         // It was lifted before the hand pass, and the Puzzle's three came through.
         BuffSystem.Remove(state.PlayerBuffs, BuffId.NoDraw);
+
+        // The relics' `AfterSideTurnEnd` -- Joss Paper's payout. It is the same
+        // `Hook.AfterTurnEnd` pass as the player's powers above, but
+        // `CombatState.IterateHookListeners` walks a creature's powers BEFORE its player's
+        // relics, so No Draw has lifted by the time the paper draws.
+        Effects.RelicEffects.ApplyAfterEndOfPlayerTurnShared(state, rng);
+
+        // `DisintegrationPower.AfterSideTurnEndLate`: the LATE pass, which
+        // `Hook.AfterTurnEnd` runs only once every `AfterSideTurnEnd` above is done. So it
+        // lands after the flush and after No Draw lifts: a Centennial Puzzle it trips draws
+        // its three for the next turn. Block absorbs it, as it does Constrict.
+        int disintegration = BuffSystem.Get(state.PlayerBuffs, BuffId.Disintegration);
+        if (disintegration > 0)
+        {
+            Effects.CardEffects.DealDamageToPlayer(state, disintegration);
+        }
 
         // `PaelsEye.ShouldTakeExtraTurn`: a turn in which the owner played NOTHING, once
         // per combat, skips the enemy side entirely and hands the player another turn.

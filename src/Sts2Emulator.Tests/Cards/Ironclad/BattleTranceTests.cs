@@ -121,6 +121,94 @@ public class BattleTranceTests
         Assert.Equal(0, fight.PlayerBuffAmount(BuffId.NoDraw));
     }
 
+    /// <summary>
+    /// The gag lifts in the same `Hook.AfterTurnEnd` pass as the relics pay out, and
+    /// `CombatState.IterateHookListeners` walks a creature's powers BEFORE its player's
+    /// relics. So No Draw is gone when `JossPaper.AfterSideTurnEnd` folds the turn's
+    /// Ethereal exhausts in: four banked plus the Dazed that burned make five, and its
+    /// card is drawn after the flush and kept for the next turn.
+    /// </summary>
+    [Fact]
+    public void JossPaperPaysOutAfterTheGagLifts()
+    {
+        var fight = Fight
+            .Hand(Card(IC.BattleTrance), Card(ST.Dazed))
+            .Energy(1)
+            .Draw(
+                Card(IC.Bash),
+                Card(IC.StrikeIronclad),
+                Card(IC.DefendIronclad),
+                Card(IC.Anger),
+                Card(IC.PommelStrike),
+                Card(IC.IronWave),
+                Card(IC.Headbutt),
+                Card(IC.TwinStrike),
+                Card(IC.ShrugItOff)
+            )
+            .Enemy(hp: 40);
+        fight.State.Relics.Add(new RelicInstance(RelicEffects.JossPaper, Counter: 4));
+        fight.Play();
+
+        fight.EndTurn();
+
+        // The paper's one, then the next hand's five.
+        Assert.Equal(
+            [IC.Anger, IC.PommelStrike, IC.IronWave, IC.Headbutt, IC.TwinStrike, IC.ShrugItOff],
+            Fight.Ids(fight.State.Hand)
+        );
+        Assert.Equal(0, fight.State.Relics.Single().Counter);
+    }
+
+    /// <summary>
+    /// `DisintegrationPower.AfterSideTurnEndLate` hits in the LATE pass, which
+    /// `Hook.AfterTurnEnd` runs after every `AfterSideTurnEnd` -- No Draw's lift included --
+    /// and so after the flush. The Centennial Puzzle it trips draws its three with the gag
+    /// already gone, and they stay for the next turn: three, then the hand's five.
+    /// </summary>
+    [Fact]
+    public void DisintegrationsPuzzleDrawComesAfterTheGagLifts()
+    {
+        var fight = Fight
+            .Hand(Card(IC.BattleTrance))
+            .Energy(1)
+            .Draw(
+                Card(IC.Bash),
+                Card(IC.StrikeIronclad),
+                Card(IC.DefendIronclad),
+                Card(IC.Anger),
+                Card(IC.PommelStrike),
+                Card(IC.IronWave),
+                Card(IC.Headbutt),
+                Card(IC.TwinStrike),
+                Card(IC.ShrugItOff),
+                Card(IC.Uppercut),
+                Card(IC.Thunderclap)
+            )
+            .PlayerHp(60, 80)
+            .Enemy(hp: 40);
+        fight.State.Relics.Add(new RelicInstance(RelicEffects.CentennialPuzzle));
+        fight.PlayerBuff(BuffId.Disintegration, 6);
+        fight.Play();
+
+        fight.EndTurn();
+
+        Assert.Equal(54, fight.State.PlayerHp);
+        Assert.Equal(1, fight.State.Relics.Single().Counter);
+        Assert.Equal(
+            [
+                IC.Anger,
+                IC.PommelStrike,
+                IC.IronWave,
+                IC.Headbutt,
+                IC.TwinStrike,
+                IC.ShrugItOff,
+                IC.Uppercut,
+                IC.Thunderclap,
+            ],
+            Fight.Ids(fight.State.Hand)
+        );
+    }
+
     [Fact]
     public void DrawsWhatItCanFromAShortDrawPile()
     {
