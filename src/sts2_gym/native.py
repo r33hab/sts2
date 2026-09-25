@@ -313,14 +313,13 @@ _lib.Sts2_ResetWithDeckAndEncounter.argtypes = [
 
 _lib.Sts2_ResetWithDeckEncounterAndRelics.restype = None
 _lib.Sts2_ResetWithDeckEncounterAndRelics.argtypes = [
-    ctypes.c_int,
-    ctypes.POINTER(ctypes.c_int),
-    ctypes.c_int,
-    ctypes.c_int,
-    ctypes.POINTER(ctypes.c_int),
-    ctypes.c_int,
-    ctypes.c_int,
-    ctypes.POINTER(ctypes.c_int),
+    ctypes.c_int,  # handle
+    ctypes.POINTER(ctypes.c_int),  # deck ids
+    ctypes.c_int,  # deck len
+    ctypes.c_int,  # encounter id
+    ctypes.POINTER(ctypes.c_int),  # relic ids
+    ctypes.c_int,  # relic len
+    ctypes.POINTER(ctypes.c_int),  # obs buf
 ]
 
 _lib.Sts2_ResetArena.restype = None

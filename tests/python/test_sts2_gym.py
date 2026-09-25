@@ -631,6 +631,44 @@ class CombatAscensionTests(unittest.TestCase):
             native.destroy(handle)
 
 
+class DeckEncounterRelicsResetTests(unittest.TestCase):
+    """`native.reset_with_deck_encounter_and_relics` reaches its export."""
+
+    def test_the_deck_encounter_and_relics_all_arrive(self):
+        # Sts2_ResetWithDeckEncounterAndRelics takes seven parameters: the handle, the deck
+        # and its length, the encounter, the relics and their count, and the observation
+        # buffer (NativeExports.cs). The binding declared eight argtypes, so ctypes refused
+        # every call before it reached the library.
+        bash, strike, defend, anchor = 30, 472, 131, 4
+        deck = [bash, strike, strike, defend, defend, defend]
+        chompers = sts2_gym.env.ENCOUNTER_IDS["chompers"]
+        handle = native.create(0)
+        try:
+            obs = (ctypes.c_int * native.OBS_SIZE)()
+            native.reset_with_deck_encounter_and_relics(
+                handle,
+                deck,
+                chompers,
+                [anchor],
+                obs,
+            )
+            encounter = native.encounter_id(handle)
+            cards = sorted(
+                card
+                for pile in ("draw", "hand", "discard", "exhaust")
+                for card, _ in native.get_pile(handle, pile)
+            )
+            state = native.get_state_json(handle)
+        finally:
+            native.destroy(handle)
+        self.assertEqual(chompers, encounter)
+        self.assertEqual(sorted(deck), cards)
+        self.assertEqual([anchor], [relic["id"] for relic in state["relics"]])
+        # Anchor's 10 Unpowered block at combat start: the relic was dealt in, not listed.
+        self.assertEqual(10, state["player"]["block"])
+        self.assertEqual(10, int(obs[2]))
+
+
 class CommittedRunTraceTests(unittest.TestCase):
     """The full-run capture replays end to end against the emulator.
 
