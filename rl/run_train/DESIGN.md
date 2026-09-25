@@ -19,11 +19,10 @@ root; line numbers are at `37e4264`. Numbers in section 2 were measured on this 
    reaches the boss (904/h, or 542/h under a conservative 0.6 scaling factor). The target
    is 300/h. No budget difference is resolved at 58 seeds, so Task 4 rechecks the budget
    against 250/500 on boss kills (2.7).
-3. **Ascension is a config value, default 0** (controller ruling). The run engine at
-   `37e4264` models A8 only. The ascension parameter arrives with the `spire-coach-gaps`
-   branch (native run reset, `native.py` and `run_env.py`, default 0), and every
-   component here passes the configured value through once that branch is integrated
-   (1.5.1).
+3. **Ascension is a config value, default 10** (erratum E11: the user plays A10). The
+   run engine takes the level since run API 20 and models 0-9. Until run-fidelity Task 5
+   models A10, A9 stands in for it, since its Act 1 rules are A10's, and every evaluation
+   records the substitution in its `EvalMeta` (1.5.1, 2.9).
 4. **One feature definition, two front ends that meet in a `RunView` and a `Decision`.**
    The engine and the live coach each build the same frozen dataclasses. One
    `encode(view)` turns a view into the vector, and one `apply_option(view, option)`
@@ -101,7 +100,7 @@ correspondence.
 | 3 Rest                            | heal 0, smith 1 (if anything is upgradable), clone 2, lift 4, dig 5, hatch 6, cook 7, kindle 8 (each only while its relic/card is present and unspent), leave 3 (`RunEngine.cs:599-680`).                                | `rest.heal`, `rest.smith` **flattened** into one option per distinct upgradable card (the upgrade screen follows), and `rest.lift/dig/hatch/cook/kindle/clone`. `rest.leave` (3) is offered by the emulator but is **excluded** until an option has been taken this visit (the game's `can_proceed` is false until then; section 1.5). The result page (`RestResultPending`) is **auto**.                                                                                                                                                    | `rest_site.options[i].id` (HEAL, SMITH, ...); `commands.py:205-213`.                                                                 |
 | 7 Event                           | 3 always (`RunEngine.cs:5380`), plus a bespoke per-event mask (`RunEngine.cs:5378-`); option counts come from `Generated/EventOptions.g.cs`. The finished page (`EventId == -1`) is **auto** (`RunEngine.cs:2478-2482`). | `event.option` per legal a != 3, identified by (event id = info[9], option index a, step = options already taken in this visit). `event.leave` (3) is **excluded** unless it is the only legal action (section 1.5). Every act-1 event's real options are indices 0..2 (`EventOptions.g.cs` counts are at most 3, and the bespoke masks stop at 2), so 3 is never a real option in Act 1. Only Welcome to Wongos, an Act 2 event, uses 3 as its own Leave (`RunEngine.cs:5680-5681`).                                                        | `event.event_id` + `options[i]` (`is_locked`, `is_proceed`); `choose_event_option` (`commands.py:175-215`).                          |
 | 9 TransformSelect                 | offer grid: 0..n-1, plus n = "done" if optional (`RunEngine.cs:789-806`); rest upgrade: upgradable deck indices (`:807-816`); deck selection: indices passing `CanSelectCard` (`:817-826`). There is never a skip.       | Purpose from list 20 (`DeckSelection`, `RunState.cs:5-76`): `select.offer` / `select.offer_done` (offer grid, list 17), `select.upgrade`, `select.remove` (Remove, RemoveUpgradable, RemoveTaggedBasic), `select.transform` (TransformToRandom, ...Upgraded), `select.transform_to` (TransformTo, ...Carrying; the target card id is the argument), `select.enchant` (the argument is the enchantment; always decided by the rules policy, section 4), `select.duplicate`. Two-card selections are two decisions (`RunEngine.cs:4930-4938`). | `card_select` (`screen_type`, `prompt`, `cards`); `select_card` / `confirm_selection` (`commands.py:302-343`).                       |
-| 10 Treasure                       | 3 only (`RunEngine.cs:836-838`).                                                                                                                                                                                         | **auto** (see 1.5: the chest relic is not modelled).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | `treasure.relics`; `take_chest_relic` (`commands.py:259-262`).                                                                       |
+| 10 Treasure                       | 0 (the chest's relic, while it is in the chest) and 3 (`RunEngine.WriteActionMask`, `StepTreasure`).                                                                                                                     | **auto**: the relic, then proceed (1.5.2).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | `treasure.relics`; `take_chest_relic` (`commands.py:259-262`).                                                                       |
 | 12 BundleSelect                   | 0, 1, and 2 = confirm once one is picked (`RunEngine.cs:773-786`).                                                                                                                                                       | `bundle.pick` per bundle (3 card ids each, list 18). The confirm is **auto**.                                                                                                                                                                                                                                                                                                                                                                                                                                                                | `select_bundle` / `confirm_bundle_selection` (`commands.py:139-142`).                                                                |
 | 11 CrystalSphere, 13 FakeMerchant | Act 2+ events (`scripts/soak_act_one.py:40-50`).                                                                                                                                                                         | Not reachable before the Act 1 boss. If one appears: rules fallback, counted.                                                                                                                                                                                                                                                                                                                                                                                                                                                                | n/a                                                                                                                                  |
 | anything else                     | whatever the mask says                                                                                                                                                                                                   | **unknown**: rules fallback (the lowest legal action), counted by (phase, reason) into `status.json`; the reason is `sel_none`, `purpose_<ordinal>`, `eternal_transform_stopgap` or `unhandled_phase`.                                                                                                                                                                                                                                                                                                                                       | n/a                                                                                                                                  |
@@ -203,33 +202,41 @@ searches run clones; the export waits for the prior integration in section 6.5.*
 
 ### 1.5 Engine facts that constrain the design
 
-1. **The run engine at `37e4264` models A8 only; training uses a configurable
-   ascension, default 0.** HP is hardcoded to 64/80 (`RunEngine.cs:17-18`), which is the
-   80% ancient heal of WearyTraveler (A2, `RunEngine.cs:1521-1525`). The elite count is 8
+1. **The run engine at `37e4264` modelled A8 only; training uses a configurable
+   ascension, default 10.** HP was hardcoded to 64/80 (`RunEngine.cs:17-18`), which is the
+   80% ancient heal of WearyTraveler (A2, `RunEngine.cs:1521-1525`). The elite count was 8
    because "the emulator models high ascension, so SwarmingElites is on"
-   (`RunConstants.cs:127-133`). The belt starts at 2 slots (TightBelt, A4;
-   `RunState.cs:176`), and Ascender's Bane (A5) is in the starter deck
-   (`RunConstants.cs:888`). `Sts2Run_Reset` takes no ascension. By controller ruling,
-   training uses a configurable `ascension` defaulting to **0**. The parameter arrives
-   with the `spire-coach-gaps` branch, which threads `ascension` through the native run
-   reset and `native.py`/`run_env.py` with default 0. Every component here takes
-   `ascension` from config and passes it on: `RunSession`, `selfplay`, `evaluate`, the
-   stage-3 generator (`train_combat.py --ascension`; the combat API has taken an ascension
-   since v16) and the model metadata. Until the branch is integrated, `RunSession` raises
-   `ValueError` for any ascension but 8 and names this section, so nothing silently
-   trains at the wrong level. Section 2 was measured at A8, the only level this build runs
-   (2.1).
-2. **Treasure rooms never grant the chest relic.** `EnterTreasureRoom` pays gold only
-   (`RunRewardGenerator.cs:997-1009`), and phase 10 offers nothing but proceed
-   (`RunEngine.cs:836-838, 1410-1419`). `SharedRelicBag` is populated
+   (`RunConstants.cs:127-133`). The belt started at 2 slots (TightBelt, A4;
+   `RunState.cs:176`), and Ascender's Bane (A5) was in the starter deck
+   (`RunConstants.cs:888`). The `spire-coach-gaps` branch, integrated at `ac58c30`,
+   threads `ascension` through the native run reset (run API 20) and
+   `native.py`/`run_env.py`. `RunSession` passes the level straight to
+   `Sts2RunEnv(..., ascension=)`, and so does every component that takes it from config:
+   `selfplay`, `runner`, `evaluate`, the stage-3 generator
+   (`train_combat.py --ascension`; the combat API has taken an ascension since v16) and
+   the model metadata.
+   The engine models 0-9 (`Ascension.MaxRunLevel`) and refuses 10 rather than play it
+   wrong: DoubleBoss gives the last act a second boss and spends an UpFront draw at run
+   start. **By erratum E11 the default is 10**, the user's level. Act 1 at A10 is
+   rule-identical to A9, since DoubleBoss applies only to the last act, so until
+   run-fidelity Task 5 lands, jobs play 9 and record `ascension_stands_in_for: 10`. One
+   seed does not play the same run at both levels (A10's extra UpFront draw shifts every
+   later one), so A9 results do not carry over per seed. When 10 lands, the champion's
+   `EvalMeta` no longer matches and it is re-evaluated (5.6). Sections 2.1-2.8 were
+   measured at A8, the only level the engine ran then; 2.9 is at A9.
+2. **Treasure rooms never granted the chest relic** (fixed since run API 20: the room
+   offers the chest's relic as action 0, `StepTreasure`, and `RunSession`'s treasure auto
+   step takes it; a test holds the room to exactly one relic). `EnterTreasureRoom` paid
+   gold only (`RunRewardGenerator.cs:997-1009`), and phase 10 offered nothing but proceed
+   (`RunEngine.cs:836-838, 1410-1419`). `SharedRelicBag` was populated
    (`RunMapGenerator.cs:28-29`) and never pulled from. The game offers a relic from exactly
    that bag (`TreasureRoomRelicSynchronizer.BeginRelicPicking`, decompiled
    `MegaCrit.Sts2.Core.Multiplayer.Game/TreasureRoomRelicSynchronizer.cs:91-113`). This
    also explains `position_sampler.py`'s puzzle about relic counts (its docstring,
-   lines 18-25). Effect: self-play runs hold roughly one relic fewer per act than live runs,
-   and `?` rooms that turn into treasure are undervalued. **Flagged for an emulator fix
-   outside this plan.** Treasure screens are not decisions on either side (the game's chest
-   holds one relic, and `can_proceed` is false until it is taken).
+   lines 18-25). Effect: self-play runs held roughly one relic fewer per act than live runs,
+   and `?` rooms that turn into treasure were undervalued. Treasure screens are not
+   decisions on either side (the game's chest holds one relic, and `can_proceed` is false
+   until it is taken).
 3. **The emulator offers moves the game does not.** Action 3 (leave) is legal on every
    event page (`RunEngine.cs:5380`), and at a rest site before resting (`:679`). Unrest
    Site, for example, has exactly two options in the game (decompiled `UnrestSite.cs:31-38`;
@@ -290,9 +297,16 @@ searches run clones; the export waits for the prior integration in section 6.5.*
 
   On the current engine the scoring change alone changed 18 of 128 runs over 64 seeds:
   +0.12 floors at 30 sims and +0.25 at 120/500, with the same boss kills. Steps 1 and 2
-  account for the rest, for example 13.43 → 14.91 mean floor and 1 → 7 boss kills at
-  120/500. The micro-benchmarks of 2.2 and the scaling floor of 2.5 are the first
+  account for the rest, for example about 13.45 → 15.04 mean floor and 1 → 7 boss kills
+  at 120/500. The micro-benchmarks of 2.2 and the scaling floor of 2.5 are the first
   measurement's; neither depends on the rules policy.
+
+- **Floors: one convention everywhere (erratum E10).** A boss kill counts as floor 18, the
+  class-18 outcome of 5.2 and the "mean floor reached" of 5.6. The probe records a kill
+  on the boss floor, 17, so every mean floor and floor difference in this section was
+  re-expressed from the same 372 runs' records, a kill adding one floor to its run. Means
+  rose by at most 0.15, the 30 and 60 rows (no kills) did not move, and no conclusion
+  changed. The first measurement's figures quoted in 2.6 and 2.7 count a kill as 17.
 
 - **Timing noise, measured.** A run is deterministic given (seed, budget): MCTS is seeded
   from the run seed, and the rules policy has no randomness. The 30 re-timed runs
@@ -341,15 +355,15 @@ so search is 96.7-99.8% of a run's time. Stage 2's throughput is its combat budg
 
 ### 2.3 Whole Act 1 runs with the rules policy (single process)
 
-| budget      | seeds | s/run (95% CI) | median |   max | mean floor (95% CI) | reached boss | boss kills | runs/h on 8 workers (linear) |
-| ----------- | ----: | -------------: | -----: | ----: | ------------------: | -----------: | ---------: | ---------------------------: |
-| 30          |    20 |   1.50 (±0.24) |   1.44 |  2.51 |       13.00 (±1.85) |            8 |          0 |                       19,200 |
-| 60          |    20 |   2.89 (±0.46) |   2.95 |  4.85 |       13.05 (±1.78) |            8 |          0 |                        9,980 |
-| 120         |    58 |   6.46 (±0.59) |   6.66 | 11.34 |       14.40 (±0.97) |           35 |          6 |                        4,460 |
-| **120/500** |    57 |  12.67 (±1.68) |  11.91 | 41.85 |       14.91 (±0.90) |           39 |          7 |                        2,270 |
-| 250         |    58 |  13.02 (±1.22) |  13.22 | 24.12 |       14.19 (±0.97) |           34 |          7 |                        2,210 |
-| 250/500     |    58 |  17.77 (±2.01) |  16.40 | 49.19 |       14.83 (±0.91) |           39 |          7 |                        1,620 |
-| 500         |    58 |  26.09 (±2.61) |  25.67 | 52.10 |       14.26 (±0.97) |           34 |          9 |                        1,100 |
+| budget      | seeds | s/run (95% CI) | median |   max | mean floor (95% CI; kill = 18) | reached boss | boss kills | runs/h on 8 workers (linear) |
+| ----------- | ----: | -------------: | -----: | ----: | -----------------------------: | -----------: | ---------: | ---------------------------: |
+| 30          |    20 |   1.50 (±0.24) |   1.44 |  2.51 |                  13.00 (±1.85) |            8 |          0 |                       19,200 |
+| 60          |    20 |   2.89 (±0.46) |   2.95 |  4.85 |                  13.05 (±1.78) |            8 |          0 |                        9,980 |
+| 120         |    58 |   6.46 (±0.59) |   6.66 | 11.34 |                  14.50 (±1.00) |           35 |          6 |                        4,460 |
+| **120/500** |    57 |  12.67 (±1.68) |  11.91 | 41.85 |                  15.04 (±0.93) |           39 |          7 |                        2,270 |
+| 250         |    58 |  13.02 (±1.22) |  13.22 | 24.12 |                  14.31 (±1.00) |           34 |          7 |                        2,210 |
+| 250/500     |    58 |  17.77 (±2.01) |  16.40 | 49.19 |                  14.95 (±0.93) |           39 |          7 |                        1,620 |
+| 500         |    58 |  26.09 (±2.61) |  25.67 | 52.10 |                  14.41 (±1.01) |           34 |          9 |                        1,100 |
 
 The rules policy takes 54-64 non-combat engine steps and 7.0-8.2 fights per run. In the
 329 runs of this measurement it met no unknown decision type and never had to take an
@@ -373,7 +387,7 @@ the boss.
 
 ### 2.4 Full-length runs
 
-The rules policy ends on floor 14 on average (13.0-14.9 across budgets), so a better
+The rules policy ends on floor 14 on average (13.0-15.0 across budgets), so a better
 policy's runs will be longer. To time runs that reach the boss, the probe sets HP to 250
 at the start (`--boost-hp 250`, `Sts2Run_DebugSetHp`). Six seeds per budget, and all reach
 the boss:
@@ -426,22 +440,22 @@ Paired by seed (same seed, same rules policy, only the budget differs), 57-58 se
 kills" counts each side's kills. "Only one side cleared" counts the seeds where exactly
 one side killed the boss, with the exact McNemar p-value:
 
-| comparison                   | mean floor difference (paired SE) | boss kills     | only one side cleared (p) |
-| ---------------------------- | --------------------------------- | -------------- | ------------------------- |
-| 500 - 120                    | -0.14 (0.38)                      | 9 vs 6         | 6 vs 3 (0.508)            |
-| 120/500 - 120                | +0.56 (0.42)                      | 7 vs 5         | 5 vs 3 (0.727)            |
-| 250 - 120                    | -0.21 (0.40)                      | 7 vs 6         | 5 vs 4 (1.000)            |
-| 250/500 - 120/500            | +0.05 (0.34)                      | 7 vs 7         | 4 vs 4 (1.000)            |
-| 500 - 120/500                | -0.53 (0.32)                      | 9 vs 7         | 6 vs 4 (0.754)            |
-| 60 - 30, 120 - 30 (20 seeds) | +0.05 (0.84), +1.85 (1.11)        | 0 vs 0, 3 vs 0 | 0 vs 0, 3 vs 0 (0.250)    |
+| comparison                   | mean floor difference (paired SE; kill = 18) | boss kills     | only one side cleared (p) |
+| ---------------------------- | -------------------------------------------- | -------------- | ------------------------- |
+| 500 - 120                    | -0.09 (0.39)                                 | 9 vs 6         | 6 vs 3 (0.508)            |
+| 120/500 - 120                | +0.60 (0.44)                                 | 7 vs 5         | 5 vs 3 (0.727)            |
+| 250 - 120                    | -0.19 (0.42)                                 | 7 vs 6         | 5 vs 4 (1.000)            |
+| 250/500 - 120/500            | +0.05 (0.35)                                 | 7 vs 7         | 4 vs 4 (1.000)            |
+| 500 - 120/500                | -0.49 (0.35)                                 | 9 vs 7         | 6 vs 4 (0.754)            |
+| 60 - 30, 120 - 30 (20 seeds) | +0.05 (0.84), +2.00 (1.14)                   | 0 vs 0, 3 vs 0 | 0 vs 0, 3 vs 0 (0.250)    |
 
-No floor difference is resolved. The largest are 120 over 30 on 20 seeds (+1.85, t = 1.7),
-flat 500 below 120/500 (-0.53, t = -1.6) and 120/500 over 120 (+0.56, t = 1.3). The first
+No floor difference is resolved. The largest are 120 over 30 on 20 seeds (+2.00, t = 1.7),
+flat 500 below 120/500 (-0.49, t = -1.4) and 120/500 over 120 (+0.60, t = 1.4). The first
 measurement's two resolved differences, flat 500 over flat 120 (t = 2.3) and 120/500 over
-120 (t = 2.0), did not hold up (2.1). Raising the ordinary-fight budget from 120 to 250
-bought no floors, with or without 500 in the hard fights. FINDINGS saw the same for
-ordinary fights: 60 to 300 sims was +0.8 HP (the augmented rows of its "Plain MCTS figures
-it out" table).
+120 (t = 2.0, both with a kill counted as 17), did not hold up (2.1). Raising the
+ordinary-fight budget from 120 to 250 bought no floors, with or without 500 in the hard
+fights. FINDINGS saw the same for ordinary fights: 60 to 300 sims was +0.8 HP (the
+augmented rows of its "Plain MCTS figures it out" table).
 
 **Boss kills are not resolved either.** Flat 500 kills the most bosses (9 of 58, against 6
 at 120 and 7 at 120/500), but no comparison is significant. The first measurement's lean
@@ -464,14 +478,14 @@ extra simulations change outcomes, and what they cost. The reasons:
    within noise. A searcher that dies in elites more often than the live coach does
    teaches V to avoid elites. The live coach searches about 8,000 simulations per decision
    (spec 7.3), so self-play's hard fights should be as strong as can be afforded.
-3. **It is ahead of flat 120, though not resolved**: +0.56 floors, paired SE 0.42. The
-   first measurement's +0.45 (SE 0.23) did not hold up (2.6).
+3. **It is ahead of flat 120, though not resolved**: +0.60 floors, paired SE 0.44. The
+   first measurement's +0.45 (SE 0.23, a kill counted as 17) did not hold up (2.6).
 4. **Extra ordinary-fight budget has not been shown to pay** (2.6): 250/500 - 120/500 is
    +0.05 floors, and the two are even on boss kills. 250/500 costs 34% more per
    full-length run than 120/500. With neither side resolved, throughput breaks the tie for
    now, and Task 4 settles it (below).
 5. **Flat 500 is an upgrade candidate, not the default.** It costs 1.7x at full length,
-   has little margin under the 0.6 factor (322/h), and measured -0.53 floors against
+   has little margin under the 0.6 factor (322/h), and measured -0.49 floors against
    120/500 (not resolved) with 9 boss kills against 7.
 
 **The Task 4 recheck.** Once generation 1 is trained, Task 4 plays 200 budget-check seeds
@@ -481,7 +495,9 @@ and at 250/500, paired by seed. It switches the default to 250/500 when all thre
 1. **Boss kills first.** 250/500 kills the boss on significantly more seeds: exact
    McNemar on the seeds only one budget cleared, one-sided p < 0.05.
 2. **Floors are not given up.** The paired 95% CI lower bound on the mean-floor difference
-   (250/500 - 120/500) is above -0.25.
+   (250/500 - 120/500) is above -0.25, with a boss kill counted as floor 18 (E10), so a
+   seed one budget clears and the other dies at the boss on counts one floor. On section
+   2's probe seeds that bound is -0.63.
 3. **Throughput holds.** Let f be generation 0's measured runs/h divided by 2,270, the
    single-process extrapolation for the same policy and budget (2.3). The budget stays
    eligible while its full-length rate from 2.4 times f is at least 300 runs/h: 673 f for
@@ -506,6 +522,59 @@ A generation of 2,000 runs takes 53-88 min at today's run length. At full length
 2.2 h (linear) to 3.7 h (0.6 factor). The 200-seed evaluation takes 13-22 min at full
 length, and training about 10 min. That is roughly 6-21 generations and 13,000-55,000
 self-play runs a day.
+
+### 2.9 The rules baseline on the eval seeds: the initial champion
+
+The first job of the stage-2 runner (5.8): the rules policy at argmax on the 200 eval
+seeds (5.6), at the default budget 120/500, through `evaluate.evaluate` on 8 workers at
+nice 10. Its `EvalResult` is the initial champion's, `runs/stage2/champion/eval.json`.
+
+- **A9 standing in for A10** (erratum E11). The user plays A10 and the default is 10,
+  but the run engine models 0-9 until run-fidelity Task 5. Act 1 at A10 is rule-identical
+  to A9, since DoubleBoss applies only to the last act, so the baseline ran at 9, and its
+  `EvalMeta` says so: `ascension: 9`, `ascension_stands_in_for: 10`. At 10 the same seeds
+  draw other runs (1.5.1), so these are A9's numbers. When 10 lands, the stored
+  `EvalMeta` no longer matches the config, and the champion is re-evaluated (5.6).
+- **Command**, on the code of the commit that added this section (combat API 31, run
+  API 20):
+  ```
+  uv run python -m rl.run_train.evaluate --workers 8 --ascension 9 --stands-in-for 10 \
+      --out runs/stage2/champion/eval.json
+  ```
+- **Conditions.** 2026-09-25. Other agents were working on the machine: the 1-minute load
+  was 3.4 before the run and 9.5 at its end, the 8 workers included.
+
+| completed                  | mean floor (95% CI) | boss kills (Wilson 95%) | mean `V_W` | reached the boss | floor SD |
+| -------------------------- | ------------------: | ----------------------: | ---------: | ---------------: | -------: |
+| 200 of 200 (0 quarantined) | 12.88 (12.25-13.50) |   16 = 8.0% (5.0-12.6%) |      13.52 |               93 |     4.50 |
+
+A boss kill counts as floor 18 (E10), and `V_W` is worth W = 26 for a kill. The floors
+are bimodal: 70 runs die on floors 5-9 and 77 at the boss (floor 17), and 16 kill it.
+Mean floor is below 2.3's 15.04 at A8: A9 adds DeadlyEnemies, and the seeds differ.
+No seed aborted, raised, hung or hit the step cap, and no run met an unknown decision.
+
+**Throughput, the first multi-process measurement.** The 200 runs took 239 s: **3,014
+runs/h** on 8 workers. The linear extrapolation of 2.5 for 120/500 at today's run length
+is 2,270/h, and 1,360/h with the 0.6 factor. The measurement is 1.33 times the first and
+2.2 times the second. Two things are mixed in those ratios, and the job separates them:
+
+1. **The runs were shorter.** At A9 the rules policy dies earlier: 46% of runs reached the
+   boss, against 68% at A8 in 2.3, so fewer fights were searched at 500 simulations. A run
+   took 9.32 s in its worker on average (median 7.97 s, longest 26.15 s).
+2. **Scaling beat the plan.** Every tenth of these seeds (20 runs), replayed one at a time
+   in a single process, took 9.56 s on average against 10.30 s in the workers: 1.08 times
+   as long (1.04-1.15 per run), a per-worker speed of 0.93. Section 2.5 plans with 0.6,
+   below its floor of 0.89 per worker for 10 workers (0.69 with the user busy on 2 more
+   cores). The replays
+   reproduced every outcome. Dispatch cost 2.5%: the workers' summed run times filled
+   97.5% of 8 × 239 s.
+
+Against a linear extrapolation from these runs' own single-process times (8.65 s per run,
+so 3,330/h), the runner delivered 0.91. Only stage 2's 8 workers ran (stage 3's 2 did
+not), and the other agents' work stayed on the machine throughout. A note for Task 4's
+recheck (2.7): the ratio 3,014 / 2,270 = 1.33 also counts A9's shorter runs, so it
+overstates the scaling that 2.7's `f` carries to the full-length rates of 2.4. The
+scaling measured here is about 0.9.
 
 ---
 
@@ -1481,7 +1550,11 @@ given the seed.
   (minutes), then evaluation of the new learner.
 - **Seed sets.** They never overlap. Every seed is drawn from `0-9A-Z` without I and O,
   which the game folds into 1 and 0 (`SeedHelper.cs:23-24`), and each set has its own
-  first character.
+  first character. The two files were generated once and are fixed: seed i of a set is
+  its first character followed by nine base-34 digits of
+  `blake2b("stage2-<eval|test>-seeds:<i>", digest_size=16)` read little-endian, least
+  significant digit first, with a repeat skipped. `EvalMeta` carries the SHA-256 of the
+  seed list.
 
   | set          | seeds                                                          | used for                                                 |
   | ------------ | -------------------------------------------------------------- | -------------------------------------------------------- |
@@ -1514,13 +1587,16 @@ given the seed.
   Mean floor counts a boss kill as 18, the plan's "mean floor reached"; mean `V_W` is
   reported beside it. Boss-kill rates carry Wilson 95% intervals.
 
-- **What the rule can see.** The per-seed floor SD measured in section 2 is about 3.7, so
-  the challenger's CI half-width is 1.96 \* 3.7 / sqrt(200) = 0.51 floors. Two policies'
-  paired per-seed differences have an SD of 2.4-3.2 (2.6). A true gain of delta floors is
-  therefore promoted with probability of about Phi((delta - 0.51) / 0.20): 15% for 0.3,
-  50% for 0.51, 99% for 1.0. The rule is deliberately conservative, and it costs
-  nothing to keep training through unpromoted generations. The guard allows the noise of
-  a paired count, and two kills more.
+- **What the rule can see.** The per-seed floor SD is 3.6-3.9 on section 2's probe
+  seeds at A8 (a boss kill counted as 18) and 4.5 for the rules baseline on the eval
+  seeds at A9 (2.9), so a challenger's CI half-width h is 1.96 \* SD / sqrt(200) =
+  0.53-0.62 floors. Two policies' paired per-seed differences have an SD of 2.6-3.3
+  (2.6). A true gain of delta floors is therefore promoted with probability of about
+  Phi((delta - h) / 0.21): 6-14% for 0.3, 50% at h, 96-99% for 1.0. The rule is
+  deliberately conservative, and it costs nothing to keep training through unpromoted
+  generations. The guard allows the noise of a paired count,
+  ceil(1.96 \* sqrt(n01 + n10)) kills, and never fewer than 2 (erratum E8: 2 is a floor,
+  not an allowance on top).
 - **Self-play uses the latest learner**, not the champion (AlphaZero, not AlphaGo Zero).
   A champion-only loop would stall on stale data behind a rule this conservative. The
   coach and `export` only ever see the champion (Review Focus 4).
@@ -1546,10 +1622,11 @@ config.json                effective config; a resume with another feature_versi
 status.json                atomic (tmp + rename); fields below
 loop.pid, loop.log
 champion.json              {generation, checkpoint, npz, eval path}
+champion/eval.json         the champion's EvalResult; the rules baseline's to start with (2.9, E5)
 gen_0000/                  generation 0 = rules policy
   shards/r0007.jsonl.gz    up to 25 runs (RunRecords); written only by the parent: tmp, fsync, rename
-  quarantine.jsonl         one line per quarantined seed as it happens (seed, exit code, last encounter); appended and fsynced by the parent
-  manifest.json            written last: seeds, shard files, the quarantine list
+  quarantine.jsonl         one line per quarantined seed as it happens (seed, status, reason, exit code, last encounter, traceback tail); appended and fsynced by the parent
+  manifest.json            written last: seeds, shard files, the quarantine list, the policy, the config, the runner's counts
   learner.pt, learner.npz  the checkpoint trained after this generation
   eval.json                the learner's EvalResult: one SeedResult per eval seed, with EvalMeta
   promotion.json           the decision: champion before and after, S, both summaries, n01, n10
@@ -1559,10 +1636,21 @@ final_test.json            the last final-test report
 RunRecord (one JSON line): schema, feature_version, seed, generation, policy
 {kind, checkpoint, tau, eps}, combat {budget: "120/500", c, crn_fraction}, ascension,
 outcome {final_floor, boss_killed, died, end_hp, end_max_hp, truncated},
-map {region, boss, nodes}, decisions [{i, type, floor, state (RunView without the map),
+maps [{region, boss, nodes}], decisions [{i, type, floor, state (RunView without the map),
 options, chosen, values, p_chosen, fallback}], fights [{floor, node_type, encounter,
 weak, sims, state, hp_before, hp_after, won, decisions, seconds}],
-stats {unknown_decisions, forced_skips, potion_left_full_belt, seconds}.
+stats {unknown_decisions, forced_skips, potion_left_full_belt, steps, seconds}.
+`shards.RUN_RECORD_SCHEMA` is the exact layout (JSON Schema, Draft 2020-12), and
+`shards.state_view` / `shards.entry_decision` rebuild a state's `RunView` and its
+`Decision`. Two refinements of the list above:
+
+- **A record keeps every map its run stood on, and each state names its own.** A
+  Golden Compass replaces the act map on pickup (`RunNonCombatEffects.cs`,
+  `GenerateActMap`), so one map per run would give later states the wrong map. A state's
+  `map` indexes `maps`.
+- **`final_floor` is 18 for a boss kill** (erratum E10), and a fight is `weak` when it is
+  one of the act's first three normal fights (`EncounterRngSeed` counts
+  `NormalEncountersVisited` against `WeakEncountersPerAct`), which the player can count.
 
 **Resuming.** On start, the loop finds the newest generation directory and resumes it at
 the first phase whose output is missing. Every output is written tmp-then-rename, so a
@@ -1600,10 +1688,11 @@ emulator is not thread-safe).
 `multiprocessing.Pipe`, and there is no shared task queue. A process killed while it
 holds a shared `Queue`'s internal lock can wedge that queue for every other worker (the
 `multiprocessing` docs warn against terminating a process that uses a queue), and a
-native abort (1.5.7) is exactly such a kill. The parent sends a worker one task,
-`(seed, policy_spec, config)`. The worker answers `("fight", seed, encounter_id)` at each
-fight start and `("done", seed, record)` or `("error", seed, traceback)` at the end, and
-only then gets its next task. So the parent always knows the one seed each worker holds.
+native abort (1.5.7) is exactly such a kill. A worker first says `("ready", None, pid)`
+once it has started. The parent sends it one task (a `runner.Task`: seed, policy spec,
+config and generation). The worker answers `("fight", seed, encounter_id)` at each fight
+start and `("done", seed, record)` or `("error", seed, traceback)` at the end, and only
+then gets its next task. So the parent always knows the one seed each worker holds.
 
 **The parent is the only writer.** Records come back over the pipes. The parent appends
 them to the current shard buffer and writes a shard every 25 records and at the end of a
@@ -1613,34 +1702,45 @@ loses at most the unflushed buffer, whose seeds are replayed on resume (5.7).
 **Failures.** The parent polls each worker's `exitcode` and pipe. A worker that dies is
 replaced; a native abort shows up as SIGABRT, `exitcode == -6`. Its seed is re-queued
 once, and quarantined on a second failure with the exit code and the last encounter the
-worker reported (a `quarantine.jsonl` line, 5.7). A Python exception comes back over the
-pipe; the worker carries on, and the seed follows the same retry-once rule. In an
-evaluation, a quarantined seed becomes a `SeedResult` with status `aborted` or `error`,
-never a missing row.
+worker reported (a `quarantine.jsonl` line, 5.7). A worker still holding one seed after
+`seed_timeout` seconds of wall clock (default 600) is hung, inside a native step or
+anywhere else: the parent kills it (SIGKILL, `exitcode == -9`), replaces it, and its seed
+follows exactly the crash rule, recorded with reason `timeout` (erratum O5). A Python
+exception comes back over the pipe; the worker carries on, and the seed follows the same
+retry-once rule. A seed's status is its last failure's: `aborted` for a death or a
+timeout, `error` for an exception. In an evaluation, a quarantined seed becomes a
+`SeedResult` with status `aborted` or `error`, never a missing row. The parent logs every
+retry and quarantine at warning level. A worker that dies before it is ready never ran
+its seed: the seed goes back to the front of the queue, uncharged. When workers keep
+dying that way (more than two per worker slot in a row, because the play function cannot
+load, say), the job raises instead of quarantining every seed into a complete-looking
+generation with no runs.
 
 **Stopping.** SIGTERM to the loop: the parent stops dispatching, terminates the workers
 (SIGTERM, then SIGKILL after 10 s), flushes the completed records it holds, and writes
-`status.json` with `phase: stopped`.
+`status.json` with `phase: stopped`. `runner.run_seeds` does the first three and raises
+`runner.Stopped`, which the loop catches to write `status.json`.
 
 ### 5.9 Defaults (every one is a config value)
 
-| name                          | default                                                                                      | where it comes from      |
-| ----------------------------- | -------------------------------------------------------------------------------------------- | ------------------------ |
-| `workers` (stage 2 / stage 3) | 8 / 2                                                                                        | Global Constraints       |
-| `combat_budget`               | 120/500 (`CombatBudget(normal=120, hard=500)`), rechecked in Task 4                          | 2.7                      |
-| `c`, `crn_fraction`, rollout  | 0.1, 0.2, tempo                                                                              | `combat_mcts` (FINDINGS) |
-| `ascension`                   | 0 (controller ruling); the run engine needs the `spire-coach-gaps` branch for anything but 8 | 1.5.1                    |
-| `W` (value of a boss kill)    | 26                                                                                           | 5.2                      |
-| `runs_per_generation`         | 2,000                                                                                        | 5.6                      |
-| seed sets                     | 200 eval, 500 final test, 200 budget check                                                   | 5.6                      |
-| promotion                     | CI rule on mean floor + boss-kill guard, on the seeds both completed                         | 5.6                      |
-| `tau_g`, `eps`, `eps0`        | max(0.10, 0.60 \* 0.85^g), 0.02, 0.15                                                        | 5.5                      |
-| `beta` (bootstrap blend)      | 0.3                                                                                          | 5.2                      |
-| buffers (V / fights)          | 8 generations / 400k fights                                                                  | 5.4                      |
-| optimiser                     | AdamW 1e-3, wd 1e-4, batch 1024, <= 30 epochs, patience 3                                    | 5.3                      |
-| `run_step_cap`                | 6,000                                                                                        | 1.4                      |
-| shard size                    | 25 runs                                                                                      | 5.7                      |
-| stage 3                       | 150 fights x 40 encounters, 300 sims, window 3 iterations, eval 240 fights at 60 sims        | 6                        |
+| name                          | default                                                                                   | where it comes from      |
+| ----------------------------- | ----------------------------------------------------------------------------------------- | ------------------------ |
+| `workers` (stage 2 / stage 3) | 8 / 2                                                                                     | Global Constraints       |
+| `combat_budget`               | 120/500 (`CombatBudget(normal=120, hard=500)`), rechecked in Task 4                       | 2.7                      |
+| `c`, `crn_fraction`, rollout  | 0.1, 0.2, tempo                                                                           | `combat_mcts` (FINDINGS) |
+| `ascension`                   | 10 (erratum E11); A9 stands in (`ascension_stands_in_for: 10`) until the engine models 10 | 1.5.1                    |
+| `W` (value of a boss kill)    | 26                                                                                        | 5.2                      |
+| `runs_per_generation`         | 2,000                                                                                     | 5.6                      |
+| seed sets                     | 200 eval, 500 final test, 200 budget check                                                | 5.6                      |
+| promotion                     | CI rule on mean floor + boss-kill guard, on the seeds both completed                      | 5.6                      |
+| `tau_g`, `eps`, `eps0`        | max(0.10, 0.60 \* 0.85^g), 0.02, 0.15                                                     | 5.5                      |
+| `beta` (bootstrap blend)      | 0.3                                                                                       | 5.2                      |
+| buffers (V / fights)          | 8 generations / 400k fights                                                               | 5.4                      |
+| optimiser                     | AdamW 1e-3, wd 1e-4, batch 1024, <= 30 epochs, patience 3                                 | 5.3                      |
+| `run_step_cap`                | 6,000                                                                                     | 1.4                      |
+| shard size                    | 25 runs                                                                                   | 5.7                      |
+| `seed_timeout`                | 600 s of wall clock per seed                                                              | 5.8 (erratum O5)         |
+| stage 3                       | 150 fights x 40 encounters, 300 sims, window 3 iterations, eval 240 fights at 60 sims     | 6                        |
 
 ### 5.10 Seeding
 
@@ -1787,10 +1887,10 @@ able to take `prior_fn`. It is gated by a paired run-level evaluation.
 Task 2 is split in two because the plan's Task 2 carried the whole feature contract
 plus the multiprocess runner. The other changes follow from sections 1-6:
 
-- **Ascension: configurable, default 0** (controller ruling). The run-engine parameter
-  comes from the `spire-coach-gaps` branch at integration. Until then `RunSession`
-  refuses anything but 8 (1.5.1), and tests that touch the run engine pass
-  `ascension=8` explicitly.
+- **Ascension: configurable, default 10** (erratum E11; first ruled 0). The run engine
+  has taken the level since run API 20 (the `spire-coach-gaps` merge, `ac58c30`) and
+  models 0-9, so A9 stands in for A10 until run-fidelity Task 5 (1.5.1). Tests that
+  touch the run engine pass their level explicitly.
 - **Departure from the spec: the fight network trains on self-play fights, not the
   position sampler** (spec 8.1.2 names the sampler). The sampler's own docstring calls
   its relic counts and HP "a competent-player prior" and "a pure guess", and asks to
