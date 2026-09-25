@@ -364,6 +364,7 @@ public static class StateCloning
         return new RunState
         {
             StringSeed = state.StringSeed,
+            AscensionLevel = state.AscensionLevel,
             Rng = rng,
             PlayerRng = CloneAt(rng, state.PlayerRng),
             PlayerHp = state.PlayerHp,
@@ -392,6 +393,7 @@ public static class StateCloning
             GoldenPathAct = state.GoldenPathAct,
             ParasolSweepPending = state.ParasolSweepPending,
             LavaRockTriggered = state.LavaRockTriggered,
+            SilverCrucibleTreasureRoomsEntered = state.SilverCrucibleTreasureRoomsEntered,
             PendingSpecialCardReward = state.PendingSpecialCardReward,
             ResumeEventId = state.ResumeEventId,
             ResumeEventPage = state.ResumeEventPage,

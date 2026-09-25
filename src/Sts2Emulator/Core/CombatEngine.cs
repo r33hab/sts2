@@ -85,6 +85,14 @@ public static class CombatEngine
         // after: Knife Trap aims its Shivs, and the next Hellraiser must roll its own.
         state.AutoPlayTargetIndex = -1;
 
+        // A giant killed where no death check followed -- an auto-play, the start of the
+        // turn -- is back and about to blow before the agent sees the state, as it is in
+        // the game the moment it dies.
+        if (!result.Terminal)
+        {
+            AnswerSteamEruptionDeaths(state, rng);
+        }
+
         return result;
     }
 
@@ -709,14 +717,18 @@ public static class CombatEngine
         // before the end-of-turn effects a card in hand would otherwise see. It is the
         // price of the extra turn granted at the enemy-side seam below, and its guard is
         // the same one, so the two always agree.
+        //
+        // A snapshot, exhausted one `CardCmd.Exhaust` at a time, and each card leaves the
+        // hand as it goes -- so a card a hook puts INTO the hand meanwhile (Burning Sticks'
+        // copy, Dark Embrace's draw) stays there for the rest of the turn end. Clearing the
+        // hand afterwards deleted those from the combat.
         if (Effects.RelicEffects.ShouldExhaustHandForPaelsEye(state))
         {
             foreach (var handCard in state.Hand.ToList())
             {
+                state.Hand.Remove(handCard);
                 Effects.CardEffects.ExhaustCard(state, handCard, rng: rng);
             }
-
-            state.Hand.Clear();
         }
 
         TickTheBomb(state);
@@ -850,28 +862,20 @@ public static class CombatEngine
         // quaffed and not spent expires with the turn. Beside OneTwoPunch because the two
         // powers are the same shape and different rules -- see the note on the BuffId.
         BuffSystem.Remove(state.PlayerBuffs, BuffId.Duplication);
-        // Battle Trance's NoDrawPower only gags the turn it was played on.
-        BuffSystem.Remove(state.PlayerBuffs, BuffId.NoDraw);
 
-        // Both of these deal DAMAGE (CreatureCmd.Damage with ValueProp.Unpowered), so
-        // block absorbs them. Taking it off HP directly is indistinguishable in a capture
-        // that plays no cards and so holds no block, and wrong in every fight that does.
+        // This deals DAMAGE (CreatureCmd.Damage with ValueProp.Unpowered), so block absorbs
+        // it. Taking it off HP directly is indistinguishable in a capture that plays no
+        // cards and so holds no block, and wrong in every fight that does. Disintegration
+        // is the same kind of damage in a later pass -- see the end of the player's turn.
         int constrict = BuffSystem.Get(state.PlayerBuffs, BuffId.Constrict);
         if (constrict > 0)
         {
             Effects.CardEffects.DealDamageToPlayer(state, constrict);
         }
 
-        int disintegration = BuffSystem.Get(state.PlayerBuffs, BuffId.Disintegration);
-        if (disintegration > 0)
-        {
-            Effects.CardEffects.DealDamageToPlayer(state, disintegration);
-        }
-
-        // Move hand to discard, exhausting ethereal cards unless a retain-hand effect is active.
         // `RingingTriangle.ShouldFlush` is false on turn one, so the whole opening hand
         // is kept rather than discarded -- a stronger thing than RetainHand, which the
-        // loop below already honours, because it is not spent.
+        // flush below already honours, because it is not spent.
         int retainHand = BuffSystem.Get(state.PlayerBuffs, BuffId.RetainHand);
         if (Effects.RelicEffects.SkipsHandFlush(state, state.Turn + 1))
         {
@@ -879,44 +883,80 @@ public static class CombatEngine
         }
         // `Regret.BeforeSideTurnEnd` snapshots `Pile.Cards.Count` and spends it in its own
         // turn-end hook, so its damage is the hand as this sequence BEGAN rather than
-        // whatever is left by the time the loop reaches it.
+        // whatever is left by the time the Regret fires.
         int handAtTurnEnd = state.Hand.Count;
+
+        // `CombatManager.DoTurnEnd` sorts the hand AS IT STANDS into two lists before
+        // anything runs -- the cards with a turn-end effect and, `else if`, the Ethereal
+        // ones -- exhausts every Ethereal card, and only then runs each turn-end card. Both
+        // passes walk those lists and never `state.Hand`, because a hook fired from inside
+        // them can put cards INTO the hand: walking the live hand under that threw
+        // "Collection was modified" on seed PRB00058, where a Beckon's HP loss was Centennial
+        // Puzzle's first of the combat and drew three. A card that arrives mid-pass is in
+        // neither list, so it is not exhausted and does not fire; the flush picks it up.
+        // Those hooks only ever ADD to the hand, so each listed card is still there, as
+        // listed, when its turn comes.
+        //
+        // Ethereal is the KEYWORD, which `IsEtherealForPowers` reads whole. Three cards drop
+        // it when upgraded (this was `def.Id == 159`, Echo Form, and said nothing about
+        // Apparition or Void Form). `GhostSeed.AfterCardEnteredCombat` grants it to every
+        // BASIC Strike and Defend -- read here rather than baked onto the instance, because
+        // a keyword the relic gave is one it takes back if the relic ever leaves. And
+        // `HexPower` afflicts every card the player owns with `Hexed`, which
+        // `TryModifyKeywordsInCombat` makes Ethereal, so while the Spectral Knight's Hex is up
+        // the whole hand burns off at end of turn; the emulator once tracked Hex as a bare
+        // counter, and the Knights fight diverged on hands from the turn it landed.
+        var turnEndCards = new List<CardInstance>();
+        var etherealCards = new List<CardInstance>();
+        foreach (var card in state.Hand)
+        {
+            if (GeneratedData.Cards.Get(card.DefId).TurnEndInHand)
+            {
+                turnEndCards.Add(card);
+            }
+            else if (IsEtherealForPowers(state, card))
+            {
+                etherealCards.Add(card);
+            }
+        }
+
+        foreach (var card in etherealCards)
+        {
+            // `CardCmd.Exhaust` moves the card out of the hand before its hooks run.
+            state.Hand.Remove(card);
+            Effects.CardEffects.ExhaustCard(state, card, causedByEthereal: true, rng: rng);
+        }
+
+        foreach (var card in turnEndCards)
+        {
+            // `OnTurnEndInHandWrapper`: into the Play pile, `OnTurnEndInHand`, then Exhaust
+            // if the card is Ethereal and Discard if not. So a turn-end card never stays in
+            // hand, whatever keeps the rest of it: retaining is `ShouldFlush`, and only the
+            // flush asks. Eleven cards have the hook; it was a hand-kept list of four "burn
+            // the holder" statuses plus Beckon, and three of the missing six do something
+            // other than damage.
+            state.Hand.Remove(card);
+            Effects.CardEffects.ApplyTurnEndInHand(
+                state,
+                GeneratedData.Cards.Get(card.DefId),
+                handAtTurnEnd,
+                rng
+            );
+            if (IsEtherealForPowers(state, card))
+            {
+                Effects.CardEffects.ExhaustCard(state, card, causedByEthereal: true, rng: rng);
+            }
+            else
+            {
+                state.DiscardPile.Add(DiscardedAtTurnEnd(card));
+            }
+        }
+
+        // `FlushPlayerHand`: the hand as it stands NOW, cards the passes above drew
+        // included, is discarded or kept. No hook fires in here.
         var nextHand = new List<CardInstance>();
         foreach (var card in state.Hand)
         {
-            var def = GeneratedData.Cards.Get(card.DefId);
-            // Three cards drop Ethereal when upgraded, not one: this was `def.Id == 159`,
-            // which is Echo Form, and said nothing about Apparition or Void Form.
-            // `GhostSeed.AfterCardEnteredCombat` gives Ethereal to every BASIC Strike or
-            // Defend. Read here rather than baked onto the instance because the relic
-            // grants the KEYWORD, and a keyword the relic gave is one it takes back if the
-            // relic ever leaves.
-            bool ghostSeeded =
-                Effects.RelicEffects.MakesBasicsEthereal(state) && IsBasicStrikeOrDefend(card);
-            // `HexPower.TryModifyKeywordsInCombat` grants Ethereal to every card afflicted
-            // with `Hexed`, and `AfterApplied` afflicts EVERY card the player owns in
-            // combat (`AfterCardEnteredCombat` catches the ones made later). So while the
-            // Spectral Knight's Hex is up the whole hand is Ethereal and burns off at end
-            // of turn. The emulator tracked `BuffId.Hex` as a debuff counter and did
-            // nothing with it, so the Knights fight diverged on hands from the turn the
-            // Hex landed and never came back.
-            bool hexed = BuffSystem.Get(state.PlayerBuffs, BuffId.Hex) > 0;
-            if (card.IsEthereal() || ghostSeeded || hexed)
-            {
-                Effects.CardEffects.ExhaustCard(state, card, causedByEthereal: true, rng: rng);
-                continue;
-            }
-
-            // `CardModel.OnTurnEndInHand`, for the eleven cards that have one. This was a
-            // hand-kept list of four "burn the holder" statuses plus Beckon beside it; six
-            // were missing, and three of those do something other than damage.
-            Effects.CardEffects.ApplyTurnEndInHand(state, def, handAtTurnEnd, rng);
-
-            // Hand Trick's Sly lasts a single TURN, so a card that survives into the
-            // next hand does not carry the grant with it. Note this cleanup does NOT go
-            // through DiscardMovedCards: the end-of-turn discard is not a
-            // `CardCmd.Discard` in the game and does not trigger Sly, so holding a
-            // Tactician to the end of the turn buys nothing.
             // `PhantomBladesPower.AfterCardEnteredCombat` gives the Retain KEYWORD to
             // every Shiv the player owns, so a Shiv in hand survives the turn while the
             // power is up.
@@ -942,14 +982,7 @@ public static class CombatEngine
             }
             else
             {
-                state.DiscardPile.Add(
-                    card with
-                    {
-                        FreeThisTurn = false,
-                        SlyThisTurn = false,
-                        CostThisTurn = int.MinValue,
-                    }
-                );
+                state.DiscardPile.Add(DiscardedAtTurnEnd(card));
             }
         }
         state.Hand.Clear();
@@ -957,7 +990,6 @@ public static class CombatEngine
         // `Hook.AfterFlush(cardsToFlush, cardsToRetain)`, dispatched once after the whole
         // hand has moved -- `nextHand` IS the retained list.
         Effects.RelicEffects.ApplyAfterFlush(state, rng);
-        Effects.RelicEffects.ApplyAfterEndOfPlayerTurnShared(state, rng);
 
         if (retainHand == 1)
         {
@@ -1010,12 +1042,42 @@ public static class CombatEngine
             return new StepResult(Terminal: true, PlayerWon: false, Reward: -1f);
         }
 
+        // A giant the player's turn end killed -- The Bomb, Stone Calendar, an orb -- was
+        // back and about to blow the moment it died, so ABOUT_TO_BLOW is the move it takes
+        // in the enemy phase below. Left for the end-of-phase death check, it would sit
+        // that phase out as a corpse and blow a round late.
+        AnswerSteamEruptionDeaths(state, rng);
+
         // `OblivionPower.AfterSideTurnEnd` removes itself when the PLAYER's side turn ends
         // -- not its owner's, which is the enemy's. Removed after the Doom it spent the
         // turn stacking has been paid, so the last card played still counts.
         foreach (var enemy in state.Enemies)
         {
             BuffSystem.Remove(enemy.Buffs, BuffId.Oblivion);
+        }
+
+        // `NoDrawPower.AfterSideTurnEnd` -- Battle Trance's and Bullet Time's gag, lifted
+        // with the rest of the player's side-turn-end powers in
+        // `EndPlayerTurnPhaseTwoInternal`, which is after `DoTurnEnd` has run the hand's
+        // turn-end cards and after the flush. So every draw the turn end itself fires is
+        // still refused: a Beckon's HP loss spends Centennial Puzzle and draws nothing.
+        // It was lifted before the hand pass, and the Puzzle's three came through.
+        BuffSystem.Remove(state.PlayerBuffs, BuffId.NoDraw);
+
+        // The relics' `AfterSideTurnEnd` -- Joss Paper's payout. It is the same
+        // `Hook.AfterTurnEnd` pass as the player's powers above, but
+        // `CombatState.IterateHookListeners` walks a creature's powers BEFORE its player's
+        // relics, so No Draw has lifted by the time the paper draws.
+        Effects.RelicEffects.ApplyAfterEndOfPlayerTurnShared(state, rng);
+
+        // `DisintegrationPower.AfterSideTurnEndLate`: the LATE pass, which
+        // `Hook.AfterTurnEnd` runs only once every `AfterSideTurnEnd` above is done. So it
+        // lands after the flush and after No Draw lifts: a Centennial Puzzle it trips draws
+        // its three for the next turn. Block absorbs it, as it does Constrict.
+        int disintegration = BuffSystem.Get(state.PlayerBuffs, BuffId.Disintegration);
+        if (disintegration > 0)
+        {
+            Effects.CardEffects.DealDamageToPlayer(state, disintegration);
         }
 
         // `PaelsEye.ShouldTakeExtraTurn`: a turn in which the owner played NOTHING, once
@@ -1125,6 +1187,14 @@ public static class CombatEngine
                         {
                             BuffSystem.Apply(enemy.Buffs, BuffId.Poison, -1);
                         }
+                    }
+
+                    // A giant the poison kills holding Steam Eruption is not out of this
+                    // phase: the poison ticks as the side's turn STARTS, before anyone acts,
+                    // so the forced ABOUT_TO_BLOW is the move it takes now.
+                    if (enemy.Hp <= 0 && EnemyAI.DiedHoldingSteamEruption(enemy))
+                    {
+                        AnswerSteamEruptionDeaths(state, rng);
                     }
 
                     if (enemy.Hp <= 0)
@@ -1886,8 +1956,11 @@ public static class CombatEngine
             return StepResult.Invalid;
         }
 
-        Effects.PotionEffects.Apply(state.PotionSlots[slot], state, rng);
+        // `PotionModel.OnUseWrapper` calls `RemoveBeforeUse()` before `OnUse`, so the
+        // potion's own slot is already free while its effect runs -- Entropic Brew fills it.
+        int potionId = state.PotionSlots[slot];
         state.PotionSlots[slot] = 0;
+        Effects.PotionEffects.Apply(potionId, state, rng);
         // `ReptileTrinket.AfterPotionUsed`, and it is AFTER: a potion that grants Strength
         // of its own has already landed, so the two stack rather than one replacing it.
         Effects.RelicEffects.ApplyAfterPotionUsed(state);
@@ -3025,7 +3098,8 @@ public static class CombatEngine
     private static void HandleEnemyDeaths(
         CombatState state,
         ReadOnlySpan<int> enemyHpsBefore,
-        Random rng
+        Random rng,
+        bool removeCorpses = true
     )
     {
         for (int i = 0; i < state.Enemies.Count && i < enemyHpsBefore.Length; i++)
@@ -3176,6 +3250,14 @@ public static class CombatEngine
                 enemy.CurrentIntent = new Intent(IntentType.Unknown, 0);
                 enemy.SecondaryIntent = null;
             }
+
+            // `SteamEruptionPower.AfterDeath` -> `TriggerAboutToBlowState`. Not in the
+            // revive chain above, because this death is a REAL one: `Hook.AfterDeath` runs
+            // with `wasRemovalPrevented: false`, so every death hook here has fired for it
+            // -- Gremlin Horn and Melancholy included -- and the power's own AfterDeath is
+            // simply one more listener. The corpse sweep below keeps the giant, which is
+            // standing again.
+            EnemyAI.TriggerAboutToBlow(state.Enemies[i]);
         }
 
         // MIRROR THE GAME: a creature that died leaves the roster unless a power vetoes.
@@ -3186,8 +3268,50 @@ public static class CombatEngine
         // enemy that was attacking it.
         //
         // Done AFTER the loop above, which walks by index against `enemyHpsBefore` and
-        // would lose its correlation if the list shrank underneath it.
-        state.Enemies.RemoveAll(enemy => enemy.Hp <= 0 && EnemyAI.ShouldRemoveOnDeath(enemy));
+        // would lose its correlation if the list shrank underneath it -- and skipped when
+        // this is answering one death early (`AnswerSteamEruptionDeaths`), because a later
+        // call is still to walk the same roster against its own snapshot.
+        if (removeCorpses)
+        {
+            state.Enemies.RemoveAll(enemy => enemy.Hp <= 0 && EnemyAI.ShouldRemoveOnDeath(enemy));
+        }
+    }
+
+    /// <summary>
+    /// Answers the death of any Waterfall Giant that died holding Steam Eruption and has
+    /// not been answered yet: its death hooks, then `TriggerAboutToBlowState`.
+    /// </summary>
+    /// <remarks>
+    /// The game answers inside the death. The emulator answers a death after the action
+    /// that caused it, and some actions never check at all -- an auto-play, the start of the
+    /// player's turn -- or check only after the enemy phase, which is a phase too late for
+    /// a giant killed as the player's turn ends (it performs ABOUT_TO_BLOW in the very
+    /// next enemy phase). So the engine calls this wherever a death must not wait: before
+    /// the enemies act, as a poison tick kills the giant at the start of its turn, and
+    /// before a step returns.
+    ///
+    /// Only the giant's death is handled here. `HandleEnemyDeaths` reads its snapshot for
+    /// one thing -- was the creature standing before -- so the snapshot marks the giant and
+    /// nothing else, and the corpse sweep is left to the call that owns the roster's
+    /// snapshot.
+    /// </remarks>
+    private static void AnswerSteamEruptionDeaths(CombatState state, Random rng)
+    {
+        Span<int> standingBefore = stackalloc int[state.Enemies.Count];
+        bool any = false;
+        for (int i = 0; i < state.Enemies.Count; i++)
+        {
+            if (EnemyAI.DiedHoldingSteamEruption(state.Enemies[i]))
+            {
+                standingBefore[i] = 1;
+                any = true;
+            }
+        }
+
+        if (any)
+        {
+            HandleEnemyDeaths(state, standingBefore, rng, removeCorpses: false);
+        }
     }
 
     /// <summary>
@@ -3219,11 +3343,20 @@ public static class CombatEngine
     /// the set that overrides that hook: an Eye With Teeth mid-revive is not a primary
     /// enemy at all, and a reattaching Decimillipede segment does NOT hold the fight open
     /// — emptying all three inside one window is how that elite is won.
+    ///
+    /// `SteamEruptionPower.ShouldStopCombatFromEnding` is the other override: a Waterfall
+    /// Giant that has died holding the power is about to blow, not beaten. In the game it
+    /// is back at 999999999 HP before anything asks; here its death is answered after the
+    /// action that caused it, and until then this is what keeps the fight going.
     /// </remarks>
     private static bool NoPrimaryEnemyLeft(CombatState state) =>
         !state.Enemies.Any(enemy =>
             IsPrimaryEnemy(enemy)
-            && (enemy.Hp > 0 || BuffSystem.Get(enemy.Buffs, BuffId.Adaptable) > 0)
+            && (
+                enemy.Hp > 0
+                || BuffSystem.Get(enemy.Buffs, BuffId.Adaptable) > 0
+                || EnemyAI.DiedHoldingSteamEruption(enemy)
+            )
         );
 
     /// <summary>
@@ -3936,6 +4069,24 @@ public static class CombatEngine
         // Hex grants the KEYWORD globally while it is up, so anything that asks whether a
         // card is Ethereal -- Spirit of Ash, Veilpiercer -- has to see it too.
         || BuffSystem.Get(state.PlayerBuffs, BuffId.Hex) > 0;
+
+    /// <summary>
+    /// A card sent to the discard pile as the player's turn ends, flushed or after its own
+    /// turn-end effect, with its single-turn grants taken off.
+    /// </summary>
+    /// <remarks>
+    /// Hand Trick's Sly lasts a single TURN, so the grant does not ride into the pile. This
+    /// is NOT `DiscardMovedCards`: the end-of-turn discard is a `CardPileCmd.Add`, not a
+    /// `CardCmd.Discard`, and does not trigger Sly -- holding a Tactician to the end of the
+    /// turn buys nothing.
+    /// </remarks>
+    private static CardInstance DiscardedAtTurnEnd(CardInstance card) =>
+        card with
+        {
+            FreeThisTurn = false,
+            SlyThisTurn = false,
+            CostThisTurn = int.MinValue,
+        };
 
     private static bool IsBasicStrikeOrDefend(CardInstance card)
     {
@@ -4731,7 +4882,9 @@ public static class CombatEngine
         Random rng,
         Intent intent,
         bool stunned = false,
-        int ascension = Ascension.DefaultLevel,
+        // Null is the fight's own level -- a Wriggler passed none, and took the combat
+        // layer's A8 default whatever the fight ran at.
+        int? ascension = null,
         int moveIndex = 0,
         // The combat, so the HP roll uses the stream the game uses. Without it the roll
         // falls back to the combat rng with no unique-HP rule.
@@ -4739,7 +4892,7 @@ public static class CombatEngine
     )
     {
         var def = GeneratedData.Enemies.Get(defId);
-        var band = def.HpBand(ascension);
+        var band = def.HpBand(ascension ?? state?.AscensionLevel ?? Ascension.DefaultLevel);
         int hp = EnemyAI.RollSummonedHp(band.Min, band.Max, state, rng);
         var enemy = new EnemyState
         {

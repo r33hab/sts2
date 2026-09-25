@@ -1,0 +1,60 @@
+{
+  "schema": "sts2-live-snapshot/1",
+  "game_version": "v0.107.1",
+  "character": "IRONCLAD",
+  "ascension": 0,
+  "act": 1,
+  "floor": 12,
+  "room_type": "monster",
+  "round": 3,
+  "player": {
+    "hp": 48,
+    "max_hp": 80,
+    "block": 0,
+    "energy": 1,
+    "max_energy": 3,
+    "gold": 210,
+    "stars": 0,
+    "osty": null,
+    "orbs": {"slots": 0, "list": []},
+    "powers": [{"id": "DEXTERITY_POWER", "amount": 2}],
+    "relics": [
+      {"id": "BURNING_BLOOD", "counter": null, "fields": {}},
+      {"id": "KUNAI", "counter": 2, "fields": {"_isActivating": false, "_attacksPlayedThisTurn": 5}},
+      {"id": "NUNCHAKU", "counter": 7, "fields": {"_isActivating": false, "_attacksPlayed": 17}},
+      {"id": "HAPPY_FLOWER", "counter": 2, "fields": {"_isActivating": false, "_turnsSeen": 2}},
+      {"id": "PEN_NIB", "counter": 9, "fields": {}},
+      {"id": "CENTENNIAL_PUZZLE", "counter": null, "fields": {"_usedThisCombat": true}},
+      {"id": "GIRYA", "counter": 2, "fields": {"_timesLifted": 2}},
+      {"id": "EMBER_TEA", "counter": 3, "fields": {"_combatsLeft": 3}},
+      {"id": "POCKETWATCH", "counter": 2, "fields": {"_cardsPlayedThisTurn": 2, "_cardsPlayedLastTurn": 3}},
+      {"id": "BELT_BUCKLE", "counter": null, "fields": {"_dexterityApplied": true}},
+      {
+        "id": "RAINBOW_RING",
+        "counter": null,
+        "fields": {
+          "_attacksPlayedThisTurn": 1,
+          "_skillsPlayedThisTurn": 1,
+          "_powersPlayedThisTurn": 0,
+          "_activationCountThisTurn": 0
+        }
+      },
+      {"id": "ANCHOR", "counter": null, "fields": {}}
+    ],
+    "potions": [
+      {"slot": 0, "id": null},
+      {"slot": 1, "id": null},
+      {"slot": 2, "id": null}
+    ],
+    "max_potion_slots": 3
+  },
+  "hand": [],
+  "draw_pile": [],
+  "discard_pile": [],
+  "exhaust_pile": [],
+  "known_draw_top": [],
+  "known_draw_bottom": [],
+  "enemies": [],
+  "history": {"cards_played_this_turn": 2, "attacks_played_this_turn": 1},
+  "pending_selection": null
+}

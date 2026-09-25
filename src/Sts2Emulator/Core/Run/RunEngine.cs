@@ -7,25 +7,53 @@ public sealed class RunEngine
 {
     public RunState State { get; private init; } = new();
 
-    public void Reset(string seed)
+    /// <summary>Start a new run on this seed, standing at Neow.</summary>
+    /// <param name="seed">The seed as typed; it is canonicalized before it is hashed.</param>
+    /// <param name="ascension">
+    /// The run's ascension level, 0 to <see cref="Ascension.MaxRunLevel" />. Every ascension
+    /// rule in the run and in the combats it starts reads it. The default is
+    /// <see cref="Ascension.DefaultLevel" />, the level the differential captures were taken
+    /// at; the native export and the Python wrappers take it explicitly and default to 0.
+    /// </param>
+    /// <exception cref="ArgumentOutOfRangeException">A level the run engine does not model.</exception>
+    public void Reset(string seed, int ascension = Ascension.DefaultLevel)
     {
+        if (ascension is < 0 or > Ascension.MaxRunLevel)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(ascension),
+                ascension,
+                $"The run engine models ascension 0 to {Ascension.MaxRunLevel}."
+            );
+        }
+
+        State.AscensionLevel = ascension;
         // Store the canonical seed, not the typed one: the game canonicalizes before it
         // hashes, so "abcdefo" and "ABCDEF0" are the same run.
         State.Rng = new RunRngSet(seed);
         State.StringSeed = State.Rng.StringSeed;
         State.PlayerRng = new PlayerRngSet(State.Rng);
-        State.PlayerHp = 64;
-        State.PlayerMaxHp = 80;
+        // The Ironclad's StartingHp, and then Neow: `AncientEventModel.BeforeEventStarted`
+        // sets a Neow run's current HP to 0 and heals it like any ancient, so it starts full
+        // below WearyTraveler and on 64 from it.
+        State.PlayerMaxHp = RunConstants.StartingMaxHp;
+        State.PlayerHp = 0;
+        ApplyAncientHeal();
         State.Gold = 99;
         State.Floor = 1;
         State.Phase = RunPhase.Ancient;
         State.Deck = [];
-        foreach (int cardId in RunConstants.StarterDeckIds)
+        // `AscensionManager.ApplyEffectsTo` puts Ascender's Bane on the end of the deck
+        // from AscendersBane up; below it the starting deck is the character's own ten.
+        foreach (int cardId in RunConstants.StartingDeckIds(ascension))
         {
             RunNonCombatEffects.AddCardToDeck(State, new CardInstance(cardId, Upgraded: false));
         }
 
         State.Relics = [new RelicInstance(RunConstants.RelicBurningBlood)];
+        // `Player.CreateForNewRun` starts the belt at three slots, and
+        // `AscensionManager.ApplyEffectsTo` takes one away under TightBelt.
+        State.MaxPotionSlots = RunConstants.StartingPotionSlots(ascension);
         Array.Clear(State.PotionSlots);
         State.CurrentNodeType = RunConstants.NodeNormal;
         Array.Clear(State.NeowOptions);
@@ -64,6 +92,7 @@ public sealed class RunEngine
         State.FurCoatRooms.Clear();
         State.FurCoatAct = -1;
         State.GoldenPathAct = -1;
+        State.SilverCrucibleTreasureRoomsEntered = 0;
         State.ParasolSweepPending = false;
         State.UnknownMapPointsVisited = 0;
         State.UnknownMapPointMonsterOdds = 0.1;
@@ -156,7 +185,9 @@ public sealed class RunEngine
             shuffleRng.Next();
         }
 
-        var combat = new CombatState();
+        // The fight is the run's, and so is its level: every monster's HP band and move
+        // table reads it. A bare CombatState is the combat layer's own default of A8.
+        var combat = new CombatState { AscensionLevel = State.AscensionLevel };
         var combatRng = new CountingRandom(State.Rng.Niche.RawSeed);
         var nicheHpRng = new CountingRandom(State.Rng.Niche.RawSeed);
         for (int i = 0; i < State.Rng.Niche.CallCount; i++)
@@ -834,6 +865,12 @@ public sealed class RunEngine
                 break;
 
             case RunPhase.Treasure:
+                // The chest's relic while it is still in the chest; leaving is always there.
+                if (State.RelicReward != 0)
+                {
+                    SetMask(mask, RunConstants.TreasureTakeRelicAction);
+                }
+
                 SetMask(mask, RunConstants.RewardSkipAction);
                 break;
 
@@ -1409,13 +1446,7 @@ public sealed class RunEngine
 
         if (State.Phase == RunPhase.Treasure)
         {
-            if (action != RunConstants.RewardSkipAction)
-            {
-                return -1;
-            }
-
-            int status = AdvanceAfterNode(out terminal);
-            return status;
+            return StepTreasure(action, out terminal);
         }
 
         if (State.Phase == RunPhase.Complete)
@@ -1476,18 +1507,6 @@ public sealed class RunEngine
     }
 
     /// <summary>
-    /// <c>AncientEventModel.BeforeEventStarted</c>: entering an ancient heals the player
-    /// toward full, and at A8's <c>WearyTraveler</c> only 80% of what they are missing.
-    /// </summary>
-    /// <remarks>
-    /// This is the rule behind the run's own opening HP. Neow calls
-    /// <c>SetCurrentHpInternal(0)</c> first, so the heal is 80% of the whole 80 max — 64,
-    /// which the emulator has always hardcoded in <c>Reset</c> as a starting constant
-    /// without knowing where it came from. Every act after the first walks onto its own
-    /// ancient at whatever HP it finished the last one with, and is topped up the same
-    /// way: a capture crosses into act 2 on 264/280 and stands on Pael at 276.
-    /// </remarks>
-    /// <summary>
     /// Put the act's own ancient on screen, with the three blessings it offers.
     /// </summary>
     /// <remarks>
@@ -1510,18 +1529,56 @@ public sealed class RunEngine
         State.Phase = RunPhase.Ancient;
     }
 
-    private void ApplyAncientHeal()
+    /// <summary>
+    /// <c>AncientEventModel.BeforeEventStarted</c>: entering an ancient heals the player
+    /// toward full -- and under <c>WearyTraveler</c> only 80% of what they are missing.
+    /// </summary>
+    /// <remarks>
+    /// This is the rule behind the run's own opening HP. Neow calls
+    /// <c>SetCurrentHpInternal(0)</c> first, so the heal is of the whole 80 max: 64 from
+    /// WearyTraveler, which the emulator once hardcoded in <c>Reset</c> as a starting
+    /// constant without knowing where it came from, and a full 80 below it. Every act after
+    /// the first walks onto its own ancient at whatever HP it finished the last one with,
+    /// and is topped up the same way: a capture crosses into act 2 on 264/280 and stands on
+    /// Pael at 276.
+    /// </remarks>
+    private void ApplyAncientHeal() =>
+        State.PlayerHp = HpAfterAncientHeal(
+            State.PlayerHp,
+            State.PlayerMaxHp,
+            State.AscensionLevel
+        );
+
+    /// <summary>
+    /// The HP a run stands on once Neow has healed it: <see cref="HpAfterAncientHeal" />
+    /// from zero, of <see cref="RunConstants.StartingMaxHp" />. 80 below WearyTraveler and
+    /// 64 from it.
+    /// </summary>
+    /// <remarks>
+    /// The combat API's synthetic start opens on this too, so a fight built without a run
+    /// stands where the run's first fight would.
+    /// </remarks>
+    public static int StartingHp(int ascension) =>
+        HpAfterAncientHeal(0, RunConstants.StartingMaxHp, ascension);
+
+    /// <summary>The rule <see cref="ApplyAncientHeal" /> applies, on plain numbers.</summary>
+    private static int HpAfterAncientHeal(int hp, int maxHp, int ascension)
     {
-        int missing = State.PlayerMaxHp - State.PlayerHp;
+        int missing = maxHp - hp;
         if (missing <= 0)
         {
-            return;
+            return hp;
         }
 
-        State.PlayerHp += (int)(missing * WearyTravelerHealFraction);
+        return hp
+            + (
+                Ascension.Has(ascension, Ascension.WearyTraveler)
+                    ? (int)(missing * WearyTravelerHealFraction)
+                    : missing
+            );
     }
 
-    /// <summary>A8 has WearyTraveler, which pays 80% of a full heal.</summary>
+    /// <summary>What WearyTraveler leaves of an ancient's heal.</summary>
     private const double WearyTravelerHealFraction = 0.8;
 
     private void EnterMapPhase()
@@ -1915,6 +1972,37 @@ public sealed class RunEngine
             RunRewardGenerator.EnterRelicReward(State);
             return 0;
         }
+        return AdvanceAfterNode(out terminal);
+    }
+
+    /// <summary>
+    /// The open chest. Taking the relic is `PickRelicLocally` and the award is
+    /// `RelicCmd.Obtain`, so its pickup effect runs; the room then waits for its Proceed,
+    /// as the game's does. Proceeding with the relic still in the chest is
+    /// `SkipRelicLocally` and hands over nothing.
+    /// </summary>
+    /// <remarks>
+    /// The pickup's follow-up is not routed anywhere, the same as a relic claimed off an
+    /// elite's reward screen: a chest holds a Common, Uncommon or Rare, and none of those
+    /// opens a screen of its own on pickup -- every relic that does is Ancient or Shop.
+    /// </remarks>
+    private int StepTreasure(int action, out bool terminal)
+    {
+        terminal = false;
+        if (action == RunConstants.TreasureTakeRelicAction && State.RelicReward != 0)
+        {
+            int claimed = State.RelicReward;
+            State.RelicReward = 0;
+            RunNonCombatEffects.ApplyRelicPickup(State, claimed);
+            return 0;
+        }
+
+        if (action != RunConstants.RewardSkipAction)
+        {
+            return -1;
+        }
+
+        State.RelicReward = 0;
         return AdvanceAfterNode(out terminal);
     }
 
@@ -4333,9 +4421,9 @@ public sealed class RunEngine
             case RunConstants.EventHungryForMushrooms:
                 // Two RelicOptions: BIG MUSHROOM outright, or FRAGRANT MUSHROOM with
                 // `.ThatDoesDamage(15m)` on the option. The emulator gave max HP and a
-                // potion. Neither relic does anything yet -- both are in the 125 the
-                // emulator does not model -- but granting the right one puts the run's
-                // relic list where the game puts it, which is what an event owes.
+                // potion. Granting the right relic puts the run's relic list where the game
+                // puts it, which is what an event owes; both relics are modelled, and Big
+                // Mushroom's opening-hand penalty lives in `RelicEffects`.
                 // The HP swing belongs to the RELICS, not to the event: both are
                 // `HasUponPickupEffect`, so it lands through `ApplyRelicPickup` and would
                 // land the same way if the relic arrived by any other route. The option's

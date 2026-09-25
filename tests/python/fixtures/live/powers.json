@@ -1,0 +1,75 @@
+{
+  "schema": "sts2-live-snapshot/1",
+  "game_version": "v0.107.1",
+  "character": "IRONCLAD",
+  "ascension": 0,
+  "act": 1,
+  "floor": 4,
+  "room_type": "monster",
+  "round": 2,
+  "player": {
+    "hp": 55,
+    "max_hp": 80,
+    "block": 0,
+    "energy": 1,
+    "max_energy": 3,
+    "gold": 60,
+    "stars": 0,
+    "osty": null,
+    "orbs": {"slots": 0, "list": []},
+    "powers": [
+      {"id": "STRENGTH_POWER", "amount": 5},
+      {"id": "FLEX_POTION_POWER", "amount": 2},
+      {"id": "CRIMSON_MANTLE_POWER", "amount": 18}
+    ],
+    "relics": [{"id": "BURNING_BLOOD", "counter": null, "fields": {}}],
+    "potions": [
+      {"slot": 0, "id": null},
+      {"slot": 1, "id": null},
+      {"slot": 2, "id": null}
+    ],
+    "max_potion_slots": 3
+  },
+  "hand": [],
+  "draw_pile": [],
+  "discard_pile": [],
+  "exhaust_pile": [],
+  "enemies": [
+    {
+      "entity_id": "GREMLIN_MERC_0",
+      "id": "GREMLIN_MERC",
+      "slot": 0,
+      "hp": 40,
+      "max_hp": 47,
+      "block": 0,
+      "powers": [
+        {"id": "STRENGTH_POWER", "amount": -16},
+        {"id": "PIERCING_WAIL_POWER", "amount": 6},
+        {"id": "MANGLE_POWER", "amount": 10},
+        {"id": "THIEVERY_POWER", "amount": 20}
+      ],
+      "intents": [
+        {"type": "ATTACK", "damage": 0, "base_damage": 6, "hits": 2},
+        {"type": "DEBUFF", "damage": null, "base_damage": null, "hits": null}
+      ],
+      "move_id": "DOUBLE_SMASH_MOVE",
+      "state_log": ["GIMME_MOVE", "DOUBLE_SMASH_MOVE"],
+      "ai_fields": {}
+    },
+    {
+      "entity_id": "FAT_GREMLIN_1",
+      "id": "FAT_GREMLIN",
+      "slot": 1,
+      "hp": 12,
+      "max_hp": 12,
+      "block": 0,
+      "powers": [{"id": "HEIST_POWER", "amount": 40}],
+      "intents": [{"type": "ESCAPE", "damage": null, "base_damage": null, "hits": null}],
+      "move_id": "FLEE_MOVE",
+      "state_log": ["SPAWNED_MOVE", "FLEE_MOVE"],
+      "ai_fields": {}
+    }
+  ],
+  "history": {"cards_played_this_turn": 2},
+  "pending_selection": null
+}

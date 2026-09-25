@@ -569,13 +569,9 @@ public static class CardEffects
             }
 
             case IC.SetupStrike: // 1-cost, 7/9 dmg + 2/3 temporary Strength
-            {
                 DealDamage(state, Dmg(state, def, upgraded, card));
-                int strength = upgraded ? 3 : 2;
-                RelicEffects.GainPlayerStrength(state, strength);
-                BuffSystem.Apply(state.PlayerBuffs, BuffId.TemporaryStrength, strength);
+                RelicEffects.GainTemporaryPlayerStrength(state, upgraded ? 3 : 2);
                 break;
-            }
 
             case IC.Spite: // 0-cost, 5 dmg; 2/3 hits if the player lost HP this turn
                 DealDamageMultiHit(
@@ -747,7 +743,7 @@ public static class CardEffects
                         CardSelectionKind.ExhaustFromHand,
                         state.Hand.Count,
                         def.Id,
-                        autoPick: CardSelectionRng(state, rng).Next(state.Hand.Count)
+                        autoPick: AutoPickFromHand(state, rng)
                     );
                 }
                 break;
@@ -777,7 +773,7 @@ public static class CardEffects
                         CardSelectionKind.ExhaustFromHandThenDraw,
                         state.Hand.Count,
                         def.Id,
-                        autoPick: CardSelectionRng(state, rng).Next(state.Hand.Count),
+                        autoPick: AutoPickFromHand(state, rng),
                         amount: upgraded ? 3 : 2
                     );
                 }
@@ -953,7 +949,7 @@ public static class CardEffects
                             CardSelectionKind.ExhaustFromHand,
                             state.Hand.Count,
                             def.Id,
-                            autoPick: CardSelectionRng(state, rng).Next(state.Hand.Count)
+                            autoPick: AutoPickFromHand(state, rng)
                         );
                     }
                     else
@@ -2499,20 +2495,18 @@ public static class CardEffects
     }
 
     /// <summary>Fills the first empty potion slot, if any, with a uniformly random potion
-    /// id. Also Entropic Brew's loop over every empty slot: the game's own
-    /// `PotionFactory.CreateRandomPotionInCombat` rolls rarity-weighted odds this does not
-    /// model, so both callers get the same approximation rather than two different ones.</summary>
+    /// id -- Alchemize's approximation. The game's own
+    /// `PotionFactory.CreateRandomPotionInCombat` rolls rarity-weighted odds over the
+    /// character and shared pools this does not model (Entropic Brew's out-of-combat roll
+    /// is modelled, in `PotionEffects`).</summary>
     internal static void ProcureRandomPotion(CombatState state, Random rng)
     {
-        for (int i = 0; i < state.MaxPotionSlots; i++)
+        int slot = PotionEffects.FirstOpenPotionSlot(state);
+        if (slot >= 0)
         {
-            if (state.PotionSlots[i] == 0)
-            {
-                // PotionFactory.CreateRandomPotionInCombat reads
-                // Rng.CombatPotionGeneration, not the combat rng.
-                state.PotionSlots[i] = (state.PotionGenerationRng ?? rng).Next(1, 64);
-                break;
-            }
+            // PotionFactory.CreateRandomPotionInCombat reads
+            // Rng.CombatPotionGeneration, not the combat rng.
+            state.PotionSlots[slot] = (state.PotionGenerationRng ?? rng).Next(1, 64);
         }
     }
 
@@ -4557,6 +4551,22 @@ public static class CardEffects
         state.CardSelectionRng ?? rng;
 
     /// <summary>
+    /// The fallback pick for a hand-wide selection nobody can answer: one draw from the
+    /// selection stream over the hand, taken ONLY when the selection is about to resolve on
+    /// its own, which is exactly when `OpenCardSelection` sees `CombatState.AutoPlaying`.
+    /// </summary>
+    /// <remarks>
+    /// A pick the player makes (`CardSelectCmd.FromHand`) rolls nothing in the game. Passed
+    /// as a plain argument, this pick was drawn before the opener could see that the player
+    /// was about to choose. So every Brand, Burning Pact and upgraded True Grit the player
+    /// played drew one value nobody used, and every later reader of the stream drew one
+    /// place along: in the combat, and in the rest of the run, which the stream is synced
+    /// back to.
+    /// </remarks>
+    private static int AutoPickFromHand(CombatState state, Random rng) =>
+        state.AutoPlaying ? CardSelectionRng(state, rng).Next(state.Hand.Count) : 0;
+
+    /// <summary>
     /// The stream an effect draws from when it rolls up a NEW card — Stoke, Splash,
     /// Infernal Blade and Discovery all read Rng.CombatCardGeneration in the game, which
     /// is a different subsystem from the one that picks among existing cards.
@@ -4574,7 +4584,13 @@ public static class CardEffects
     /// </summary>
     internal static EnemyState? RandomLivingEnemy(CombatState state, Random? rng)
     {
-        var living = state.Enemies.Where(e => e.Hp > 0).ToList();
+        // A Waterfall Giant whose death is not answered yet counts. In the game it is back
+        // at 999999999 and hittable the moment it dies, so a later hit in the same card
+        // still rolls over it -- and `Rng.NextItem` draws even over one candidate, so
+        // leaving it out skipped draws the game makes.
+        var living = state
+            .Enemies.Where(e => e.Hp > 0 || EnemyAI.DiedHoldingSteamEruption(e))
+            .ToList();
         if (living.Count == 0)
         {
             return null;
@@ -7936,8 +7952,7 @@ public static class CardEffects
                 // upgrading by 2 -- so FIVE Strength, or seven, and it is TAKEN BACK at the
                 // end of the turn. It was in a stack giving permanent Strength 1 or 2:
                 // wrong number and wrong duration, in opposite directions.
-                RelicEffects.GainPlayerStrength(state, upgraded ? 7 : 5);
-                BuffSystem.Apply(state.PlayerBuffs, BuffId.TemporaryStrength, upgraded ? 7 : 5);
+                RelicEffects.GainTemporaryPlayerStrength(state, upgraded ? 7 : 5);
                 break;
 
             case "NoEscape":
@@ -7969,8 +7984,7 @@ public static class CardEffects
                 // OnUpgrade +3 — temporary Strength for an ally, which is the player in
                 // singleplayer. It was grouped with the retain-hand cards, which is a
                 // different effect entirely.
-                RelicEffects.GainPlayerStrength(state, upgraded ? 8 : 5);
-                BuffSystem.Apply(state.PlayerBuffs, BuffId.TemporaryStrength, upgraded ? 8 : 5);
+                RelicEffects.GainTemporaryPlayerStrength(state, upgraded ? 8 : 5);
                 break;
             case "CorrosiveWave":
                 ApplyAllEnemyDebuff(state, BuffId.Poison, upgraded ? 5 : 3, rng);

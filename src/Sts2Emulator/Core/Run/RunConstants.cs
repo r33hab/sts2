@@ -127,10 +127,10 @@ public static class RunConstants
 
     /// <summary>
     /// The game's <c>MapPointTypeCounts.NumOfElites</c>:
-    /// <c>round(5 * (SwarmingElites ? 1.6 : 1))</c>. The emulator models high
-    /// ascension, so SwarmingElites is on and this is 8.
+    /// <c>round(5 * (SwarmingElites ? 1.6 : 1))</c> -- eight from A1, five at A0.
     /// </summary>
-    public const int MapEliteCount = 8;
+    public static int MapEliteCount(int ascension) =>
+        (int)Math.Round(5f * (Ascension.Has(ascension, Ascension.SwarmingElites) ? 1.6f : 1f));
 
     /// <summary>The game's <c>MapPointTypeCounts.NumOfShops</c>.</summary>
     public const int MapShopCount = 3;
@@ -138,6 +138,13 @@ public static class RunConstants
     public const int MapFinalRestRow = MapBossRow - 1;
     public const int MapStartCol = MapWidth / 2;
     public const int RewardSkipAction = 3;
+
+    /// <summary>
+    /// Takes the chest's relic in a treasure room: `PickRelicLocally(0)`, the one holder a
+    /// solo chest has. Leaving is <see cref="RewardSkipAction" />, which with the relic still
+    /// in the chest is `SkipRelicLocally`.
+    /// </summary>
+    public const int TreasureTakeRelicAction = 0;
 
     /// <summary>
     /// Commits the highlighted bundle on the Scroll Boxes screen. The game answers that
@@ -714,9 +721,10 @@ public static class RunConstants
     public const int RelicLostCoffer = 140;
     public const int RelicMango = 144;
 
-    // The two Hungry For Mushrooms relics. Both are `HasUponPickupEffect`; neither has any
-    // combat behaviour modelled yet (they are in the 125 the emulator does not model), but
-    // the pickup half is the event's whole payload and belongs with the relic.
+    // The two Hungry For Mushrooms relics. Both are `HasUponPickupEffect`, and the pickup
+    // half is the event's whole payload and belongs with the relic. Big Mushroom also has a
+    // combat half -- `ModifyHandDraw` takes two cards off the opening hand, modelled in
+    // `RelicEffects` -- and Fragrant Mushroom has none.
     public const int RelicBigMushroom = 16;
     public const int RelicFragrantMushroom = 91;
     public const int RelicLargeCapsule = 129;
@@ -887,6 +895,38 @@ public static class RunConstants
             IC.Bash,
             IC.AscendersBane,
         ];
+
+    /// <summary>`Ironclad.StartingHp`: the max HP a run starts on, at every level.</summary>
+    public const int StartingMaxHp = 80;
+
+    /// <summary>`Player.initialMaxPotionSlotCount`: the belt before any ascension touches it.</summary>
+    public const int InitialPotionSlots = 3;
+
+    /// <summary>
+    /// The deck a run starts with at <paramref name="ascension" />: the Ironclad's own ten,
+    /// and Ascender's Bane on the end from AscendersBane up, which is where
+    /// `AscensionManager.ApplyEffectsTo` adds it (`Deck.AddInternal(ascendersBane, -1)`).
+    /// </summary>
+    /// <remarks>
+    /// The run engine and the combat API's synthetic start both deal from here, so the two
+    /// cannot disagree about which levels carry the curse.
+    /// </remarks>
+    public static int[] StartingDeckIds(int ascension) =>
+        [
+            .. StarterDeckIds
+                .ToArray()
+                .Where(id =>
+                    id != CardAscendersBane || Ascension.Has(ascension, Ascension.AscendersBane)
+                ),
+        ];
+
+    /// <summary>
+    /// The potion slots a run starts with at <paramref name="ascension" />:
+    /// <see cref="InitialPotionSlots" />, less the one `AscensionManager.ApplyEffectsTo`
+    /// takes away from TightBelt up (`SubtractFromMaxPotionCount(1)`).
+    /// </summary>
+    public static int StartingPotionSlots(int ascension) =>
+        Ascension.Has(ascension, Ascension.TightBelt) ? InitialPotionSlots - 1 : InitialPotionSlots;
 
     public static ReadOnlySpan<int> NeowCurseOptions => [54, 111, 129, 134, 161, 205, 239, 240];
 

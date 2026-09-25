@@ -1,0 +1,69 @@
+{
+  "schema": "sts2-live-snapshot/1",
+  "game_version": "v0.107.1",
+  "character": "IRONCLAD",
+  "ascension": 0,
+  "act": 1,
+  "floor": 3,
+  "room_type": "monster",
+  "round": 2,
+  "player": {
+    "hp": 64,
+    "max_hp": 80,
+    "block": 3,
+    "energy": 3,
+    "max_energy": 3,
+    "gold": 99,
+    "stars": 0,
+    "osty": null,
+    "orbs": {"slots": 0, "list": []},
+    "powers": [],
+    "relics": [{"id": "BURNING_BLOOD", "counter": null, "fields": {}}],
+    "potions": [
+      {"slot": 0, "id": null},
+      {"slot": 1, "id": null},
+      {"slot": 2, "id": null}
+    ],
+    "max_potion_slots": 3
+  },
+  "hand": [],
+  "draw_pile": [],
+  "discard_pile": [],
+  "exhaust_pile": [],
+  "known_draw_top": [],
+  "known_draw_bottom": [],
+  "enemies": [
+    {
+      "entity_id": "CORPSE_SLUG_0",
+      "id": "CORPSE_SLUG",
+      "slot": 0,
+      "hp": 22,
+      "max_hp": 27,
+      "block": 0,
+      "powers": [{"id": "STRENGTH_POWER", "amount": 2}],
+      "intents": [{"type": "ATTACK", "damage": 5, "base_damage": 3, "hits": 2}],
+      "move_id": "WHIP_SLAP_MOVE",
+      "state_log": ["GOOP_MOVE", "WHIP_SLAP_MOVE"],
+      "ai_fields": {"_starterMoveIdx": 2, "_isRavenous": false}
+    },
+    {
+      "entity_id": "TWO_TAILED_RAT_1",
+      "id": "TWO_TAILED_RAT",
+      "slot": 1,
+      "hp": 18,
+      "max_hp": 20,
+      "block": 4,
+      "powers": [],
+      "intents": [{"type": "DEBUFF", "damage": null, "base_damage": null, "hits": null}],
+      "move_id": "SCREECH_MOVE",
+      "state_log": ["SCRATCH_MOVE", "SCREECH_MOVE"],
+      "ai_fields": {
+        "_starterMoveIndex": 0,
+        "_turnsUntilSummonable": 1,
+        "_callForBackupCount": 0
+      }
+    }
+  ],
+  "history": {},
+  "pending_selection": null
+}

@@ -1,0 +1,47 @@
+{
+  "schema": "sts2-live-snapshot/1",
+  "game_version": "v0.107.1",
+  "character": "IRONCLAD",
+  "ascension": 0,
+  "act": 1,
+  "floor": 9,
+  "room_type": "monster",
+  "round": 1,
+  "player": {
+    "hp": 70,
+    "max_hp": 80,
+    "block": 0,
+    "energy": 3,
+    "max_energy": 3,
+    "gold": 150,
+    "stars": 0,
+    "osty": null,
+    "orbs": {"slots": 0, "list": []},
+    "powers": [],
+    "relics": [{"id": "BURNING_BLOOD", "counter": null, "fields": {}}],
+    "potions": [
+      {"slot": 0, "id": null},
+      {"slot": 1, "id": null},
+      {"slot": 2, "id": null}
+    ],
+    "max_potion_slots": 3
+  },
+  "hand": [
+    {"id": "STRIKE_IRONCLAD", "upgraded": false, "uid": "c1", "cost": 1, "enchantment": "SHARP", "enchant_amount": 3, "fields": {}},
+    {"id": "HAVOC", "upgraded": true, "uid": "c2", "cost": 0, "enchantment": null, "enchant_amount": null, "fields": {}},
+    {"id": "TRUE_GRIT", "upgraded": false, "uid": "c3", "cost": 0, "enchantment": null, "enchant_amount": null, "fields": {"cost_this_turn": 0}},
+    {"id": "EXPECT_A_FIGHT", "upgraded": true, "uid": "c4", "cost": 0, "enchantment": null, "enchant_amount": null, "fields": {"cost_for_combat": 0}},
+    {"id": "ASCENDERS_BANE", "upgraded": false, "uid": "c5", "cost": null, "enchantment": null, "enchant_amount": null, "fields": {}},
+    {"id": "WHIRLWIND", "upgraded": false, "uid": "c6", "cost": null, "enchantment": null, "enchant_amount": null, "fields": {}}
+  ],
+  "draw_pile": [],
+  "discard_pile": [
+    {"id": "DEFEND_IRONCLAD", "upgraded": true, "uid": "c7", "cost": 1, "enchantment": "NIMBLE", "enchant_amount": 2, "fields": {}}
+  ],
+  "exhaust_pile": [],
+  "known_draw_top": [],
+  "known_draw_bottom": [],
+  "enemies": [],
+  "history": {"cards_played_this_turn": 0},
+  "pending_selection": null
+}

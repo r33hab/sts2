@@ -92,8 +92,9 @@ public sealed class RelicGrabBag
     }
 
     /// <summary>
-    /// <c>RelicFactory.RollRarity</c>: a single <c>NextFloat</c> off the player's rewards
-    /// stream, split at 0.5 and 0.83. Shop rarity is never rolled -- shops ask for it by
+    /// <c>RelicFactory.RollRarity</c>: a single <c>NextFloat</c> off the stream it is handed
+    /// -- the player's rewards stream for most sources, <c>Rng.TreasureRoomRelics</c> for a
+    /// chest -- split at 0.5 and 0.83. Shop rarity is never rolled -- shops ask for it by
     /// name.
     /// </summary>
     public static RelicRarity RollRarity(GameRng rng)

@@ -250,11 +250,15 @@ def normalize(name: str) -> str:
     return n
 
 
-def emulator_generation(seed: str) -> dict[str, Any]:
+def emulator_generation(seed: str, ascension: int) -> dict[str, Any]:
     handle = native.run_create()
     try:
         obs = (ctypes.c_int * native.RUN_OBS_SIZE)()
-        native.run_reset(handle, seed, obs)
+        # The level is an input to the map: SwarmingElites budgets 8 elites where A0
+        # budgets 5, so the generation only matches a save captured at the same level.
+        status = native.run_reset(handle, seed, obs, ascension)
+        if status != 0:
+            raise RuntimeError(f"Sts2Run_Reset failed with status {status}")
         act, boss, map_nodes = native.run_state_list(handle, LIST_GENERATION_SUMMARY, 3)
         return {
             "act": act,
@@ -417,18 +421,11 @@ def main() -> None:
     if args.fixture is not None:
         game_version.check(save.get("game"))
     check_profile(save.get("profile") or profile_facts(save, save_path))
-    ascension = save.get("ascension")
+    ascension = int(save.get("ascension", 0))
     print(f"act  : index {act_index} = {act['id']}  (ascension {ascension})")
-    if ascension != 8:
-        print(
-            f"\n!! WARNING: this save is ascension {ascension}, not 8.\n"
-            "   The emulator models high ascension, so it always budgets 8 elites\n"
-            "   (the game's round(5 * 1.6) with SwarmingElites). At a lower ascension\n"
-            "   the game budgets 5, and the elite/map sections below will mismatch for\n"
-            "   that reason alone. Re-capture at A8 to make this comparison meaningful.",
-        )
 
-    emu = emulator_generation(str(seed))
+    # Generated at the save's own level: the elite budget, and so the whole map, reads it.
+    emu = emulator_generation(str(seed), ascension)
     names = encounter_names()
     results: dict[str, bool] = {}
 

@@ -687,7 +687,12 @@ public static class RunMapGenerator
     {
         bool repaired = false;
         repaired |= RepairPointType(state, RunConstants.NodeShop, RunConstants.MapShopCount, rng);
-        repaired |= RepairPointType(state, RunConstants.NodeElite, RunConstants.MapEliteCount, rng);
+        repaired |= RepairPointType(
+            state,
+            RunConstants.NodeElite,
+            RunConstants.MapEliteCount(state.AscensionLevel),
+            rng
+        );
         repaired |= RepairPointType(state, RunConstants.NodeRest, restCount, rng);
         repaired |= RepairPointType(state, RunConstants.NodeEvent, unknownCount, rng);
         return repaired;
@@ -1510,7 +1515,12 @@ public static class RunMapGenerator
             Enumerable
                 .Repeat(RunConstants.NodeRest, restCount)
                 .Concat(Enumerable.Repeat(RunConstants.NodeShop, RunConstants.MapShopCount))
-                .Concat(Enumerable.Repeat(RunConstants.NodeElite, RunConstants.MapEliteCount))
+                .Concat(
+                    Enumerable.Repeat(
+                        RunConstants.NodeElite,
+                        RunConstants.MapEliteCount(state.AscensionLevel)
+                    )
+                )
                 .Concat(Enumerable.Repeat(RunConstants.NodeEvent, unknownCount))
         );
         for (int pass = 0; pass < 3 && pointTypes.Count > 0; pass++)

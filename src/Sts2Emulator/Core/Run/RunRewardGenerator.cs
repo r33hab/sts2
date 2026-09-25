@@ -9,7 +9,6 @@ public static class RunRewardGenerator
     private const int RarityRare = 3;
     public const double CardRarityBaseOffset = -0.05;
     private const double CardRarityMaxOffset = 0.4;
-    private const double CardRarityGrowth = 0.005;
     private const double PotionRewardStep = 0.1;
 
     /// <summary>
@@ -387,7 +386,7 @@ public static class RunRewardGenerator
             // sends down RollWithBaseOdds.
             int rarity = RollCardRarity(
                 state,
-                RegularEncounterCardOdds,
+                RegularEncounterCardOdds(state),
                 mutateOffset: false,
                 state.PlayerRng.Rewards,
                 useOffset: false
@@ -623,7 +622,7 @@ public static class RunRewardGenerator
         {
             int rarity = RollCardRarity(
                 state,
-                RegularEncounterCardOdds,
+                RegularEncounterCardOdds(state),
                 mutateOffset: false,
                 state.PlayerRng.Rewards,
                 useOffset: false
@@ -763,7 +762,7 @@ public static class RunRewardGenerator
                 CardRarity.Rare => RarityRare,
                 _ => RollCardRarity(
                     state,
-                    RegularEncounterCardOdds,
+                    RegularEncounterCardOdds(state),
                     mutateOffset: false,
                     state.PlayerRng.Rewards,
                     useOffset: false
@@ -994,18 +993,67 @@ public static class RunRewardGenerator
         state.RelicReward = NextRelic(state);
     }
 
+    /// <summary>
+    /// A treasure room: the chest's relic, offered on <see cref="RunState.RelicReward" />,
+    /// and its gold, paid as it opens.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// `TreasureRoom.EnterInternal` fires `Hook.AfterRoomEntered` -- Silver Crucible counts
+    /// the room there -- and then `TreasureRoomRelicSynchronizer.BeginRelicPicking`, which
+    /// for a player whose `Hook.ShouldGenerateTreasure` holds rolls
+    /// `RelicFactory.RollRarity(Rng.TreasureRoomRelics)` and takes
+    /// `SharedRelicGrabBag.PullFromFront(rarity)`, or `RelicFactory.FallbackRelic`. The
+    /// SHARED bag, not the player's: a chest never hands over a character relic, and the pull
+    /// does not strike the relic from the player's bag -- `RelicCmd.Obtain` does that, when
+    /// the relic is taken.
+    /// </para>
+    /// <para>
+    /// `OneOffSynchronizer.DoTreasureRoomRewards` pays the gold behind the same hook, so a
+    /// chest Silver Crucible empties has neither. Nothing else in the game hooks a chest:
+    /// `ShouldGenerateTreasure` has one override, and no `TryModifyRewards` answers a
+    /// treasure room, so `DoExtraRewardsIfNeeded` adds nothing.
+    /// </para>
+    /// <para>
+    /// The chest used to pay its gold and never offer the relic, so every run was a relic
+    /// short -- and it stayed empty for as long as Silver Crucible was held, not just once.
+    /// </para>
+    /// </remarks>
     public static void EnterTreasureRoom(RunState state)
     {
         ClearRewardScreen(state);
-        if (state.Relics.Any(relic => relic.DefId == RunConstants.RelicSilverCrucible))
+        state.Phase = RunPhase.Treasure;
+        bool holdsSilverCrucible = HasRelic(state, RunConstants.RelicSilverCrucible);
+        if (holdsSilverCrucible)
         {
-            state.Phase = RunPhase.Treasure;
-            return;
+            state.SilverCrucibleTreasureRoomsEntered++;
+            if (state.SilverCrucibleTreasureRoomsEntered <= 1)
+            {
+                return;
+            }
         }
 
-        int gold = state.PlayerRng.Rewards.NextInt(42, 53);
-        RunNonCombatEffects.GainGold(state, (int)(gold * 0.75));
-        state.Phase = RunPhase.Treasure;
+        state.RelicReward = NextChestRelic(state);
+        RunNonCombatEffects.GainGold(
+            state,
+            PovertyGold(state, state.PlayerRng.Rewards.NextInt(42, 53))
+        );
+    }
+
+    /// <summary>
+    /// `BeginRelicPicking`'s pull: a rarity off the chest's own stream, then the front of
+    /// that rarity in the shared bag. It is left in the player's bag, which only
+    /// `RelicCmd.Obtain` touches.
+    /// </summary>
+    private static int NextChestRelic(RunState state)
+    {
+        var rarity = RelicGrabBag.RollRarity(state.Rng.TreasureRoomRelics);
+        int? relicId = state.SharedRelicBag.Pull(
+            rarity,
+            fromFront: true,
+            RelicGrabBag.AllowedInSoloRun(state.Floor)
+        );
+        return relicId ?? FallbackRelic;
     }
 
     public static void EnterShop(RunState state)
@@ -1039,7 +1087,7 @@ public static class RunRewardGenerator
         {
             int rarity = RollCardRarity(
                 state,
-                (0.045, 0.37),
+                ShopCardOdds(state),
                 mutateOffset: false,
                 state.PlayerRng.Rewards
             );
@@ -1126,7 +1174,11 @@ public static class RunRewardGenerator
                 ShopPotionCost(state.ShopPotions[i], state.PlayerRng.Shops)
             );
         }
-        state.ShopCosts[RunConstants.ShopRemoveAction] = 100 + 50 * state.ShopRemovalsUsed;
+        // `MerchantCardRemovalEntry.CalcCost`: BaseCost + PriceIncrease per removal already
+        // bought this run -- 100 and 50 from Inflation, 75 and 25 below.
+        bool inflation = Ascension.Has(state.AscensionLevel, Ascension.Inflation);
+        state.ShopCosts[RunConstants.ShopRemoveAction] =
+            (inflation ? 100 : 75) + (inflation ? 50 : 25) * state.ShopRemovalsUsed;
         // A fresh merchant stocks the service again -- the price carries across shops,
         // the once-per-visit limit does not.
         state.ShopRemovalUsedThisVisit = false;
@@ -1422,8 +1474,9 @@ public static class RunRewardGenerator
 
     /// <summary>
     /// <c>RewardsSet</c>: <c>GoldReward(Encounter.MinGoldReward * GoldProportion,
-    /// Encounter.MaxGoldReward * GoldProportion)</c>. A monster room's 10-20 becomes 7-15
-    /// once A8's Poverty multiplier is applied, which is the range below.
+    /// Encounter.MaxGoldReward * GoldProportion)</c>. The bounds are 10-20 for a monster
+    /// room, 35-45 for an elite and 100 for a boss, each cut by Poverty BEFORE the roll --
+    /// 7-15, 26-33 and 75 from A3.
     /// </summary>
     /// <remarks>
     /// The Gremlin Merc encounter used to return a flat 0 here, which was right for the
@@ -1439,17 +1492,22 @@ public static class RunRewardGenerator
     {
         if (state.CurrentNodeType == RunConstants.NodeElite)
         {
-            return state.PlayerRng.Rewards.NextInt(26, 34);
+            return state.PlayerRng.Rewards.NextInt(
+                PovertyGold(state, 35),
+                PovertyGold(state, 45) + 1
+            );
         }
 
         if (state.CurrentNodeType == RunConstants.NodeBoss)
         {
-            // A boss's Min and Max are both 100, and A8's Poverty multiplier takes a
-            // quarter off BEFORE the roll -- the same 0.75 already baked into the monster
-            // range (10-20 -> 7-15) and the elite one (35-45 -> 26-33). Only this branch
-            // was written as a flat 100, and no capture could contradict it until one
-            // finally won an act.
-            return state.PlayerRng.Rewards.NextInt(75, 76);
+            // A boss's Min and Max are both 100, and Poverty takes its quarter off BEFORE
+            // the roll, as it does for the monster and elite bounds. This branch was once
+            // written as a flat 100, and no capture could contradict it until one finally
+            // won an act.
+            return state.PlayerRng.Rewards.NextInt(
+                PovertyGold(state, 100),
+                PovertyGold(state, 100) + 1
+            );
         }
 
         double proportion = CombatGoldProportion(state);
@@ -1459,10 +1517,22 @@ public static class RunRewardGenerator
         }
 
         // Math.Round on the SCALED bounds, the way RewardsSet does it -- not a scaled roll.
-        int min = (int)Math.Round(7 * proportion, MidpointRounding.AwayFromZero);
-        int max = (int)Math.Round(15 * proportion, MidpointRounding.AwayFromZero);
+        int min = (int)
+            Math.Round(PovertyGold(state, 10) * proportion, MidpointRounding.AwayFromZero);
+        int max = (int)
+            Math.Round(PovertyGold(state, 20) * proportion, MidpointRounding.AwayFromZero);
         return state.PlayerRng.Rewards.NextInt(min, max + 1);
     }
+
+    /// <summary>
+    /// Poverty's cut to a gold amount: <c>PovertyAscensionGoldMultiplier</c> from A3, then
+    /// the game's truncation to int. `EncounterModel.MinGoldReward`/`MaxGoldReward` apply it
+    /// to a combat's bounds, and `OneOffSynchronizer.DoTreasureRoomRewards` to a chest's roll.
+    /// </summary>
+    private static int PovertyGold(RunState state, int gold) =>
+        Ascension.Has(state.AscensionLevel, Ascension.Poverty)
+            ? (int)(gold * Ascension.PovertyGoldMultiplier)
+            : gold;
 
     /// <summary>
     /// <c>CombatRoom.GoldProportion</c>. Every encounter is 1 except the Gremlin Merc's,
@@ -1483,11 +1553,30 @@ public static class RunRewardGenerator
         return combat.MercGoldWasStolen ? 0 : 0.5;
     }
 
-    /// <summary>The RegularEncounter rarity odds: rare, then uncommon.</summary>
-    private static readonly (double Rare, double Uncommon) RegularEncounterCardOdds = (
-        0.0149,
-        0.37
-    );
+    /// <summary>
+    /// `CardRarityOdds`' RegularEncounter odds, Rare then Uncommon. Scarcity halves the Rare
+    /// chance -- `RegularRareOdds` is 0.0149 from it and 0.03 below -- and the Uncommon
+    /// band is 0.37 at every level.
+    /// </summary>
+    private static (double Rare, double Uncommon) RegularEncounterCardOdds(RunState state) =>
+        (Scarcity(state) ? 0.0149 : 0.03, 0.37);
+
+    /// <summary>The EliteEncounter odds: `EliteRareOdds` 0.05 from Scarcity, 0.1 below.</summary>
+    private static (double Rare, double Uncommon) EliteEncounterCardOdds(RunState state) =>
+        (Scarcity(state) ? 0.05 : 0.1, 0.4);
+
+    /// <summary>The Shop odds: `ShopRareOdds` 0.045 from Scarcity, 0.09 below.</summary>
+    private static (double Rare, double Uncommon) ShopCardOdds(RunState state) =>
+        (Scarcity(state) ? 0.045 : 0.09, 0.37);
+
+    /// <summary>
+    /// `CardRarityOdds.RarityGrowth`: how far each combat reward that rolls no Rare raises
+    /// the next one's Rare chance -- 0.005 from Scarcity, 0.01 below.
+    /// </summary>
+    private static double CardRarityGrowth(RunState state) => Scarcity(state) ? 0.005 : 0.01;
+
+    private static bool Scarcity(RunState state) =>
+        Ascension.Has(state.AscensionLevel, Ascension.Scarcity);
 
     private static int RollRewardCardRarity(RunState state)
     {
@@ -1495,7 +1584,7 @@ public static class RunRewardGenerator
         {
             RunConstants.NodeElite => RollCardRarity(
                 state,
-                (0.05, 0.4),
+                EliteEncounterCardOdds(state),
                 mutateOffset: true,
                 state.PlayerRng.Rewards
             ),
@@ -1507,7 +1596,7 @@ public static class RunRewardGenerator
             ),
             _ => RollCardRarity(
                 state,
-                RegularEncounterCardOdds,
+                RegularEncounterCardOdds(state),
                 mutateOffset: true,
                 state.PlayerRng.Rewards
             ),
@@ -1549,7 +1638,10 @@ public static class RunRewardGenerator
             state.CardRarityOffset =
                 rarity == RarityRare
                     ? CardRarityBaseOffset
-                    : Math.Min(state.CardRarityOffset + CardRarityGrowth, CardRarityMaxOffset);
+                    : Math.Min(
+                        state.CardRarityOffset + CardRarityGrowth(state),
+                        CardRarityMaxOffset
+                    );
         }
         return rarity;
     }

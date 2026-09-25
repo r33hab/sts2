@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Text;
 using Sts2Emulator.Core;
+using Sts2Emulator.Core.Run;
 
 namespace Sts2Emulator.Interop;
 
@@ -49,9 +50,20 @@ public static class NativeExports
     //      Sts2_GetStateJson writes any combat back out as one, and Sts2_GetLastError says
     //      why a load was refused. Every other entry point starts a fight from its first
     //      turn; a search from a live game position needs to start from the position.
-    public const int NATIVE_API_VERSION = 30;
+    // v31: the floor-aware resets deal the start a run at their ascension deals -- HP,
+    //      deck and potion belt -- where they dealt A8's at every level, so a library from
+    //      before this change would answer the same call with a different fight.
+    //      Sts2_ResetArena takes a belt size. Sts2_StartingDeck, Sts2_StartingHp,
+    //      Sts2_StartingMaxHp and Sts2_StartingPotionSlots publish those starting values,
+    //      and Sts2_DefaultAscension publishes the level the plain resets deal.
+    public const int NATIVE_API_VERSION = 31;
+
+    /// <summary>
+    /// The plain resets' deck: the start of a run at the default level, from the one
+    /// definition the run engine deals from too.
+    /// </summary>
     private static ReadOnlySpan<int> StarterDeckIds =>
-        [472, 472, 472, 472, 472, 131, 131, 131, 131, 30, 10001];
+        RunConstants.StartingDeckIds(Ascension.DefaultLevel);
 
     private sealed class NativeCombat
     {
@@ -91,6 +103,7 @@ public static class NativeExports
         {
             Seed = seed;
             Rng = new CountingRandom(seed);
+            UseDefaultLevel();
             CombatFactory.Reset(State, Rng);
             // Every build in this class is followed by the pre-play phase, because every
             // one of them is followed by a `WriteObs` -- and an observation taken before
@@ -176,8 +189,22 @@ public static class NativeExports
             LastPlayerWon = false;
         }
 
+        /// <summary>
+        /// The plain resets and a fresh handle deal the start of a run at the default level:
+        /// their deck and HP are `CombatFactory`'s defaults, which are that level's. The
+        /// level and the belt are set here with them, rather than left at whatever a floor
+        /// or arena reset earlier on this handle put there -- a belt carried over from an
+        /// A0 floor reset, or its level, would be a start no run deals.
+        /// </summary>
+        private void UseDefaultLevel()
+        {
+            State.AscensionLevel = Ascension.DefaultLevel;
+            State.MaxPotionSlots = RunConstants.StartingPotionSlots(Ascension.DefaultLevel);
+        }
+
         public void Reset()
         {
+            UseDefaultLevel();
             SeedStreams();
             CombatFactory.Reset(State, Rng);
             CombatEngine.ResolvePrePlayPhase(State, Rng);
@@ -185,6 +212,7 @@ public static class NativeExports
 
         public void Reset(ReadOnlySpan<int> deckIds)
         {
+            UseDefaultLevel();
             SeedStreams();
             CombatFactory.Reset(State, Rng, deckIds);
             CombatEngine.ResolvePrePlayPhase(State, Rng);
@@ -192,6 +220,7 @@ public static class NativeExports
 
         public void Reset(ReadOnlySpan<int> deckIds, int encounterId)
         {
+            UseDefaultLevel();
             SeedStreams();
             CombatFactory.Reset(State, Rng, deckIds, encounterId);
             CombatEngine.ResolvePrePlayPhase(State, Rng);
@@ -202,6 +231,10 @@ public static class NativeExports
         // rosters and Corpse Slug starting moves are rolled from that stream, so
         // without a floor the direct combat env cannot reproduce them — see
         // Core/Run/EncounterRng.cs.
+        //
+        // The player starts where a run at `ascension` starts: the opening HP Neow leaves
+        // and the belt TightBelt leaves, from the same rules `RunEngine.Reset` applies.
+        // The caller deals the deck, from `RunConstants.StartingDeckIds` at the same level.
         public void ResetAtFloor(
             ReadOnlySpan<int> deckIds,
             int encounterId,
@@ -211,6 +244,9 @@ public static class NativeExports
         )
         {
             State.AscensionLevel = ascension;
+            // Set BEFORE the reset, for the reason the run engine gives where it hands a
+            // fight its belt: `ApplyCombatStart` procures into the first free slot.
+            State.MaxPotionSlots = RunConstants.StartingPotionSlots(ascension);
             SeedStreams();
             int? encounterRngSeed = Sts2Emulator.Core.Run.EncounterRng.SeedFor(
                 Seed,
@@ -223,14 +259,20 @@ public static class NativeExports
                 Rng,
                 deckIds,
                 encounterId,
-                completedCombatRooms,
-                encounterRngSeed
+                relicIds: [],
+                playerHp: RunEngine.StartingHp(ascension),
+                playerMaxHp: RunConstants.StartingMaxHp,
+                potionIds: [],
+                playerGold: 0,
+                encounterRngSeed: encounterRngSeed,
+                completedCombatRoomsBeforeCurrent: completedCombatRooms
             );
             CombatEngine.ResolvePrePlayPhase(State, Rng);
         }
 
         public void Reset(ReadOnlySpan<int> deckIds, int encounterId, int completedCombatRooms)
         {
+            UseDefaultLevel();
             SeedStreams();
             CombatFactory.Reset(State, Rng, deckIds, encounterId, completedCombatRooms);
             CombatEngine.ResolvePrePlayPhase(State, Rng);
@@ -238,6 +280,7 @@ public static class NativeExports
 
         public void Reset(ReadOnlySpan<int> deckIds, int encounterId, ReadOnlySpan<int> relicIds)
         {
+            UseDefaultLevel();
             SeedStreams();
             CombatFactory.Reset(State, Rng, deckIds, encounterId, relicIds);
             CombatEngine.ResolvePrePlayPhase(State, Rng);
@@ -267,6 +310,7 @@ public static class NativeExports
             int playerHp,
             int playerMaxHp,
             int playerGold,
+            int maxPotionSlots,
             int ascension,
             int totalFloor,
             int completedCombatRooms
@@ -292,6 +336,7 @@ public static class NativeExports
             }
 
             State.AscensionLevel = ascension;
+            State.MaxPotionSlots = ArenaBelt(maxPotionSlots, ascension, potionIds);
             SeedStreams();
             // -1 means "no forced encounter": the factory rolls the seeded first combat.
             // It has to become null rather than travel as -1, which would be looked up as
@@ -323,6 +368,31 @@ public static class NativeExports
                 completedCombatRoomsBeforeCurrent: completedCombatRooms
             );
             CombatEngine.ResolvePrePlayPhase(State, Rng);
+        }
+
+        /// <summary>
+        /// The arena's belt: the size it was given or, given a negative one, the belt a run
+        /// at <paramref name="ascension" /> starts with (three slots, two from TightBelt).
+        /// </summary>
+        /// <remarks>
+        /// Never narrower than the last slot its potions fill, so a potion the caller handed
+        /// over is never stranded past the end of the belt where no action can reach it; and
+        /// never wider than the slots that exist.
+        /// </remarks>
+        private static int ArenaBelt(int maxPotionSlots, int ascension, ReadOnlySpan<int> potionIds)
+        {
+            int belt =
+                maxPotionSlots >= 0 ? maxPotionSlots : RunConstants.StartingPotionSlots(ascension);
+            for (int slot = potionIds.Length - 1; slot >= 0; slot--)
+            {
+                if (potionIds[slot] != 0)
+                {
+                    belt = Math.Max(belt, slot + 1);
+                    break;
+                }
+            }
+
+            return Math.Min(belt, RunConstants.PotionSlotCapacity);
         }
     }
 
@@ -594,6 +664,9 @@ public static class NativeExports
     // Like Sts2_ResetEncounterWeak but also passing the run's TotalFloor, which is what
     // seeds the per-encounter RNG (EncounterModel.Rng). Required for any encounter that
     // rolls its own composition — Slimes rosters, Corpse Slug starting moves.
+    //
+    // The start is the one a run at `ascension` deals: its starting deck, HP and belt. It
+    // used to be A8's -- 64 HP and Ascender's Bane -- whatever level was asked for.
     [UnmanagedCallersOnly(EntryPoint = "Sts2_ResetEncounterAtFloor")]
     public static unsafe void Sts2_ResetEncounterAtFloor(
         int handle,
@@ -606,7 +679,7 @@ public static class NativeExports
     {
         var combat = _pool[handle]!;
         combat.ResetAtFloor(
-            StarterDeckIds,
+            RunConstants.StartingDeckIds(ascension),
             encounterId,
             completedCombatRooms,
             totalFloor,
@@ -635,10 +708,12 @@ public static class NativeExports
     {
         // Appended to the starter deck rather than replacing it, and appended HERE so
         // the starter deck keeps one definition: the live side adds the same cards to
-        // the same run deck, and both sides have to shuffle the same list.
-        var deck = new int[StarterDeckIds.Length + extraLen];
-        StarterDeckIds.CopyTo(deck);
-        new ReadOnlySpan<int>(extraCardIds, extraLen).CopyTo(deck.AsSpan(StarterDeckIds.Length));
+        // the same run deck, and both sides have to shuffle the same list. The starter
+        // deck is the level's, so below AscendersBane it carries no curse.
+        int[] starter = RunConstants.StartingDeckIds(ascension);
+        var deck = new int[starter.Length + extraLen];
+        starter.CopyTo(deck, 0);
+        new ReadOnlySpan<int>(extraCardIds, extraLen).CopyTo(deck.AsSpan(starter.Length));
 
         var combat = _pool[handle]!;
         combat.ResetAtFloor(deck, encounterId, completedCombatRooms, totalFloor, ascension);
@@ -782,6 +857,10 @@ public static class NativeExports
     /// starter deck plus appended cards at full HP with no relics.
     /// </summary>
     /// <param name="encounterId">-1 rolls the seeded first-combat encounter instead.</param>
+    /// <param name="maxPotionSlots">
+    /// How many potion slots the position has; negative is the belt a run at
+    /// <paramref name="ascension" /> starts with. Never narrower than the potions passed.
+    /// </param>
     [UnmanagedCallersOnly(EntryPoint = "Sts2_ResetArena")]
     public static unsafe void Sts2_ResetArena(
         int handle,
@@ -799,6 +878,7 @@ public static class NativeExports
         int playerHp,
         int playerMaxHp,
         int playerGold,
+        int maxPotionSlots,
         int ascension,
         int totalFloor,
         int completedCombatRooms,
@@ -816,12 +896,51 @@ public static class NativeExports
             playerHp,
             playerMaxHp,
             playerGold,
+            maxPotionSlots,
             ascension,
             totalFloor,
             completedCombatRooms
         );
         WriteObs(combat.State, obsBuf);
     }
+
+    /// <summary>
+    /// The level the plain resets deal (<c>Sts2_Reset</c>, <c>Sts2_ResetEncounter</c> and
+    /// the rest that take no ascension): a caller asking for another has to use a reset
+    /// that takes one.
+    /// </summary>
+    [UnmanagedCallersOnly(EntryPoint = "Sts2_DefaultAscension")]
+    public static int Sts2_DefaultAscension() => Ascension.DefaultLevel;
+
+    /// <summary>
+    /// The deck a run at <paramref name="ascension" /> starts with, the one the floor-aware
+    /// resets deal. Size-and-retry: returns the deck's length and writes as many card ids
+    /// as <paramref name="cap" /> holds.
+    /// </summary>
+    [UnmanagedCallersOnly(EntryPoint = "Sts2_StartingDeck")]
+    public static unsafe int Sts2_StartingDeck(int ascension, int* buf, int cap)
+    {
+        int[] deck = RunConstants.StartingDeckIds(ascension);
+        for (int i = 0; buf is not null && i < Math.Min(cap, deck.Length); i++)
+        {
+            buf[i] = deck[i];
+        }
+
+        return deck.Length;
+    }
+
+    /// <summary>The HP a run at <paramref name="ascension" /> starts on (Neow's heal).</summary>
+    [UnmanagedCallersOnly(EntryPoint = "Sts2_StartingHp")]
+    public static int Sts2_StartingHp(int ascension) => RunEngine.StartingHp(ascension);
+
+    /// <summary>The max HP a run starts on, at every level.</summary>
+    [UnmanagedCallersOnly(EntryPoint = "Sts2_StartingMaxHp")]
+    public static int Sts2_StartingMaxHp() => RunConstants.StartingMaxHp;
+
+    /// <summary>The potion slots a run at <paramref name="ascension" /> starts with.</summary>
+    [UnmanagedCallersOnly(EntryPoint = "Sts2_StartingPotionSlots")]
+    public static int Sts2_StartingPotionSlots(int ascension) =>
+        RunConstants.StartingPotionSlots(ascension);
 
     /// <summary>
     /// Whether <paramref name="enchantment"/> may be applied to <paramref name="cardId"/>,
@@ -1050,9 +1169,15 @@ public static class NativeExports
     public static int Sts2Run_Create() => RunNativeExports.Sts2Run_Create();
 
     [UnmanagedCallersOnly(EntryPoint = "Sts2Run_Reset")]
-    public static unsafe int Sts2Run_Reset(int handle, byte* seedPtr, int seedLen, int* obsBuf)
+    public static unsafe int Sts2Run_Reset(
+        int handle,
+        byte* seedPtr,
+        int seedLen,
+        int ascension,
+        int* obsBuf
+    )
     {
-        return RunNativeExports.Sts2Run_Reset(handle, seedPtr, seedLen, obsBuf);
+        return RunNativeExports.Sts2Run_Reset(handle, seedPtr, seedLen, ascension, obsBuf);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "Sts2Run_Step")]

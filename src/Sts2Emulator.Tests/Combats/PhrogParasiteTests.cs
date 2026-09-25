@@ -95,9 +95,9 @@ public class WrigglerTests
     /// InfestedPower spawns them from the parasite's death, so the parasite has to die
     /// during a turn — setting it to 0 HP beforehand is not a death, it is a corpse.
     /// </summary>
-    private static Fight KillTheParasite()
+    private static Fight KillTheParasite(int ascension = Ascension.DefaultLevel)
     {
-        var fight = Fight.Encounter(CombatFactory.ActOneEncounter.PhrogParasite);
+        var fight = Fight.Encounter(CombatFactory.ActOneEncounter.PhrogParasite, ascension);
         fight.State.Hand = [TestDeck.Card(IC.StrikeIronclad)];
         fight.State.Energy = 3;
         fight.Enemy0.Hp = 1;
@@ -176,5 +176,22 @@ public class WrigglerTests
         Assert.Equal(4, hps.Count);
         Assert.Equal(hps.Count, hps.Distinct().Count());
         Assert.All(hps, hp => Assert.InRange(hp, 18, 22));
+    }
+
+    /// <summary>
+    /// Below A8 the band is `GetValueIfAscension(ToughEnemies, 18-22, 17-21)`'s low side.
+    /// The spawn used to read A8's band whatever the fight ran at; here that shows as a 22.
+    /// </summary>
+    [Fact]
+    public void BelowAscensionEightTheyRollTheLowerBand()
+    {
+        var fight = KillTheParasite(ascension: 0);
+
+        var hps = fight
+            .State.Enemies.Where(enemy => enemy.DefId == KE.Wriggler)
+            .Select(enemy => enemy.MaxHp)
+            .ToList();
+        Assert.Equal(4, hps.Count);
+        Assert.All(hps, hp => Assert.InRange(hp, 17, 21));
     }
 }

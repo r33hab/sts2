@@ -87,9 +87,11 @@ ACT_ONE = {
 MAX_ACTIONS = 32
 STEP_CAP = 300  # a fight that has not ended by here is a bug, not a long fight
 
-# `NativeExports.StarterDeckIds`. Duplicated because `Sts2_ResetArena` replaces the deck
-# rather than appending to it, so a caller passing relics has to spell the base deck out.
-STARTER_DECK = [472, 472, 472, 472, 472, 131, 131, 131, 131, 30, 10001]
+# The default level's starting deck, asked of the engine. `Combat.opening` deals the deck
+# of the level it is given; this is the ids a deck at the default level holds, for the
+# callers that want the set rather than a fight.
+STARTER_DECK = native.starting_deck(native.DEFAULT_ASCENSION)
+"""The default level's starting deck (A8: 5 Strike, 4 Defend, Bash, Ascender's Bane)."""
 
 _GENERATED = Path(__file__).resolve().parent.parent / "src" / "Sts2Emulator" / "Generated"
 _POOLS = _GENERATED / "CardPools.g.cs"
@@ -242,15 +244,19 @@ class Combat:
         combat.encounter_id = encounter_id
         if relics:
             # The arena entry point is the only one that takes relics, and it takes the
-            # whole deck rather than appending, so the starter deck is spelled out here.
-            # HP defaults match `Sts2_ResetEncounter`'s 64/80, so a run with relics stays
-            # comparable to one without.
+            # whole position rather than dealing one, so the start is spelled out here:
+            # the deck, HP and belt a run at this level starts with, which is what the
+            # two branches below deal. A fight with relics stays comparable to one
+            # without, at every level.
             native.reset_arena(
                 combat.handle,
-                STARTER_DECK + list(extra_cards),
+                native.starting_deck(ascension) + list(extra_cards),
                 combat.obs,
                 encounter_id=encounter_id,
                 relic_ids=list(relics),
+                player_hp=native.starting_hp(ascension),
+                player_max_hp=native.STARTING_MAX_HP,
+                max_potion_slots=native.starting_potion_slots(ascension),
                 ascension=ascension,
                 total_floor=total_floor,
             )
