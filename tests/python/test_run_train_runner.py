@@ -288,6 +288,13 @@ class GenerateTests(RunnerTestCase):
         self.assertEqual(manifest["quarantine"], [])
         # A Python exception comes back over the pipe: the worker carries on.
         self.assertEqual(manifest["runner"]["retried"], 4)
+        # A failure that the retry recovered from still leaves its trace.
+        retries = manifest["runner"]["retries"]
+        self.assertEqual(sorted(r["seed"] for r in retries), sorted(seeds))
+        self.assertTrue(all(r["reason"] == "exception" for r in retries))
+        self.assertTrue(
+            all("a policy that raises once" in r["detail"] for r in retries),
+        )
         self.assertEqual(manifest["runner"]["worker_restarts"], 0)
         self.assertEqual(sum("retrying" in line for line in logs.output), 4)
         # The retry replays the same run: a run is a function of its seed (5.10).
@@ -325,6 +332,12 @@ class GenerateTests(RunnerTestCase):
         self.assertEqual(manifest["quarantine"], quarantine)
         self.assertEqual(manifest["seeds"], sorted(seeds))
         self.assertIn(manifest["runner"]["worker_restarts"], (1, 2))
+        retry = manifest["runner"]["retries"]
+        self.assertEqual(len(retry), 1)
+        self.assertEqual(
+            (retry[0]["seed"], retry[0]["exit_code"], retry[0]["encounter"]),
+            (abort, -signal.SIGABRT, first_fight[0]["encounter"]),
+        )
         self.assertTrue(any("quarantined" in line for line in logs.output))
 
     def test_a_worker_hung_past_the_seed_timeout_is_killed_retried_then_quarantined(

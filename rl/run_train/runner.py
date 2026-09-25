@@ -161,6 +161,9 @@ class JobStats:
     worker_restarts: int = 0
     seconds: float = 0.0
     quarantined_by_encounter: dict[str, int] = field(default_factory=dict)
+    # Every first failure, the ones the retry recovered from included: a crash that
+    # recovered is an emulator defect all the same, and this is its durable trace.
+    retries: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def runs_per_hour(self) -> float:
@@ -175,6 +178,7 @@ class JobStats:
             "seconds": self.seconds,
             "runs_per_hour": self.runs_per_hour,
             "quarantined_by_encounter": dict(self.quarantined_by_encounter),
+            "retries": list(self.retries),
         }
 
 
@@ -316,12 +320,14 @@ def run_seeds(
         failures[failure.seed] = failures.get(failure.seed, 0) + 1
         if failures[failure.seed] < 2:
             stats.retried += 1
+            stats.retries.append(failure.to_json())
             log.warning(
-                "%s: %s (%s, exit code %s); retrying once",
+                "%s: %s (%s, exit code %s, last encounter %s); retrying once",
                 failure.seed,
                 failure.status,
                 failure.reason,
                 failure.exit_code,
+                failure.encounter,
             )
             queue.append(failure.seed)
             return

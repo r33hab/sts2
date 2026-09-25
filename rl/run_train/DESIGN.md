@@ -270,7 +270,13 @@ searches run clones; the export waits for the prior integration in section 6.5.*
    per process at a time, the worker restarted, the seed retried once and then
    quarantined (5.7, 5.8). Quarantined runs are also missing data: each is a run that
    reached the Soul Fysh fight. `status.json` therefore counts them by encounter, so the
-   bias stays visible.
+   bias stays visible. A second kind turned up in 2.9's replay: a worker died of a SIGSEGV
+   (exit -11) on eval seed `EFWKPBXA2L` (A9, 120/500), and the retry completed with the
+   stored outcome. It did not recur in 24 replays of that seed in fresh processes, nor
+   in the other runs of those seeds (about 450 in all), and the crash came in a worker
+   that had already played other runs. It is intermittent and not a function of the
+   seed. Flagged for the emulator backlog; the runner's retry absorbs it, and the job's
+   `retries` keep its trace (5.8).
 
 ---
 
@@ -535,8 +541,8 @@ nice 10. Its `EvalResult` is the initial champion's, `runs/stage2/champion/eval.
   `EvalMeta` says so: `ascension: 9`, `ascension_stands_in_for: 10`. At 10 the same seeds
   draw other runs (1.5.1), so these are A9's numbers. When 10 lands, the stored
   `EvalMeta` no longer matches the config, and the champion is re-evaluated (5.6).
-- **Command**, on the code of the commit that added this section (combat API 31, run
-  API 20):
+- **Command** (combat API 31, run API 20). It ran on this task's code just before it
+  was committed; the committed code reproduces it (below):
   ```
   uv run python -m rl.run_train.evaluate --workers 8 --ascension 9 --stands-in-for 10 \
       --out runs/stage2/champion/eval.json
@@ -551,15 +557,23 @@ nice 10. Its `EvalResult` is the initial champion's, `runs/stage2/champion/eval.
 A boss kill counts as floor 18 (E10), and `V_W` is worth W = 26 for a kill. The floors
 are bimodal: 70 runs die on floors 5-9 and 77 at the boss (floor 17), and 16 kill it.
 Mean floor is below 2.3's 15.04 at A8: A9 adds DeadlyEnemies, and the seeds differ.
-No seed aborted, raised, hung or hit the step cap, and no run met an unknown decision.
+No seed aborted, raised, hung or hit the step cap.
+
+**Reproduced.** All 200 seeds were replayed through the runner on the committed code
+(`0d972a2`), keeping each run's full record, which an evaluation does not store. Every
+outcome matched. The records show no unknown decision, no forced skip and no rules
+fallback (Review Focus 5); a potion was left for a full belt 5 times. One worker died of
+a SIGSEGV (exit -11) on seed `EFWKPBXA2L`, and its retry completed with the stored
+outcome (1.5.7).
 
 **Throughput, the first multi-process measurement.** The 200 runs took 239 s: **3,014
 runs/h** on 8 workers. The linear extrapolation of 2.5 for 120/500 at today's run length
 is 2,270/h, and 1,360/h with the 0.6 factor. The measurement is 1.33 times the first and
 2.2 times the second. Two things are mixed in those ratios, and the job separates them:
 
-1. **The runs were shorter.** At A9 the rules policy dies earlier: 46% of runs reached the
-   boss, against 68% at A8 in 2.3, so fewer fights were searched at 500 simulations. A run
+1. **The runs were shorter.** At A9 the rules policy dies earlier: 93 of 200 runs (46.5%)
+   reached the boss, against 68% at A8 in 2.3, so fewer fights were searched at 500
+   simulations. A run
    took 9.32 s in its worker on average (median 7.97 s, longest 26.15 s).
 2. **Scaling beat the plan.** Every tenth of these seeds (20 runs), replayed one at a time
    in a single process, took 9.56 s on average against 10.30 s in the workers: 1.08 times
@@ -571,7 +585,9 @@ is 2,270/h, and 1,360/h with the 0.6 factor. The measurement is 1.33 times the f
 
 Against a linear extrapolation from these runs' own single-process times (8.65 s per run,
 so 3,330/h), the runner delivered 0.91. Only stage 2's 8 workers ran (stage 3's 2 did
-not), and the other agents' work stayed on the machine throughout. A note for Task 4's
+not), and the other agents' work stayed on the machine throughout. The replay above is a
+second sample: 3,088 runs/h in 233 s (1-minute load 2.5 before, 9.2 after), with one
+worker restarted. A note for Task 4's
 recheck (2.7): the ratio 3,014 / 2,270 = 1.33 also counts A9's shorter runs, so it
 overstates the scaling that 2.7's `f` carries to the full-length rates of 2.4. The
 scaling measured here is about 0.9.
@@ -1626,7 +1642,7 @@ champion/eval.json         the champion's EvalResult; the rules baseline's to st
 gen_0000/                  generation 0 = rules policy
   shards/r0007.jsonl.gz    up to 25 runs (RunRecords); written only by the parent: tmp, fsync, rename
   quarantine.jsonl         one line per quarantined seed as it happens (seed, status, reason, exit code, last encounter, traceback tail); appended and fsynced by the parent
-  manifest.json            written last: seeds, shard files, the quarantine list, the policy, the config, the runner's counts
+  manifest.json            written last: seeds, shard files, the quarantine list, the policy, the config, the runner's counts and retries
   learner.pt, learner.npz  the checkpoint trained after this generation
   eval.json                the learner's EvalResult: one SeedResult per eval seed, with EvalMeta
   promotion.json           the decision: champion before and after, S, both summaries, n01, n10
@@ -1710,7 +1726,10 @@ exception comes back over the pipe; the worker carries on, and the seed follows 
 retry-once rule. A seed's status is its last failure's: `aborted` for a death or a
 timeout, `error` for an exception. In an evaluation, a quarantined seed becomes a
 `SeedResult` with status `aborted` or `error`, never a missing row. The parent logs every
-retry and quarantine at warning level. A worker that dies before it is ready never ran
+retry and quarantine at warning level, with the exit code and the last encounter, and
+keeps every first failure, recovered or not, in the job's `retries` (in `manifest.json`
+and in an `EvalResult`'s `runner` block): a crash the retry recovered from is an emulator
+defect all the same. A worker that dies before it is ready never ran
 its seed: the seed goes back to the front of the queue, uncharged. When workers keep
 dying that way (more than two per worker slot in a row, because the play function cannot
 load, say), the job raises instead of quarantining every seed into a complete-looking
