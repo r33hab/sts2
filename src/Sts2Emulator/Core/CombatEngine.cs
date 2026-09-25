@@ -862,8 +862,6 @@ public static class CombatEngine
         // quaffed and not spent expires with the turn. Beside OneTwoPunch because the two
         // powers are the same shape and different rules -- see the note on the BuffId.
         BuffSystem.Remove(state.PlayerBuffs, BuffId.Duplication);
-        // Battle Trance's NoDrawPower only gags the turn it was played on.
-        BuffSystem.Remove(state.PlayerBuffs, BuffId.NoDraw);
 
         // Both of these deal DAMAGE (CreatureCmd.Damage with ValueProp.Unpowered), so
         // block absorbs them. Taking it off HP directly is indistinguishable in a capture
@@ -1063,6 +1061,14 @@ public static class CombatEngine
         {
             BuffSystem.Remove(enemy.Buffs, BuffId.Oblivion);
         }
+
+        // `NoDrawPower.AfterSideTurnEnd` -- Battle Trance's and Bullet Time's gag, lifted
+        // with the rest of the player's side-turn-end powers in
+        // `EndPlayerTurnPhaseTwoInternal`, which is after `DoTurnEnd` has run the hand's
+        // turn-end cards and after the flush. So every draw the turn end itself fires is
+        // still refused: a Beckon's HP loss spends Centennial Puzzle and draws nothing.
+        // It was lifted before the hand pass, and the Puzzle's three came through.
+        BuffSystem.Remove(state.PlayerBuffs, BuffId.NoDraw);
 
         // `PaelsEye.ShouldTakeExtraTurn`: a turn in which the owner played NOTHING, once
         // per combat, skips the enemy side entirely and hands the player another turn.
