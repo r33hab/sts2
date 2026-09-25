@@ -48,8 +48,11 @@ __all__ = [
     "write_shard",
 ]
 
-# Bumped whenever the record's layout changes.
-SCHEMA_VERSION = 1
+# Bumped whenever the record's layout changes. 2: decisions carry `p_floor` (Task 3).
+SCHEMA_VERSION = 2
+# A floor distribution: final floors 1-17 and the Act 1 boss kill (`models.FLOOR_CLASSES`,
+# which imports this module; a test holds the two equal).
+FLOOR_CLASSES = 18
 
 RunRecord = dict[str, Any]
 
@@ -297,6 +300,7 @@ _DECISION: dict[str, Any] = {
         "values",
         "p_chosen",
         "fallback",
+        "p_floor",
     ],
     "properties": {
         "i": _COUNT,
@@ -313,6 +317,19 @@ _DECISION: dict[str, Any] = {
         },
         "p_chosen": {"type": "number", "minimum": 0, "maximum": 1},
         "fallback": _BOOL,
+        # The generating network's floor distribution for the chosen afterstate, which
+        # the previous decision's target bootstraps from (5.2); null without a network.
+        "p_floor": {
+            "oneOf": [
+                {"type": "null"},
+                {
+                    "type": "array",
+                    "items": {"type": "number", "minimum": 0, "maximum": 1},
+                    "minItems": FLOOR_CLASSES,
+                    "maxItems": FLOOR_CLASSES,
+                },
+            ],
+        },
     },
     "additionalProperties": False,
 }

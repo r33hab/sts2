@@ -262,8 +262,9 @@ class RulesPlayerTests(unittest.TestCase):
             {"kind": "rules", "checkpoint": None, "tau": None, "eps": 0.15},
         )
         self.assertEqual(selfplay.make_policy({"kind": "rules"}).describe()["eps"], 0.0)
-        with self.assertRaisesRegex(ValueError, "lookahead"):
-            selfplay.make_policy({"kind": "lookahead", "npz": "x.npz"})
+        # The lookahead kind is built from a checkpoint (test_run_train_policy).
+        with self.assertRaisesRegex(ValueError, "unknown policy kind"):
+            selfplay.make_policy({"kind": "oracle"})
 
 
 if __name__ == "__main__":

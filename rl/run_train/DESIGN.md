@@ -1464,8 +1464,12 @@ embedding of a deck is the count-weighted sum of per-card vectors.
   flag. Dense width 22 + 25 + 88 + 1 = 136, concatenated with the embeddings (104) = 240,
   then 256 -> ReLU -> 128 -> ReLU -> **22 logits**: class 0 = death, and classes 1-21 =
   HP lost (`hp_before - hp_after`, after end-of-fight heals) in buckets (-inf, 0], 1-4, 5-8,
-  ..., 73-76, and 77 or more. About 180k parameters. `E[loss]` uses the bucket centres, and
-  `P(death) = p[0]`.
+  ..., 73-76, and 77 or more. About 180k parameters. `E[loss]` uses the bucket centres
+  (0 for "lost nothing", 78.5 for 77 or more), and a death costs the whole HP the player
+  brought: `E[loss] = sum_{k>=1} p_k c_k + p_0 * hp` (`models.expected_loss`), so a
+  deadlier fight never reads as a cheaper one. `P(death) = p[0]`. The label reads HP
+  alone, never a step reward, so a fight a potion ends or heals through is labelled like
+  any other.
 - **RunValueNet (V)** values an afterstate. Input: the 1851-wide vector (base plus H).
   Dense = A + B + C + D + H = 338, concatenated with the embeddings = 442, then 256 ->
   ReLU -> dropout 0.1 -> 256 -> ReLU -> heads: **18 floor logits** (class k-1 = the run
@@ -1479,9 +1483,17 @@ limit", FINDINGS). The regime is data-bound: about 16k runs per buffer window (5
 a few dozen correlated decisions per run (54-64 engine steps, many of them auto screens,
 2.3). So the width goes into shared embeddings, a 64-dimensional vector per card for
 cards that appear thousands of times a day, and a two-layer 256 trunk. Weight decay and
-early stopping handle the rest. Inference in the workers is numpy (`NumpyMLP` loaded
-from the checkpoint's `.npz` export), so self-play processes never import torch. A test
-asserts the numpy and torch outputs agree within 1e-5.
+early stopping handle the rest. Inference in the workers is numpy (`NumpyFightNet` and
+`NumpyValueNet`, loaded from the checkpoint's `.npz` export by `models.load_numpy`), so
+self-play processes and the engine service never import torch: the torch modules are
+built on first use. A test asserts the numpy and torch outputs agree within 1e-5.
+
+Both nets take inputs assembled once, in numpy, for training and inference alike
+(`models.fight_inputs`, `models.value_inputs`). The one transformation is a clamp on
+block A's four HP scalars at 600 HP (`models.HP_BOUND`, above every real creature), so a
+sentinel like the Waterfall Giant's 999999999 never reaches a network as a magnitude;
+nothing assumes an input is non-negative. H for a training row is computed by the same
+numpy FightNet the policy runs (`NumpyFightNet.summary`), so train and serve agree on it.
 
 ### 5.2 Targets, and the value the coach shows
 
@@ -1506,9 +1518,11 @@ asserts the numpy and torch outputs agree within 1e-5.
   - W is in no training target (the network learns the distribution), so changing it
     needs no retraining. Once Act 2 is modelled, it is replaced by V's own estimate at
     Act 2's first floor.
-- **Boss kill**: `p_boss = p_18`. `score_options` reports it for every option beside
-  `V_W`. The coach shows it as the win chance once the champion's eval boss-kill rate is
-  at least 5% (spec 8.1), read from `model.json`.
+- **Boss kill**: `p_boss = p_18`. `score_options` reports it beside `V_W` as the win
+  chance once the model's recorded **self-play** boss-kill rate is at least 5% (spec 8.1,
+  erratum E7): `selfplay_boss_kill_rate` in `model.json`, which Task 4's export writes.
+  The eval rate does not count. Below 5%, and for a bare checkpoint with no `model.json`,
+  `p_boss` is None, so the coach has no win chance to show.
 - **End HP**: hp/max_hp at the end of Act 1, 0 if dead. An auxiliary head, trained with
   weight 0.25. It is kept for the Act 2 extension, and decisions never read it.
 - **Fight outcome**: the 22-way class of each fight (5.1). Label: hp at fight start
@@ -1516,9 +1530,15 @@ asserts the numpy and torch outputs agree within 1e-5.
 - **Bootstrapped floor target** for decision t with afterstate `x_t`:
   `y_t = (1 - beta) * onehot(final floor) + beta * p_gen(x_{t+1})`. Here `p_gen` is the
   generating network's own floor distribution for the next chosen afterstate, stored in
-  the shard at generation time. Use beta = 0.3 (upstream's measured best blend, FINDINGS
-  "the value target"). The last decision of a run, and all data from a policy with no
-  network (the rules policy), use beta = 0.
+  the shard at generation time: each decision's `p_floor` (the chosen afterstate's
+  `p_1 .. p_18`, null when no network valued the choice). Use beta = 0.3 (upstream's
+  measured best blend, FINDINGS "the value target"). The last decision of a run, and all
+  data from a policy with no network (the rules policy), use beta = 0.
+- **Decisions the rules decide** (erratum O4). A decision whose chosen option is
+  unscorable (the rules' enchant, an unknown screen) has no `apply_option` afterstate: it
+  gives no V row and stores no `p_floor`. The rows around it still bootstrap through the
+  actual next state: `p_gen(x_{t+1})` is the next decision that stores a distribution
+  (`train.bootstrap_targets`).
 
 ### 5.3 Losses and optimisation
 
@@ -1544,8 +1564,11 @@ asserts the numpy and torch outputs agree within 1e-5.
   relics, HP, encounter) depends on the combat searcher and on the ascension's enemy
   values. Both are fixed within an era, so old fights stay valid; changing either
   starts a new era (2.7, 5.7).
-- Shards keep pre-decision `RunView`s and options, never vectors (5.7), so a
-  `FEATURE_VERSION` change re-encodes old data instead of discarding it.
+- Shards keep pre-decision `RunView`s and options, never vectors (5.7), so encodings
+  are always rebuilt from views. A `FEATURE_VERSION` change nonetheless starts a new data
+  era (erratum E6), like a budget or ascension change: both buffers keep only records at
+  the current budget, ascension and version (`train.load_buffers`), and never a
+  truncated run.
 
 ### 5.5 Exploration
 
@@ -1653,8 +1676,8 @@ RunRecord (one JSON line): schema, feature_version, seed, generation, policy
 {kind, checkpoint, tau, eps}, combat {budget: "120/500", c, crn_fraction}, ascension,
 outcome {final_floor, boss_killed, died, end_hp, end_max_hp, truncated},
 maps [{region, boss, nodes}], decisions [{i, type, floor, state (RunView without the map),
-options, chosen, values, p_chosen, fallback}], fights [{floor, node_type, encounter,
-weak, sims, state, hp_before, hp_after, won, decisions, seconds}],
+options, chosen, values, p_chosen, fallback, p_floor}], fights [{floor, node_type,
+encounter, weak, sims, state, hp_before, hp_after, won, decisions, seconds}],
 stats {unknown_decisions, forced_skips, potion_left_full_belt, steps, seconds}.
 `shards.RUN_RECORD_SCHEMA` is the exact layout (JSON Schema, Draft 2020-12), and
 `shards.state_view` / `shards.entry_decision` rebuild a state's `RunView` and its
@@ -2072,20 +2095,32 @@ Commit `feat(train): self-play workers, shards and evaluation harness`.
 
 ### Task 3: models, training, lookahead policy (as planned, with 5.1-5.5)
 
-**Files:** `rl/run_train/models.py` (FightNet, RunValueNet, NumpyMLP export/load),
-`rl/run_train/train.py`, `rl/run_train/policy.py`, and tests.
+**Files:** `rl/run_train/models.py` (FightNet, RunValueNet, their numpy inference and the
+checkpoint files), `rl/run_train/train.py`, `rl/run_train/policy.py`, and tests.
 
-**Interfaces:**
+**Interfaces (as built):**
 
-- `train.fit(shards, prev_checkpoint) -> checkpoint`, which trains FightNet then V (5.3)
-  and writes `.pt` and `.npz`.
-- `policy.LookaheadPolicy(checkpoint, temperature, eps=0.02, W=26.0)`, with the selfplay
-  policy interface. It samples with the run's `explore_rng` and hands every
-  `scorable=False` option to `RulesPolicy`.
-- `policy.score_options(decision, view) -> list[OptionScore]` with
+- `train.fit(shards, prev_checkpoint, out, ...) -> Path`, with keyword-only
+  `generation`, `combat_budget`, `ascension` and `config=TrainConfig()`. It applies the
+  buffers of 5.4 to the shards it is given (any generations; the era is the budget, the
+  ascension and `FEATURE_VERSION`), trains FightNet then V (5.3), and writes `out` (the
+  `.pt`) and its `.npz` beside it, last. `prev_checkpoint` is the `.pt` to warm-start
+  from, or None.
+- `policy.LookaheadPolicy(checkpoint, temperature, eps=0.02, W=26.0)`, `checkpoint`
+  being the `.npz`, with the selfplay policy interface. It samples with the run's
+  `explore_rng`, hands every `scorable=False` option to `RulesPolicy`, and records each
+  option's `V_W` and the chosen afterstate's `p_floor`. `selfplay.make_policy` builds it
+  from `{"kind": "lookahead", "npz", "tau", "eps", "W"}`; `policy.temperature(g)` is
+  5.5's `tau_g`.
+- `policy.score_options(decision, view, model=None) -> list[OptionScore]` with
   `OptionScore(option, value, p_boss, scorable)`: `V_W` and `p_18` per scorable option
-  (None for the others), best first. The coach passes `view_from_live(...)` and the
-  engine side `view_from_engine(...)`.
+  (None for the others, and `p_boss` None below E7's gate), best first. It reads
+  `decision.view or view` (E3). `model` is a loaded `policy.Model`, a folder or `.npz`
+  for `policy.load`, or None for the champion in `policy.STRATEGY_MODEL_DIR`:
+  `model.json` (W, `selfplay_boss_kill_rate`, and the weights' name under `npz`, else the
+  folder's only `.npz`). The coach passes `view_from_live(...)` through the engine
+  service, which imports `run_train.features` and `run_train.policy` lazily; self-play
+  passes `view_from_engine(...)`.
 
 **Requirements:**
 

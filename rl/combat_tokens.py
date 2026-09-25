@@ -166,6 +166,14 @@ ENDTURN_CLAMP = 15.0
 # case we are in, and reports the spread where there is one.
 ENDTURN_TRIALS = 5
 
+# HP past which a creature's exact number means nothing: more than any real enemy holds (the
+# largest, Aeonglass, has 535; the test reads the generated table). A Waterfall Giant waiting
+# to blow stands at 999999999 (`TriggerAboutToBlowState`), which the observation reads as
+# its bound, 32768 -- as `hp / 50` a channel of 655, hundreds of times anything a fight
+# holds. HP-derived channels are clamped here; nothing else is, so a negative buff amount
+# keeps its sign.
+HP_BOUND = 600
+
 # WHOSE a token is, as its own embedded id rather than a number. 0 is the player, 1..N
 # are enemy slots. Every token carries one, so a buff and the body it sits on share an
 # owner and attention can match them exactly.
@@ -335,7 +343,7 @@ def encode(handle: int, obs, encounter_id: int) -> Tokens:
     push(
         TYPE_GLOBAL,
         VOCAB.encounter.get(encounter_id, 0),
-        F_HP=hp / max(1, max_hp),
+        F_HP=min(1.0, hp / max(1, max_hp)),
         F_BLOCK=block / 50.0,
         F_ENERGY=energy / 10.0,
         F_DRAW_N=draw_n / 20.0,
@@ -461,8 +469,8 @@ def encode(handle: int, obs, encounter_id: int) -> Tokens:
             TYPE_ENEMY,
             VOCAB.enemy.get(def_id, 0),
             owner=slot + 1,
-            F_ENEMY_HP=e_hp / 50.0,
-            F_ENEMY_HP_FRAC=e_hp / max(1, e_max),
+            F_ENEMY_HP=min(e_hp, HP_BOUND) / 50.0,
+            F_ENEMY_HP_FRAC=min(1.0, e_hp / max(1, e_max)),
             F_ENEMY_BLOCK=e_block / 50.0,
         )
         # This turn's announced move, kind and size, attached to its body by the owner id.

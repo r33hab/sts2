@@ -62,6 +62,7 @@ def synthetic_record(seed: str = "T0000R0000", **overrides: object) -> dict:
                 "values": None,
                 "p_chosen": 0.925,
                 "fallback": False,
+                "p_floor": None,
             },
         ],
         "fights": [
@@ -179,6 +180,18 @@ class SchemaTests(unittest.TestCase):
         bad_kind = synthetic_record()
         bad_kind["decisions"][0]["options"][0]["kind"] = "card.steal"
         self.assertFalse(validator.is_valid(bad_kind))
+
+    def test_a_decision_carries_null_or_a_whole_floor_distribution(self):
+        # The generating network's distribution for the chosen afterstate (5.2).
+        validator = jsonschema.Draft202012Validator(shards.RUN_RECORD_SCHEMA)
+        record = synthetic_record()
+        record["decisions"][0]["p_floor"] = [1 / 18] * 18
+        validator.validate(record)
+        for bad in ([0.5] * 17, [2.0] + [0.0] * 17, "uniform"):
+            record["decisions"][0]["p_floor"] = bad
+            self.assertFalse(validator.is_valid(record), bad)
+        del record["decisions"][0]["p_floor"]
+        self.assertFalse(validator.is_valid(record))
 
 
 class AtomicFileTests(unittest.TestCase):

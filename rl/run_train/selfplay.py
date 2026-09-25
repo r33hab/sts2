@@ -11,8 +11,8 @@ seed replays the same run -- the runner's retry rule relies on it (5.8).
 
 A self-play policy has `pick(view, decision, rng) -> Pick` and `describe()`, the record's
 `policy` block. `RulesPlayer` is the rules baseline in that shape, with generation 0's
-uniform exploration (5.5); `make_policy` builds a policy from its picklable spec, which is
-how a runner worker gets one.
+uniform exploration (5.5), and `policy.LookaheadPolicy` is the learned one; `make_policy`
+builds either from its picklable spec, which is how a runner worker gets one.
 """
 
 from __future__ import annotations
@@ -59,13 +59,17 @@ class Pick:
 
     `values` holds the policy's value of each option (None throughout for a policy
     without a network), `p_chosen` the probability it had of choosing this option, and
-    `fallback` whether the rules' counted fallback decided.
+    `fallback` whether the rules' counted fallback decided. `p_floor` is the floor
+    distribution the policy's network gave the chosen option's afterstate: the previous
+    decision's training row bootstraps from it (5.2). It is None when no network valued
+    the choice (the rules policy, or an unscorable option the rules decided).
     """
 
     index: int
     values: tuple[float | None, ...] | None = None
     p_chosen: float = 1.0
     fallback: bool = False
+    p_floor: tuple[float, ...] | None = None
 
 
 class Policy(Protocol):
@@ -115,19 +119,27 @@ class RulesPlayer:
 def make_policy(spec: dict[str, Any]) -> Policy:
     """Build the policy a picklable `policy_spec` names (DESIGN.md 7).
 
-    `{"kind": "rules"}`, with an optional `eps` for generation 0's exploration.
+    `{"kind": "rules"}`, with an optional `eps` for generation 0's exploration, or
+    `{"kind": "lookahead", "npz": path, "tau": float, "eps": float, "W": float}`.
 
     Raises:
-        ValueError: For any other kind; the lookahead policy arrives with Task 3.
+        ValueError: For any other kind.
 
     """
     kind = spec.get("kind")
     if kind == "rules":
         return RulesPlayer(eps=float(spec.get("eps", 0.0)))
-    raise ValueError(
-        f"unknown policy kind {kind!r}: 'rules' is the only kind so far (the "
-        "lookahead policy arrives with Task 3)",
-    )
+    if kind == "lookahead":
+        # `policy` imports this module (for `Pick`), so it is imported when first asked.
+        from .policy import W_DEFAULT, LookaheadPolicy  # noqa: PLC0415
+
+        return LookaheadPolicy(
+            spec["npz"],
+            float(spec["tau"]),
+            eps=float(spec.get("eps", 0.02)),
+            W=float(spec.get("W", W_DEFAULT)),
+        )
+    raise ValueError(f"unknown policy kind {kind!r}: 'rules' or 'lookahead'")
 
 
 def check_playable(ascension: int) -> None:
@@ -224,6 +236,7 @@ def play_run(
                         "values": None if pick.values is None else list(pick.values),
                         "p_chosen": pick.p_chosen,
                         "fallback": pick.fallback,
+                        "p_floor": None if pick.p_floor is None else list(pick.p_floor),
                     },
                 )
                 session.apply(decision.options[pick.index])
