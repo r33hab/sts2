@@ -1,0 +1,58 @@
+{
+  "schema": "sts2-live-snapshot/1",
+  "game_version": "v0.107.1",
+  "character": "IRONCLAD",
+  "ascension": 0,
+  "act": 1,
+  "floor": 2,
+  "room_type": "monster",
+  "round": 3,
+  "player": {
+    "hp": 70,
+    "max_hp": 80,
+    "block": 0,
+    "energy": 3,
+    "max_energy": 3,
+    "gold": 99,
+    "stars": 0,
+    "osty": null,
+    "orbs": {"slots": 0, "list": []},
+    "powers": [],
+    "relics": [{"id": "BURNING_BLOOD", "counter": null, "fields": {}}],
+    "potions": [
+      {"slot": 0, "id": null},
+      {"slot": 1, "id": null},
+      {"slot": 2, "id": null}
+    ],
+    "max_potion_slots": 3
+  },
+  "hand": [
+    {"id": "POMMEL_STRIKE", "upgraded": false, "uid": "c10", "cost": 1, "enchantment": null, "enchant_amount": null, "fields": {}},
+    {"id": "SHRUG_IT_OFF", "upgraded": true, "uid": "c11", "cost": 1, "enchantment": null, "enchant_amount": null, "fields": {}},
+    {"id": "ANGER", "upgraded": false, "uid": "c12", "cost": 0, "enchantment": null, "enchant_amount": null, "fields": {}}
+  ],
+  "draw_pile": [
+    {"id": "BASH", "upgraded": false, "uid": "c1", "cost": 2, "enchantment": null, "enchant_amount": null, "fields": {}},
+    {"id": "DEFEND_IRONCLAD", "upgraded": false, "uid": "c2", "cost": 1, "enchantment": null, "enchant_amount": null, "fields": {}},
+    {"id": "DEFEND_IRONCLAD", "upgraded": false, "uid": "c3", "cost": 1, "enchantment": null, "enchant_amount": null, "fields": {}},
+    {"id": "STRIKE_IRONCLAD", "upgraded": false, "uid": "c4", "cost": 1, "enchantment": null, "enchant_amount": null, "fields": {}},
+    {"id": "STRIKE_IRONCLAD", "upgraded": true, "uid": "c5", "cost": 1, "enchantment": null, "enchant_amount": null, "fields": {}}
+  ],
+  "discard_pile": [
+    {"id": "IRON_WAVE", "upgraded": false, "uid": "c20", "cost": 1, "enchantment": null, "enchant_amount": null, "fields": {}},
+    {"id": "STRIKE_IRONCLAD", "upgraded": false, "uid": "c21", "cost": 1, "enchantment": null, "enchant_amount": null, "fields": {}}
+  ],
+  "exhaust_pile": [
+    {"id": "TRUE_GRIT", "upgraded": false, "uid": "c30", "cost": 1, "enchantment": null, "enchant_amount": null, "fields": {}}
+  ],
+  "known_draw_top": [
+    {"id": "STRIKE_IRONCLAD", "upgraded": true, "uid": "c5", "cost": 1, "enchantment": null, "enchant_amount": null, "fields": {}},
+    {"id": "BASH", "upgraded": false, "uid": "c1", "cost": 2, "enchantment": null, "enchant_amount": null, "fields": {}}
+  ],
+  "known_draw_bottom": [
+    {"id": "DEFEND_IRONCLAD", "upgraded": false, "uid": null, "cost": 1, "enchantment": null, "enchant_amount": null, "fields": {}}
+  ],
+  "enemies": [],
+  "history": {},
+  "pending_selection": null
+}

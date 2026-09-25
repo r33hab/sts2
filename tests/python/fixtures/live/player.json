@@ -1,0 +1,59 @@
+{
+  "schema": "sts2-live-snapshot/1",
+  "game_version": "v0.107.1",
+  "character": "IRONCLAD",
+  "ascension": 8,
+  "act": 1,
+  "floor": 6,
+  "room_type": "elite",
+  "round": 2,
+  "player": {
+    "hp": 61,
+    "max_hp": 80,
+    "block": 5,
+    "energy": 2,
+    "max_energy": 4,
+    "gold": 132,
+    "stars": 0,
+    "osty": null,
+    "orbs": {"slots": 0, "list": []},
+    "powers": [
+      {"id": "STRENGTH_POWER", "amount": 2},
+      {"id": "VULNERABLE_POWER", "amount": 1}
+    ],
+    "relics": [
+      {"id": "BURNING_BLOOD", "counter": null, "fields": {}},
+      {"id": "BREAD", "counter": null, "fields": {}}
+    ],
+    "potions": [
+      {"slot": 0, "id": "REGEN_POTION"},
+      {"slot": 1, "id": null},
+      {"slot": 2, "id": "BLOCK_POTION"}
+    ],
+    "max_potion_slots": 3
+  },
+  "hand": [
+    {"id": "STRIKE_IRONCLAD", "upgraded": false, "uid": "c1", "cost": 1, "enchantment": null, "enchant_amount": null, "fields": {}},
+    {"id": "DEFEND_IRONCLAD", "upgraded": false, "uid": "c2", "cost": 1, "enchantment": null, "enchant_amount": null, "fields": {}},
+    {"id": "BASH", "upgraded": false, "uid": "c3", "cost": 2, "enchantment": null, "enchant_amount": null, "fields": {}}
+  ],
+  "draw_pile": [
+    {"id": "DEFEND_IRONCLAD", "upgraded": false, "uid": "c4", "cost": 1, "enchantment": null, "enchant_amount": null, "fields": {}},
+    {"id": "STRIKE_IRONCLAD", "upgraded": false, "uid": "c5", "cost": 1, "enchantment": null, "enchant_amount": null, "fields": {}},
+    {"id": "STRIKE_IRONCLAD", "upgraded": false, "uid": "c6", "cost": 1, "enchantment": null, "enchant_amount": null, "fields": {}}
+  ],
+  "discard_pile": [
+    {"id": "STRIKE_IRONCLAD", "upgraded": false, "uid": "c7", "cost": 1, "enchantment": null, "enchant_amount": null, "fields": {}},
+    {"id": "DEFEND_IRONCLAD", "upgraded": false, "uid": "c8", "cost": 1, "enchantment": null, "enchant_amount": null, "fields": {}}
+  ],
+  "exhaust_pile": [],
+  "known_draw_top": [],
+  "known_draw_bottom": [],
+  "enemies": [],
+  "history": {
+    "cards_played_this_turn": 1,
+    "cards_played_this_combat": 5,
+    "cards_drawn_this_combat": 10
+  },
+  "pending_selection": null
+}
