@@ -291,7 +291,8 @@ def run_seeds(
 
     Raises:
         Stopped: When SIGTERM arrives; the workers are ended first.
-        ValueError: If a seed is listed twice.
+        ValueError: If a seed is listed twice, or the run engine cannot play
+            `config.ascension` (checked before any seed runs, for the default play).
 
     """
     queue = deque(seeds)
@@ -300,7 +301,9 @@ def run_seeds(
     stats = JobStats()
     if not queue:
         return stats
-    play = play or selfplay.play_task
+    if play is None:
+        selfplay.check_playable(config.ascension)
+        play = selfplay.play_task
     ctx = multiprocessing.get_context("spawn")
     failures: dict[str, int] = {}
     outstanding = len(queue)

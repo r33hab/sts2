@@ -27,7 +27,7 @@ import combat_mcts  # rl/ is on sys.path (the package's __init__)
 from sts2_gym import run_constants as rc
 
 from . import FEATURE_VERSION, seeding, shards, vocab
-from .engine import WEAK_ENCOUNTERS_PER_ACT, CombatBudget, RunSession
+from .engine import WEAK_ENCOUNTERS_PER_ACT, CombatBudget, RunSession, new_run_env
 from .rules import RulesPolicy
 
 if TYPE_CHECKING:
@@ -40,6 +40,7 @@ __all__ = [
     "Pick",
     "Policy",
     "RulesPlayer",
+    "check_playable",
     "make_policy",
     "play_run",
     "play_task",
@@ -127,6 +128,29 @@ def make_policy(spec: dict[str, Any]) -> Policy:
         f"unknown policy kind {kind!r}: 'rules' is the only kind so far (the "
         "lookahead policy arrives with Task 3)",
     )
+
+
+def check_playable(ascension: int) -> None:
+    """Refuse a level the run engine cannot play, before a job hands out any seed.
+
+    Otherwise every seed would raise in its worker and be quarantined, and a generation
+    would end complete-looking and empty.
+
+    Raises:
+        ValueError: If the engine refuses the level. Until run-fidelity Task 5 models A10,
+            the default 10 is refused: play 9 with `ascension_stands_in_for=10` (E11).
+
+    """
+    env = new_run_env("PREFLIGHT", ascension)
+    try:
+        env.reset()
+    except RuntimeError as error:
+        raise ValueError(
+            f"the run engine cannot play ascension {ascension} ({error}); until it "
+            "models 10, play 9 with ascension_stands_in_for=10 (erratum E11)",
+        ) from error
+    finally:
+        env.close()
 
 
 def play_task(

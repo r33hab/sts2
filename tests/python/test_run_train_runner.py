@@ -364,6 +364,15 @@ class GenerateTests(RunnerTestCase):
             runner.generate(1, 1, {"kind": "rules"}, self.root / "somewhere")
         self.assertEqual(runner.training_seed(12, 7), "T0012R0007")
 
+    def test_a_level_the_engine_cannot_play_fails_before_any_seed_runs(self):
+        # Erratum E11: the default is 10 before the engine models it. A job at a level
+        # the engine refuses fails at once, rather than quarantine every seed.
+        config = runner.JobConfig(workers=2, ascension=99)
+        with self.assertRaisesRegex(ValueError, "ascension 99"):
+            runner.generate(4, 2, {"kind": "rules"}, self.gen, config=config)
+        self.assertFalse((self.gen / "quarantine.jsonl").exists())
+        self.assertFalse((self.gen / "manifest.json").exists())
+
     def test_workers_that_cannot_start_fail_the_job_and_charge_no_seed(self):
         # A worker imports its play function's module as it starts. One that dies there
         # never ran a seed: the job fails loudly instead of quarantining every seed and

@@ -1714,7 +1714,9 @@ retry and quarantine at warning level. A worker that dies before it is ready nev
 its seed: the seed goes back to the front of the queue, uncharged. When workers keep
 dying that way (more than two per worker slot in a row, because the play function cannot
 load, say), the job raises instead of quarantining every seed into a complete-looking
-generation with no runs.
+generation with no runs. For the same reason a job first resets one run at its
+ascension in the parent, and refuses a level the engine cannot play: until run-fidelity
+Task 5, the default 10 (E11).
 
 **Stopping.** SIGTERM to the loop: the parent stops dispatching, terminates the workers
 (SIGTERM, then SIGKILL after 10 s), flushes the completed records it holds, and writes
