@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 
 from . import native
+from .names import camel_to_replay_id
 from .run_constants import (
     BUNDLE_CONFIRM_ACTION,
     EVENT_SKIP_ACTION,
@@ -694,11 +695,6 @@ def card_name_by_id() -> dict[int, str]:
     for match in pattern.finditer(cards_path.read_text(encoding="utf-8")):
         mapping[int(match.group("id"))] = match.group("name")
     return mapping
-
-
-def camel_to_replay_id(name: str) -> str:
-    words = re.findall(r"[A-Z]+(?=[A-Z][a-z]|\d|$)|[A-Z]?[a-z]+|\d+", name)
-    return "_".join(word.upper() for word in words)
 
 
 def proceed_action(phase: int) -> int | None:
