@@ -4584,7 +4584,13 @@ public static class CardEffects
     /// </summary>
     internal static EnemyState? RandomLivingEnemy(CombatState state, Random? rng)
     {
-        var living = state.Enemies.Where(e => e.Hp > 0).ToList();
+        // A Waterfall Giant whose death is not answered yet counts. In the game it is back
+        // at 999999999 and hittable the moment it dies, so a later hit in the same card
+        // still rolls over it -- and `Rng.NextItem` draws even over one candidate, so
+        // leaving it out skipped draws the game makes.
+        var living = state
+            .Enemies.Where(e => e.Hp > 0 || EnemyAI.DiedHoldingSteamEruption(e))
+            .ToList();
         if (living.Count == 0)
         {
             return null;

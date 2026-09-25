@@ -280,5 +280,20 @@ public static class CombatObservation
             obs[at + 1] = passive;
             obs[at + 2] = evoke;
         }
+
+        // No value leaves the declared space. The case that needed this is the Waterfall
+        // Giant's 999999999 while it waits to blow (`TriggerAboutToBlowState`), which reads
+        // here as the bound: more than any fight holds, which is what it means.
+        for (int i = 0; i < ObsSize; i++)
+        {
+            obs[i] = Math.Min(obs[i], ValueBound);
+        }
     }
+
+    /// <summary>
+    /// The largest value an observation carries: the upper bound `Sts2CombatEnv` and
+    /// `Sts2RunEnv` declare for their observation spaces (`high=2**15`). <see cref="Write" />
+    /// clamps to it.
+    /// </summary>
+    public const int ValueBound = 1 << 15;
 }

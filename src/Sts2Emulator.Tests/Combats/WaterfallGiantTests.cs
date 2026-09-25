@@ -306,6 +306,136 @@ public class WaterfallGiantTests
     }
 
     /// <summary>
+    /// A card Mayhem auto-plays as the player's turn starts runs no death check of its
+    /// own. The giant it kills is answered before the step returns, as the game answers it
+    /// the moment it dies: the turn opens on the stun, that round's enemy phase is
+    /// ABOUT_TO_BLOW, and the one after is EXPLODE, for PRESSURIZE's 15 and STOMP's 3.
+    /// </summary>
+    [Fact]
+    public void KilledByATurnStartAutoPlayItIsAnsweredBeforeTheTurnOpens()
+    {
+        var fight = Encounter();
+        fight.EndTurn();
+        Giant(fight).Hp = 1;
+        fight.PlayerBuff(BuffId.MayhemPower, 1);
+        // The hand draw takes the five Defends; Mayhem then plays the Strike under them.
+        fight.Draw(
+            Card(IC.DefendIronclad),
+            Card(IC.DefendIronclad),
+            Card(IC.DefendIronclad),
+            Card(IC.DefendIronclad),
+            Card(IC.DefendIronclad),
+            Card(IC.StrikeIronclad),
+            Card(IC.DefendIronclad),
+            Card(IC.DefendIronclad),
+            Card(IC.DefendIronclad),
+            Card(IC.DefendIronclad),
+            Card(IC.DefendIronclad)
+        );
+
+        var result = fight.EndTurn();
+
+        Assert.False(result.Terminal);
+        Assert.Equal(AboutToBlowHp, Giant(fight).Hp);
+        Assert.Equal([(IntentType.Unknown, 0)], fight.Intents);
+
+        int hp = fight.State.PlayerHp;
+        fight.EndTurn();
+        Assert.Equal(hp, fight.State.PlayerHp);
+        Assert.Equal([(IntentType.Attack, 18)], fight.Intents);
+        Assert.True(fight.EndTurn().Terminal);
+        Assert.Equal(hp - 18, fight.State.PlayerHp);
+    }
+
+    /// <summary>
+    /// Sword Boomerang re-rolls its target inside the per-hit loop, and `Rng.NextItem`
+    /// draws even over one candidate. In the game the giant its first hit kills is back and
+    /// hittable for the rest of the card, so every hit rolls on `Rng.CombatTargets`: three
+    /// draws. Only an empty list skips the draw.
+    /// </summary>
+    [Fact]
+    public void HitsAfterTheKillingOneStillRollTheirTargets()
+    {
+        var fight = Encounter();
+        fight.EndTurn();
+        Giant(fight).Hp = 1;
+        fight.State.Hand = [Card(IC.SwordBoomerang)];
+        fight.Energy(1);
+        var targets = new CountingRandom(5);
+        fight.State.TargetRng = targets;
+
+        fight.Play(0);
+
+        Assert.Equal(3, targets.CallCount);
+        Assert.Equal(AboutToBlowHp, Giant(fight).Hp);
+    }
+
+    /// <summary>
+    /// The sentinel HP is written into the observation clamped to the bound the
+    /// observation spaces declare (`high=2**15`), so no value leaves the declared space
+    /// and an agent reads a number bigger than any fight holds.
+    /// </summary>
+    [Fact]
+    public void ItsSentinelHpIsClampedInTheObservation()
+    {
+        var fight = Encounter();
+        fight.EndTurn();
+        StrikeDown(fight);
+        var observation = new int[CombatObservation.ObsSize];
+
+        CombatObservation.Write(fight.State, observation);
+
+        int giant = CombatObservation.EnemyOffset;
+        Assert.Equal((1 << 15, 1 << 15), (observation[giant], observation[giant + 1]));
+        Assert.All(observation, value => Assert.InRange(value, int.MinValue, 1 << 15));
+    }
+
+    /// <summary>EXPLODE can kill the player: the fight then ends as a loss.</summary>
+    [Fact]
+    public void AnExplosionThePlayerCannotSurviveLosesTheFight()
+    {
+        var fight = Encounter();
+        fight.EndTurn();
+        StrikeDown(fight);
+        fight.EndTurn();
+        fight.State.PlayerHp = 10;
+
+        var result = fight.EndTurn();
+
+        Assert.True(result.Terminal);
+        Assert.False(result.PlayerWon);
+        Assert.Equal(0, fight.State.PlayerHp);
+    }
+
+    /// <summary>
+    /// KNOWN DIVERGENCE, pinned so that it cannot change unnoticed. In the game the kill
+    /// and the revive happen inside the killing blow (`CreatureCmd.Damage` ends in `Kill`),
+    /// so the rest of Uppercut+ lands on the revived giant. Its Weak 2 is still at 1 when
+    /// EXPLODE swings, and 15 becomes 11. The emulator answers a death after the card, so
+    /// those debuffs meet a giant at zero HP and are dropped, and EXPLODE swings for the
+    /// full 15. If the revive ever moves inside the damage path, this test should flip to
+    /// the game's numbers: Weak 2 on the giant, then 11.
+    /// </summary>
+    [Fact]
+    public void KnownDivergenceUppercutsWeakOnTheKillingBlowIsDropped()
+    {
+        var fight = Encounter();
+        fight.EndTurn();
+        Giant(fight).Hp = 1;
+        fight.State.Hand = [Card(IC.Uppercut, upgraded: true)];
+        fight.Energy(2);
+
+        fight.Play(0, target: 0);
+
+        Assert.Equal(AboutToBlowHp, Giant(fight).Hp);
+        Assert.Equal(0, fight.EnemyBuffAmount(BuffId.Weak));
+        fight.EndTurn();
+        int hp = fight.State.PlayerHp;
+        fight.EndTurn();
+        Assert.Equal(hp - 15, fight.State.PlayerHp);
+    }
+
+    /// <summary>
     /// Before PRESSURIZE it holds no Steam Eruption, so nothing keeps it in the fight: a
     /// giant killed on turn one simply dies.
     /// </summary>

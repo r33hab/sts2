@@ -16,6 +16,7 @@ So these tests do not check the numbers. They check that what the decoders repor
 the emulator actually holds, which is true whatever the layout becomes.
 """
 
+import ctypes
 import importlib
 import sys
 import unittest
@@ -28,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
 sts2_gym = importlib.import_module("sts2_gym")
 native = importlib.import_module("sts2_gym.native")
+names = importlib.import_module("sts2_gym.names")
 commands = importlib.import_module("sts2_gym.commands")
 run_constants = importlib.import_module("sts2_gym.run_constants")
 trace = importlib.import_module("trace")
@@ -140,6 +142,38 @@ class ObservationLayoutTests(unittest.TestCase):
         for enemy in enemies:
             self.assertGreater(enemy["max_hp"], 0)
             self.assertLessEqual(enemy["hp"], enemy["max_hp"])
+
+
+class ObservationBoundTests(unittest.TestCase):
+    """No observation value leaves the space the env declares for it."""
+
+    def test_a_giant_about_to_blow_stays_inside_the_declared_space(self):
+        # A Waterfall Giant waiting to blow stands at 999999999 HP
+        # (`TriggerAboutToBlowState`); the observation reads it as the declared bound.
+        env = Sts2CombatEnv(seed=0, encounter="waterfall-giant", total_floor=1)
+        try:
+            env.reset()
+            doc = native.get_state_json(env._handle)
+            high = int(env.observation_space.high.max())
+        finally:
+            env.close()
+        buff_ids = {name: buff_id for buff_id, name in names.buffs().items()}
+        intent_ids = {name: intent_id for intent_id, name in names.intents().items()}
+        giant = doc["enemies"][0]
+        giant["hp"] = giant["max_hp"] = 999_999_999
+        giant["buffs"] = [{"id": buff_ids["SteamEruption"], "amount": 15}]
+        giant["intent"] = {"type": intent_ids["Unknown"], "magnitude": 0}
+        giant.setdefault("ai", {})["move_index"] = 1000  # ABOUT_TO_BLOW
+        handle = native.load_combat_snapshot(doc, 0)
+        obs = (ctypes.c_int * native.OBS_SIZE)()
+        observed = native.clone(handle, False, 0, obs)
+        try:
+            values = np.frombuffer(obs, dtype=np.int32)
+            self.assertLessEqual(int(values.max()), high)
+            self.assertEqual(high, int(values[native.OBS_ENEMY_OFFSET]))
+        finally:
+            native.destroy(observed)
+            native.destroy(handle)
 
 
 class MapChoiceLayoutTests(unittest.TestCase):
