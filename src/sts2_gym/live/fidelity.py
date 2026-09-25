@@ -249,6 +249,7 @@ class _World:
             maps = moves.index_maps(
                 self._pre,
                 emu_doc,
+                offered=moves.offered(handle),
                 draw_order=native.get_pile(handle, "draw"),
             )
             try:
@@ -332,7 +333,7 @@ def _draw_pile(piles: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 def _cards(pile: Iterable[Mapping[str, Any]]) -> list[str]:
     """Name each card by its live id, with a + when it is upgraded."""
     return [
-        (_card_entries().get(card["def_id"]) or names.card_name(card["def_id"]))
+        (ids.card_entries().get(card["def_id"]) or names.card_name(card["def_id"]))
         + ("+" if card["upgraded"] else "")
         for card in pile
     ]
@@ -347,11 +348,6 @@ def _orb(orb: Mapping[str, Any]) -> str:
     if stored == "passive_val":
         return f"{entry} {orb['passive']}"
     return entry
-
-
-@cache
-def _card_entries() -> dict[int, str]:
-    return {def_id: entry for entry, def_id in ids.card_slug_to_id().items()}
 
 
 @cache

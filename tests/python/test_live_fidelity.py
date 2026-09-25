@@ -23,10 +23,12 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
+convert = importlib.import_module("sts2_gym.live.convert")
 fidelity = importlib.import_module("sts2_gym.live.fidelity")
 ids = importlib.import_module("sts2_gym.live.ids")
 moves = importlib.import_module("sts2_gym.live.moves")
 names = importlib.import_module("sts2_gym.names")
+native = importlib.import_module("sts2_gym.native")
 live_package = importlib.import_module("sts2_gym.live")
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "live"
@@ -203,6 +205,22 @@ def after_shrug_it_off(live: dict[str, Any], drawn: str) -> dict[str, Any]:
     ):
         post["history"][key] += 1
     return post
+
+
+def unfound_candidates(live: dict[str, Any], *, seed: int) -> list[int]:
+    """List the live candidates no emulator candidate is known to be, loaded under a seed."""
+    handle = native.load_combat_snapshot(convert.convert(live).doc, seed)
+    try:
+        maps = moves.index_maps(
+            live,
+            native.get_state_json(handle),
+            offered=moves.offered(handle),
+            draw_order=native.get_pile(handle, "draw"),
+        )
+    finally:
+        native.destroy(handle)
+    screen = live["pending_selection"]["candidates"]
+    return sorted(set(range(len(screen))) - set(maps.candidates))
 
 
 def check(
@@ -590,9 +608,9 @@ class NotComparableTests(unittest.TestCase):
 
     def test_a_pick_the_emulator_cannot_find_is_not_comparable(self) -> None:
         # Droplet of Precognition offers the draw pile, whose unknown middle the loader
-        # shuffles; a card there is found by the (id, upgraded) the loaded order shows.
-        # With both Strikes in the middle and only one of them Sharp, that does not say
-        # which Strike is which.
+        # shuffles; a card there is found by what the emulator shows at each candidate.
+        # With both Strikes in the middle and only one of them costing 0 this turn, what
+        # it shows, (id, upgraded, enchantment, amount), does not say which is which.
         pre = load("selection/droplet_of_precognition")
         pre["known_draw_top"] = []
         candidates = pre["pending_selection"]["candidates"]
@@ -601,7 +619,7 @@ class NotComparableTests(unittest.TestCase):
             candidates[pick],
             *(c for c in pre["draw_pile"] if c["uid"] == "c5"),
         ):
-            card.update(enchantment="SHARP", enchant_amount=2)
+            card.update(cost=0, fields={"cost_this_turn": 0})
         move = moves.Move(
             kind="select",
             select_index=pick,
@@ -615,6 +633,41 @@ class NotComparableTests(unittest.TestCase):
         self.assertFalse(result["comparable"])
         [warning] = result["warnings"]
         self.assertIn("Choose Strike", warning)
+
+    def test_a_pick_past_the_observation_the_pile_cannot_place_is_not_comparable(
+        self,
+    ) -> None:
+        # Seeker Strike's grid, made to offer twelve cards, nine of the middle's ten
+        # Defends among them. Past the observation's ten slots the draw pile would have
+        # to say which candidate is which, and with a Defend left out it cannot.
+        pre = load("selection_past_ten/seeker_strike_partial")
+        screen = pre["pending_selection"]["candidates"]
+        unfound = unfound_candidates(pre, seed=0)  # the check's first resample
+        self.assertEqual(len(unfound), 2)
+        for index in unfound:
+            move = moves.Move(
+                kind="select",
+                select_index=index,
+                card_uid=screen[index]["uid"],
+                card_id=screen[index]["id"],
+                label="Choose Defend",
+            )
+            with self.subTest(candidate=index):
+                result = check(pre, move, pre)
+                self.assertFalse(result["comparable"])
+                [warning] = result["warnings"]
+                self.assertIn("Choose Defend", warning)
+        # The known top Strike is found by its place under every seed: that pick is
+        # compared (against a position after that did not take it).
+        strike = next(i for i, card in enumerate(screen) if card["uid"] == "c6")
+        move = moves.Move(
+            kind="select",
+            select_index=strike,
+            card_uid="c6",
+            card_id="STRIKE_IRONCLAD",
+            label="Choose Strike",
+        )
+        self.assertTrue(check(pre, move, pre)["comparable"])
 
 
 # ── Refusals ─────────────────────────────────────────────────────────────────

@@ -58,6 +58,12 @@ def card_slug_to_id() -> dict[str, int]:
 
 
 @cache
+def card_entries() -> dict[int, str]:
+    """Map our card ids back to the game's entry ids: `card_slug_to_id` reversed."""
+    return {card: entry for entry, card in card_slug_to_id().items()}
+
+
+@cache
 def relic_slug_to_id() -> dict[str, int]:
     """Map the game's relic entry ids to ours, off `Relics.g.cs`.
 

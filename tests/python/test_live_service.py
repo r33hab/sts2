@@ -51,6 +51,7 @@ SELECTIONS = sorted((FIXTURES / "selection").glob("*.json"))
 
 STRIKE = ids.card_id("STRIKE_IRONCLAD")
 DEFEND = ids.card_id("DEFEND_IRONCLAD")
+SHRUG_IT_OFF = ids.card_id("SHRUG_IT_OFF")
 
 MOVE_FIELDS = {
     "kind",
@@ -183,6 +184,56 @@ def loaded(live: dict[str, Any], seed: int = 0) -> tuple[dict[str, Any], list[An
         return native.get_state_json(handle), native.get_pile(handle, "draw")
     finally:
         native.destroy(handle)
+
+
+class Mapped(NamedTuple):
+    """A loaded position, its maps as the service builds them, and what they read."""
+
+    doc: dict[str, Any]
+    maps: Any
+    offered: list[Any]
+    draw: list[Any]
+
+
+def mapped(live: dict[str, Any], seed: int = 0) -> Mapped:
+    """Convert and load a live snapshot, and map it the way the service does."""
+    handle = native.load_combat_snapshot(convert.convert(live).doc, seed)
+    try:
+        doc = native.get_state_json(handle)
+        offered = moves.offered(handle)
+        draw = native.get_pile(handle, "draw")
+        maps = moves.index_maps(live, doc, offered=offered, draw_order=draw)
+        return Mapped(doc, maps, offered, draw)
+    finally:
+        native.destroy(handle)
+
+
+def seeker_strike_with_a_twin() -> dict[str, Any]:
+    """Return Seeker Strike's grid offering one of two Strikes in the draw pile's middle.
+
+    The unordered middle holds Strikes c5 and c7, and the grid offers c5 and the Iron
+    Wave. The loaded draw pile cannot say which middle Strike the emulator offers, or so
+    where its candidate falls beside the Iron Wave's; what it shows at each candidate can.
+    """
+    live = load("selection/seeker_strike_middle")
+    pile = {card["uid"]: card for card in live["draw_pile"]}
+    live["draw_pile"].append({**pile["c5"], "uid": "c7"})
+    live["pending_selection"]["candidates"] = [dict(pile["c11"]), dict(pile["c5"])]
+    return live
+
+
+def sharp_strike_in_the_middle() -> dict[str, Any]:
+    """Return Droplet of Precognition's grid with both Strikes in the middle, c5 Sharp.
+
+    The two Strikes differ only in the enchantment: the loaded draw pile shows them alike,
+    and what the emulator shows at each candidate does not.
+    """
+    live = load("selection/droplet_of_precognition")
+    live["known_draw_top"] = []
+    for card in (*live["pending_selection"]["candidates"], *live["draw_pile"]):
+        if card["uid"] == "c5":
+            card.update(enchantment="SHARP", enchant_amount=2)
+    return live
 
 
 def refuse_non_finite(constant: str) -> float:
@@ -484,12 +535,8 @@ class SelectMoveTests(unittest.TestCase):
     @staticmethod
     def candidate_map(name: str, seed: int = 0) -> tuple[dict, dict, Any]:
         live = load(name)
-        emu_doc, draw = loaded(live, seed)
-        return live, emu_doc, moves.index_maps(live, emu_doc, draw_order=draw)
-
-    @staticmethod
-    def draw_order(name: str, seed: int) -> list[Any]:
-        return loaded(load(name), seed)[1]
+        position = mapped(live, seed)
+        return live, position.doc, position.maps
 
     def test_a_hand_pick_is_the_candidate_holding_that_hand_card(self) -> None:
         # Armaments offers Strike (hand 0) and Bash (hand 2): emulator candidates [0, 2].
@@ -528,41 +575,155 @@ class SelectMoveTests(unittest.TestCase):
     def test_a_draw_pile_pick_follows_the_order_the_loader_shuffled(self) -> None:
         # Droplet of Precognition offers the whole draw pile: a Strike the player put on
         # top (c6), then a Defend and a Strike whose order only the loader's seed decides.
-        name = "selection/droplet_of_precognition"
+        live = load("selection/droplet_of_precognition")
+        screen = live["pending_selection"]["candidates"]
         orders = set()
         for seed in range(8):
-            live, emu_doc, maps = self.candidate_map(name, seed)
-            screen = live["pending_selection"]["candidates"]
-            positions = emu_doc["pending_selection"]["candidates"]
-            order = self.draw_order(name, seed)
-            orders.add(tuple(order))
+            position = mapped(live, seed)
+            orders.add(tuple(position.draw))
             with self.subTest(seed=seed):
-                self.assertEqual(sorted(maps.candidates), [0, 1, 2])
-                for emu_index, position in enumerate(positions):
-                    found = screen[maps.candidates[emu_index]]
-                    self.assertEqual(
-                        (ids.card_id(found["id"]), found["upgraded"]),
-                        tuple(order[position]),
-                    )
+                self.assertEqual(sorted(position.maps.candidates), [0, 1, 2])
+                # Every candidate is the whole pile, so candidate k is the pile's card k,
+                # and what the emulator shows there.
+                for k, found in enumerate(position.maps.candidates):
+                    card = screen[found]
+                    shown = (ids.card_id(card["id"]), card["upgraded"])
+                    self.assertEqual(shown, tuple(position.draw[k]))
+                    self.assertEqual(shown, position.offered[k][:2])
                 # The known top card is that very card, uid and all.
-                self.assertEqual(screen[maps.candidates[0]]["uid"], "c6")
+                self.assertEqual(screen[position.maps.candidates[0]]["uid"], "c6")
         self.assertGreater(
             len(orders),
             1,
             "no seed moved the middle; the test is vacuous",
         )
 
+    def test_a_middle_pick_the_draw_pile_cannot_place_is_found_by_what_is_shown(
+        self,
+    ) -> None:
+        # Two Strikes in the middle and one of them offered: the pile does not say where
+        # that candidate falls, so without what the emulator shows nothing is found.
+        live = seeker_strike_with_a_twin()
+        screen = live["pending_selection"]["candidates"]
+        orders = set()
+        for seed in range(16):
+            position = mapped(live, seed)
+            orders.add(tuple(position.offered))
+            with self.subTest(seed=seed):
+                self.assertEqual(sorted(position.maps.candidates), [0, 1])
+                for k, found in enumerate(position.maps.candidates):
+                    card = screen[found]
+                    self.assertEqual(
+                        (ids.card_id(card["id"]), card["upgraded"]),
+                        position.offered[k][:2],
+                    )
+                pile_only = moves.index_maps(
+                    live,
+                    position.doc,
+                    draw_order=position.draw,
+                )
+                self.assertEqual(pile_only.candidates, (None, None))
+        self.assertGreater(len(orders), 1, "no seed moved the candidates; vacuous")
+
+    def test_a_middle_pick_told_apart_by_its_enchantment_is_found(self) -> None:
+        # The draw pile shows the Sharp Strike and the plain one alike; the emulator's
+        # candidates show the enchantment.
+        live = sharp_strike_in_the_middle()
+        screen = live["pending_selection"]["candidates"]
+        for seed in range(4):
+            position = mapped(live, seed)
+            with self.subTest(seed=seed):
+                self.assertEqual(sorted(position.maps.candidates), [0, 1, 2])
+                sharp = next(
+                    k for k, card in enumerate(position.offered) if card[2] != 0
+                )
+                self.assertEqual(screen[position.maps.candidates[sharp]]["uid"], "c5")
+
+    def test_a_card_offered_at_a_known_place_must_be_the_live_one(self) -> None:
+        # Droplet's candidate 0 is the known top Strike; the emulator claiming a Defend
+        # there means the two positions do not line up.
+        live = load("selection/droplet_of_precognition")
+        position = mapped(live)
+        self.assertEqual(position.offered[0][:2], (STRIKE, False))
+        wrong = [(DEFEND, False, 0, 0), *position.offered[1:]]
+        with self.assertRaisesRegex(
+            moves.MappingError,
+            "offers DEFEND_IRONCLAD at draw-pile place 0, where the live pile holds "
+            "STRIKE_IRONCLAD$",
+        ):
+            moves.index_maps(
+                live,
+                position.doc,
+                offered=wrong,
+                draw_order=position.draw,
+            )
+
+    def test_a_middle_pick_past_the_observation_is_placed_by_the_draw_pile(
+        self,
+    ) -> None:
+        # Secret Technique offers every Skill: twelve in the middle, two past the
+        # observation's ten slots. Every copy of each is offered, so the draw pile says
+        # which of its cards the candidates are, the last two included.
+        live = load("selection_past_ten/secret_technique_every_skill")
+        screen = live["pending_selection"]["candidates"]
+        skills = {(DEFEND, False), (SHRUG_IT_OFF, False)}
+        tails = set()
+        for seed in range(8):
+            position = mapped(live, seed)
+            in_pile = [tuple(card) for card in position.draw if tuple(card) in skills]
+            tails.add(tuple(in_pile[10:]))
+            with self.subTest(seed=seed):
+                self.assertEqual((len(screen), len(position.offered)), (12, 10))
+                self.assertEqual(sorted(position.maps.candidates), list(range(12)))
+                for k, found in enumerate(position.maps.candidates):
+                    card = screen[found]
+                    self.assertEqual(
+                        (ids.card_id(card["id"]), card["upgraded"]),
+                        in_pile[k],
+                    )
+                # Without the draw pile, the last two show nothing and are not found.
+                shown_only = moves.index_maps(
+                    live,
+                    position.doc,
+                    offered=position.offered,
+                )
+                self.assertEqual(shown_only.candidates[10:], (None, None))
+        self.assertGreater(len(tails), 1, "the last two never changed; vacuous")
+
+    def test_a_partial_middle_past_the_observation_is_not_found(self) -> None:
+        # Seeker Strike's grid, made to offer twelve cards: nine of the middle's ten
+        # Defends among them. The pile cannot say which Defend is left out, so it cannot
+        # place the last two candidates either, and they stay unmapped.
+        live = load("selection_past_ten/seeker_strike_partial")
+        screen = live["pending_selection"]["candidates"]
+        for seed in range(4):
+            position = mapped(live, seed)
+            with self.subTest(seed=seed):
+                self.assertEqual(len(position.offered), 10)
+                self.assertEqual(position.maps.candidates[10:], (None, None))
+                self.assertNotIn(None, position.maps.candidates[:10])
+                unfound = set(range(len(screen))) - set(position.maps.candidates)
+                self.assertEqual(len(unfound), 2)
+                for index in sorted(unfound):
+                    pick = moves.Move(
+                        kind="select",
+                        select_index=index,
+                        card_uid=screen[index]["uid"],
+                        label="Choose",
+                    )
+                    with self.assertRaises(moves.UnmappedSelectionError):
+                        moves.to_action(pick, live, position.doc, maps=position.maps)
+
     def test_a_merged_pick_covers_every_identical_candidate(self) -> None:
         # The two Strikes: c6 on top (screen index 2) and c5 in the middle (screen 1).
-        name = "selection/droplet_of_precognition"
-        live, emu_doc, maps = self.candidate_map(name, 0)
+        live = load("selection/droplet_of_precognition")
+        position = mapped(live, 0)
+        emu_doc, maps = position.doc, position.maps
         screen = live["pending_selection"]["candidates"]
-        order = self.draw_order(name, 0)
-        positions = emu_doc["pending_selection"]["candidates"]
         middle_strike = next(
             k
-            for k in range(1, len(positions))
-            if order[positions[k]] == (STRIKE, False)
+            for k in range(1, len(position.offered))
+            if position.offered[k][:2] == (STRIKE, False)
         )
         pick = child(0, "select", merged=(middle_strike,), card_def_id=STRIKE)
         strikes = [
@@ -579,7 +740,9 @@ class SelectMoveTests(unittest.TestCase):
                 maps,
             )
 
-    def test_a_draw_pile_pick_is_not_found_without_the_loaded_order(self) -> None:
+    def test_a_middle_pick_is_not_found_without_what_the_emulator_shows(self) -> None:
+        # The known top Strike is found by its place; the middle ones are found only by
+        # what the loaded position shows, and are refused without it.
         live = load("selection/droplet_of_precognition")
         emu_doc, _ = loaded(live)
         maps = moves.index_maps(live, emu_doc)
@@ -613,12 +776,16 @@ class FaceTests(unittest.TestCase):
         self.assertEqual(moves._face(card), moves._face(reordered))
 
     def test_candidates_with_nested_fields_are_found_without_error(self) -> None:
-        name = "selection/droplet_of_precognition"
-        live = load(name)
-        emu_doc, draw = loaded(live)
+        live = load("selection/droplet_of_precognition")
+        position = mapped(live)
         for candidate in live["pending_selection"]["candidates"]:
             candidate["fields"] = {"nested": {"deep": [1, 2]}}
-        maps = moves.index_maps(live, emu_doc, draw_order=draw)
+        maps = moves.index_maps(
+            live,
+            position.doc,
+            offered=position.offered,
+            draw_order=position.draw,
+        )
         self.assertEqual(sorted(maps.candidates), [0, 1, 2])
 
 
@@ -669,8 +836,8 @@ class ToActionTests(unittest.TestCase):
         seed: int = 0,
     ) -> None:
         """Name each search move in game terms, then map it back to the same action."""
-        emu_doc, draw = loaded(live, seed)
-        maps = moves.index_maps(live, emu_doc, draw_order=draw)
+        position = mapped(live, seed)
+        emu_doc, maps = position.doc, position.maps
         for played in children:
             move = moves.to_move(played, live, emu_doc, maps=maps)
             with self.subTest(move=move.label, seed=seed):
@@ -732,13 +899,19 @@ class ToActionTests(unittest.TestCase):
                 )
 
     def test_a_draw_pile_pick_maps_back_under_every_shuffle(self) -> None:
-        live = load("selection/droplet_of_precognition")
-        for seed in range(8):
-            self.assert_round_trip(
-                live,
-                [child(action, "select") for action in range(3)],
-                seed,
-            )
+        # The whole draw pile offered, one of two middle twins offered, and twelve Skills,
+        # the last two placed by the draw pile.
+        for position, count in (
+            (load("selection/droplet_of_precognition"), 3),
+            (seeker_strike_with_a_twin(), 2),
+            (load("selection_past_ten/secret_technique_every_skill"), 12),
+        ):
+            for seed in range(8):
+                self.assert_round_trip(
+                    position,
+                    [child(action, "select") for action in range(count)],
+                    seed,
+                )
 
     def test_a_skip_is_one_past_the_last_candidate(self) -> None:
         # Neow's Fury may be declined (CombatEngine.ValidActions).
@@ -1957,6 +2130,24 @@ class AnalyzeTests(unittest.TestCase):
                     )
                 covered = [i for _, stat in picks for i in stat["select_indices"]]
                 self.assertEqual(len(covered), len(set(covered)))
+
+    def test_picks_past_the_observation_are_named_where_the_draw_pile_can_say(
+        self,
+    ) -> None:
+        # Twelve candidates each: the search knows the last two only by index. Where every
+        # copy of each offered card is offered, the draw pile names them; where one is
+        # left out, it cannot, and the two picks are counted, not guessed.
+        every = self.analyze(load("selection_past_ten/secret_technique_every_skill"))
+        self.assertEqual(every["select_mapping_failures"], 0)
+        covered = [
+            index
+            for stat in every["moves"]
+            if stat["kind"] == "select"
+            for index in stat["select_indices"]
+        ]
+        self.assertEqual(sorted(covered), list(range(12)))
+        partial = self.analyze(load("selection_past_ten/seeker_strike_partial"))
+        self.assertEqual(partial["select_mapping_failures"], 2)
 
     def test_an_unreliable_position_still_gets_a_best_effort_analysis(self) -> None:
         for name in ("selection/toolbox", "powers"):
