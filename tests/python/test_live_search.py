@@ -732,6 +732,32 @@ class SearchLiveTests(unittest.TestCase):
         known = set(names.potions().values())
         self.assertEqual(set(live_search.ENEMY_TARGETED_POTIONS), aimed & known)
 
+    def test_enemy_targeted_potions_are_read_off_the_potion_table(self):
+        # `PotionDef.TargetType == CardTarget.AnyEnemy` in Generated/Potions.g.cs, the
+        # field PotionEffects.NeedsEnemyTarget reads, and today's eight.
+        targets = names.potion_targets()
+        self.assertEqual(
+            live_search.ENEMY_TARGETED_POTIONS,
+            {
+                name
+                for potion, name in names.potions().items()
+                if targets[potion] == "AnyEnemy"
+            },
+        )
+        self.assertEqual(
+            live_search.ENEMY_TARGETED_POTIONS,
+            {
+                "BeetleJuice",
+                "FirePotion",
+                "PoisonPotion",
+                "PotionOfDoom",
+                "PotionShapedRock",
+                "PowderedDemise",
+                "VulnerablePotion",
+                "WeakPotion",
+            },
+        )
+
     def test_the_line_stops_after_a_move_that_draws(self):
         # Pommel Strike draws the Defend: past that, every imagined world holds a
         # different hand, so the expected line cannot say what comes next.

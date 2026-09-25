@@ -21,8 +21,8 @@ from functools import cache
 from pathlib import Path
 
 from sts2_gym import names
-from sts2_gym.commands import camel_to_replay_id
 from sts2_gym.live import ConversionError
+from sts2_gym.names import camel_to_replay_id
 
 _REPO = Path(__file__).resolve().parents[3]
 _GENERATED = _REPO / "src" / "Sts2Emulator" / "Generated"

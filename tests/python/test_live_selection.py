@@ -98,6 +98,7 @@ def expected(kind: int, candidates: list[int], source: int, **fields: Any) -> di
     return {
         "kind": kind,
         "candidates": candidates,
+        "candidate_cards": fields.get("candidate_cards", []),
         "source_card_def_id": source,
         "amount": fields.get("amount", 0),
         "skippable": fields.get("skippable", False),
@@ -252,13 +253,17 @@ class MappedKindTests(unittest.TestCase):
 
     def test_draw_pile_to_hand(self) -> None:
         # Secret Technique offers the draw pile's Skills (CardEffects.cs:1190-1196,
-        # :4243-4258). Both sit in the unknown middle, which holds nothing else, so they
-        # take the middle's indices whatever order the loader shuffles it into: 2 and 3,
-        # past the two known top cards.
+        # :4243-4258). Both sit in the unknown middle, whose order the loader shuffles
+        # (CombatSnapshot.cs ReadPiles), so they are named by card and followed through it.
         result = self.convert("secret_technique")
         self.assertEqual(
             result.doc["pending_selection"],
-            expected(DRAW_TO_HAND, [2, 3], SECRET_TECHNIQUE),
+            expected(
+                DRAW_TO_HAND,
+                [],
+                SECRET_TECHNIQUE,
+                candidate_cards=[emu(DEFEND), emu(SHRUG_IT_OFF)],
+            ),
         )
         self.assertEqual(
             result.doc["piles"]["draw"]["known_top"],
@@ -431,13 +436,45 @@ class SourceVariantTests(unittest.TestCase):
             [emu(SEEKER_STRIKE, played_this_turn=True)],
         )
 
+    def test_seeker_strike_names_the_middle_cards_it_sampled_by_card(self) -> None:
+        # Three of the seven draw-pile cards (CardEffects.cs:271-281, :4164-4190): the
+        # known top Strike keeps its index, and the two sampled out of the six-card middle
+        # are named by card, since the loader shuffles the middle (CombatSnapshot.cs
+        # ReadPiles) and follows them through it.
+        result = convert.convert(load("seeker_strike_middle"))
+        self.assertEqual(
+            result.doc["pending_selection"],
+            expected(
+                DRAW_TO_HAND,
+                [0],
+                SEEKER_STRIKE,
+                candidate_cards=[emu(IRON_WAVE), emu(SHRUG_IT_OFF)],
+            ),
+        )
+        self.assertEqual(result.warnings, [])
+
+    def test_secret_technique_names_only_the_middles_skills(self) -> None:
+        # The draw pile's Skills (CardEffects.cs:1190-1196, :4243-4258), out of a middle
+        # that holds two Attacks beside them.
+        result = convert.convert(load("secret_technique_skills"))
+        self.assertEqual(
+            result.doc["pending_selection"],
+            expected(
+                DRAW_TO_HAND,
+                [],
+                SECRET_TECHNIQUE,
+                candidate_cards=[emu(DEFEND), emu(SHRUG_IT_OFF)],
+            ),
+        )
+        self.assertEqual(result.warnings, [])
+
     def test_droplet_offers_the_whole_draw_pile_middle_included(self) -> None:
-        # Every draw-pile card (PotionEffects.cs:191-202): the whole unknown middle is
-        # offered, so the loader's shuffle cannot move a candidate out of the set.
+        # Every draw-pile card (PotionEffects.cs:191-202): the known top card by its
+        # index, the unknown middle by card.
         result = convert.convert(load("droplet_of_precognition"))
         self.assertEqual(
             result.doc["pending_selection"],
-            expected(DRAW_TO_HAND, [0, 1, 2], 0),
+            expected(DRAW_TO_HAND, [0], 0, candidate_cards=[emu(DEFEND), emu(STRIKE)]),
         )
         self.assertTrue(result.reliable)
 
@@ -537,7 +574,40 @@ class SourceVariantTests(unittest.TestCase):
         draw = selection.Draw(top=[card("DEFEND_IRONCLAD", "d0")], middle=strikes)
         self.assertEqual(
             mapped(screen, [], draw=draw),
-            expected(DRAW_TO_HAND, [1, 2], SECRET_WEAPON),
+            expected(
+                DRAW_TO_HAND,
+                [],
+                SECRET_WEAPON,
+                candidate_cards=[emu(STRIKE), emu(STRIKE)],
+            ),
+        )
+
+    def test_part_of_the_unknown_middle_is_named_by_card(self) -> None:
+        # Secret Technique over a middle that holds a Skill and an Attack: the loader
+        # shuffles the middle (CombatSnapshot.cs ReadPiles), so the Skill has no index
+        # until it loads, and is named by the card the draw pile holds.
+        defend, strike = card("DEFEND_IRONCLAD", "d1"), card("STRIKE_IRONCLAD", "d2")
+        screen = pending("GRID", [defend], source_card="SECRET_TECHNIQUE", pile="DRAW")
+        self.assertEqual(
+            mapped(screen, [], draw=selection.Draw(middle=[defend, strike])),
+            expected(DRAW_TO_HAND, [], SECRET_TECHNIQUE, candidate_cards=[emu(DEFEND)]),
+        )
+
+    def test_a_candidate_card_is_the_draw_piles_own_copy(self) -> None:
+        # The grid's copy and the draw pile's entry are one card, found by uid; the
+        # loader matches the candidate against the pile, so the pile's copy is named.
+        # Here the grid reports it at another cost, and the pile's cost field is carried.
+        costly = card("IRON_WAVE", "d1", cost=0, fields={"cost_this_turn": 0})
+        screen = pending(
+            "GRID",
+            [card("IRON_WAVE", "d1")],
+            source_card="SECRET_WEAPON",
+            pile="DRAW",
+        )
+        draw = selection.Draw(middle=[costly, card("DEFEND_IRONCLAD", "d2")])
+        self.assertEqual(
+            mapped(screen, [], draw=draw)["candidate_cards"],
+            [emu(IRON_WAVE, cost_this_turn=0)],
         )
 
     def test_a_grid_whose_pile_the_mod_could_not_name_uses_the_sources(self) -> None:
@@ -1053,17 +1123,6 @@ class UnmappableTests(unittest.TestCase):
             "offers no card",
         )
 
-    def test_part_of_the_unknown_draw_middle(self) -> None:
-        # Secret Technique over a middle that holds a Skill and an Attack: the loader
-        # shuffles the middle (CombatSnapshot.cs:471-487), so the Skill's index is not
-        # known until it loads.
-        defend, strike = card("DEFEND_IRONCLAD", "d1"), card("STRIKE_IRONCLAD", "d2")
-        self.assert_unmapped(
-            pending("GRID", [defend], source_card="SECRET_TECHNIQUE", pile="DRAW"),
-            "1 of the 2 draw-pile cards whose order the player does not know",
-            draw=selection.Draw(middle=[defend, strike]),
-        )
-
     def test_a_candidate_the_pile_does_not_hold(self) -> None:
         self.assert_unmapped(
             pending("HAND", [card("BASH", "c9")], source_card="TRUE_GRIT"),
@@ -1286,6 +1345,82 @@ class MatchingTests(unittest.TestCase):
         twice = [card("STRIKE_IRONCLAD", "c1"), card("STRIKE_IRONCLAD", "c1")]
         (warning,) = self.indices(twice, hand)
         self.assertIn("uid c1 is offered twice", warning)
+
+    def test_a_card_that_could_be_known_or_unordered_warns(self) -> None:
+        # A Strike offered without a uid, where the draw pile holds one Strike on its known
+        # top and one in the unordered middle: taking the top one leaves a Strike in the
+        # middle, taking the middle one leaves the known top Strike to be drawn next. The
+        # converter cannot tell which the grid shows, so the position is unreliable. The
+        # emulator is given the first copy in pile order.
+        screen = pending(
+            "GRID",
+            [card("STRIKE_IRONCLAD")],
+            source_card="SEEKER_STRIKE",
+            pile="DRAW",
+        )
+        draw = selection.Draw(
+            top=[card("STRIKE_IRONCLAD", "d0")],
+            middle=[card("STRIKE_IRONCLAD", "d1"), card("DEFEND_IRONCLAD", "d2")],
+        )
+        result, warnings = to_pending(screen, [], draw=draw)
+        self.assertEqual(result, expected(DRAW_TO_HAND, [0], SEEKER_STRIKE))
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("known top and the unordered middle", warnings[0])
+        # A known bottom copy is a third place.
+        draw = selection.Draw(
+            middle=[card("STRIKE_IRONCLAD", "d1")],
+            bottom=[card("STRIKE_IRONCLAD", "d2")],
+        )
+        _, warnings = to_pending(screen, [], draw=draw)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("unordered middle and the known bottom", warnings[0])
+
+    def test_a_card_with_one_place_to_be_is_quiet(self) -> None:
+        strike = card("STRIKE_IRONCLAD")
+        for label, offered, top, middle in (
+            # Every copy is offered, so every copy is taken.
+            (
+                "all taken",
+                [strike, strike],
+                [card("STRIKE_IRONCLAD", "d0")],
+                [card("STRIKE_IRONCLAD", "d1")],
+            ),
+            # Every copy is in the middle, where the loader finds one by card.
+            (
+                "all unordered",
+                [strike],
+                [],
+                [card("STRIKE_IRONCLAD", "d1"), card("STRIKE_IRONCLAD", "d2")],
+            ),
+            # Every copy is on the known top, and either leaves the same pile behind.
+            (
+                "all on top",
+                [strike],
+                [card("STRIKE_IRONCLAD", "d0"), card("STRIKE_IRONCLAD", "d1")],
+                [card("DEFEND_IRONCLAD", "d2")],
+            ),
+        ):
+            with self.subTest(label):
+                screen = pending(
+                    "GRID",
+                    offered,
+                    source_card="SEEKER_STRIKE",
+                    pile="DRAW",
+                )
+                draw = selection.Draw(top=top, middle=middle)
+                result, warnings = to_pending(screen, [], draw=draw)
+                self.assertIsNotNone(result)
+                self.assertEqual(warnings, [])
+
+    def test_convert_flags_a_card_that_could_be_known_or_unordered(self) -> None:
+        # The fixture's Strike without its uid: c6 on the known top, or c5 in the middle.
+        live_doc = load("seeker_strike")
+        live_doc["pending_selection"]["candidates"][2]["uid"] = None
+        result = convert.convert(live_doc)
+        self.assertIsNotNone(result.doc["pending_selection"])
+        self.assertEqual(len(result.warnings), 1)
+        self.assertIn("SEEKER_STRIKE", result.warnings[0])
+        self.assertFalse(result.reliable)
 
     def test_known_bottom_cards_take_their_own_indices(self) -> None:
         top, middle = [card("BASH", "d0")], [card("DEFEND_IRONCLAD", "d1")]
@@ -1549,6 +1684,56 @@ def _live(def_id: int, upgraded: bool, uid: str) -> dict[str, Any]:
     return card(ENTRY_BY_ID[def_id], uid, upgraded=upgraded, cost=cost)
 
 
+def _found(
+    named: list[dict[str, Any]],
+    middle: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Find the cards a selection names by card in the draw pile's unordered middle.
+
+    The export names a draw-pile candidate there by card, not by index
+    (CombatSnapshot.cs `DocumentCandidates`). A staging's cards differ in nothing but id
+    and upgrade, so any free copy that matches is the one the grid shows.
+    """
+    free = list(middle)
+    return [
+        free.pop(
+            next(
+                i
+                for i, shown in enumerate(free)
+                if shown["id"] == ENTRY_BY_ID[card["def_id"]]
+                and shown["upgraded"] == card["upgraded"]
+            ),
+        )
+        for card in named
+    ]
+
+
+def _as_exported(pending: dict[str, Any], plain: dict[str, Any]) -> dict[str, Any]:
+    """Give a pending selection the export's form: every candidate card field, sorted.
+
+    The export writes each field of a card and sorts the cards it names
+    (CombatSnapshot.cs `Sorted`); the converter writes the fields off their defaults, in
+    pile order. `plain` is an exported card with every field at its default.
+    """
+    defaults = {k: v for k, v in plain.items() if k not in ("def_id", "upgraded")}
+    cards = [defaults | card for card in pending["candidate_cards"]]
+    return {
+        **pending,
+        "candidate_cards": sorted(cards, key=lambda c: json.dumps(c, sort_keys=True)),
+    }
+
+
+def _offered(handle: int) -> list[tuple[int, bool]]:
+    """Read the cards an open selection offers, in answer order, off the observation."""
+    obs = (ctypes.c_int * native.OBS_SIZE)()
+    native.destroy(native.clone(handle, False, 0, obs))
+    slots = (
+        native.OBS_SELECTION_OFFSET + i * native.OBS_CARD_SLOT_SIZE
+        for i in range(obs[native.OBS_SELECTION_COUNT_OFFSET])
+    )
+    return [(obs[slot], bool(obs[slot + 1])) for slot in slots]
+
+
 def _bounds(opens: Any, emulated: dict[str, Any]) -> tuple[int, int]:
     """Return the `min` and `max` the game's screen reports for the emulator's selection."""
     if opens.picks == "one":
@@ -1606,6 +1791,7 @@ def _play(staging: Staging, seed: int = 7) -> Played:
     else:
         pile = {"HAND": hand, "DISCARD": discard, "DRAW": shown}[opens.pile or "HAND"]
         offered = [pile[i] for i in emulated["candidates"]]
+        offered += _found(emulated["candidate_cards"], shown[known:])
     played = before["piles"]["hand"][-1] if kind == "card" else None
     low, high = _bounds(opens, emulated)
     screen = pending(
@@ -1698,7 +1884,12 @@ class EmulatorAgreementTests(unittest.TestCase):
                     discard=played.discard,
                     draw=played.draw,
                 )
-                self.assertEqual(result, played.after["pending_selection"])
+                self.assertIsNotNone(result)
+                plain = played.before["piles"]["hand"][0]
+                self.assertEqual(
+                    _as_exported(result, plain),
+                    _as_exported(played.after["pending_selection"], plain),
+                )
                 self.assertEqual(warnings, [])
 
     def test_a_card_source_is_finished_as_the_emulator_finishes_it(self) -> None:
@@ -1783,10 +1974,14 @@ class EmulatorAgreementTests(unittest.TestCase):
                 )
                 self.assertIsNone(to_pending(screens[0], plain.hand)[0])
 
-    def test_part_of_the_unknown_middle_is_refused(self) -> None:
+    def test_part_of_the_unknown_middle_is_named_by_card_and_offered_again(
+        self,
+    ) -> None:
         # Seeker Strike samples three of five middle cards and Secret Technique finds a
-        # Skill beside an Attack: the emulator opens a selection over indices that only
-        # its own shuffle decided.
+        # Skill beside two Attacks: the emulator opens a selection over indices that only
+        # its own shuffle decided. The screen maps to the same selection, its cards named,
+        # and the emulator's position with that selection offers the same cards again at
+        # any load seed, wherever the load's shuffle puts them.
         for staging in (
             Staging(
                 ("card", "SEEKER_STRIKE"),
@@ -1801,8 +1996,27 @@ class EmulatorAgreementTests(unittest.TestCase):
                     played.hand,
                     draw=played.draw,
                 )
-                self.assertIsNone(result)
-                self.assertIn("whose order the player does not know", warnings[0])
+                self.assertEqual(warnings, [])
+                self.assertIsNotNone(result)
+                self.assertEqual(result["candidates"], [])
+                plain = played.before["piles"]["hand"][0]
+                self.assertEqual(
+                    _as_exported(result, plain),
+                    _as_exported(played.after["pending_selection"], plain),
+                )
+                shown = sorted(
+                    (ids.card_id(c["id"]), c["upgraded"])
+                    for c in played.screen["candidates"]
+                )
+                for seed in (1, 2):
+                    handle = native.load_combat_snapshot(
+                        {**played.after, "pending_selection": result},
+                        seed,
+                    )
+                    try:
+                        self.assertEqual(sorted(_offered(handle)), shown)
+                    finally:
+                        native.destroy(handle)
 
     def test_a_full_hand_is_where_the_emulator_and_the_game_part(self) -> None:
         # The game sends a card bound for a full hand to the discard pile (decompiled
@@ -1869,6 +2083,52 @@ class EmulatorAgreementTests(unittest.TestCase):
                     can_skip=True,
                 )
                 self.assertEqual(mapped(screen, hand), emulated)
+
+
+@unittest.skipUnless(
+    hasattr(native, "load_combat_snapshot"),
+    "the snapshot loader is not in this build",
+)
+class DrawPileGridLoadTests(unittest.TestCase):
+    """A draw-pile grid over part of the unordered middle, converted and loaded.
+
+    The loader matches the cards the selection names in the document's list, then follows
+    them through its seeded shuffle (CombatSnapshot.cs `ReadPiles`,
+    `FindInUnorderedMiddle`), so each seed offers the same cards from wherever it put them.
+    """
+
+    GRIDS = (
+        # Seeker Strike's three: the known top Strike and two of the six-card middle.
+        (
+            "seeker_strike_middle",
+            [(IRON_WAVE, False), (SHRUG_IT_OFF, False), (STRIKE, False)],
+        ),
+        # Secret Technique's: the middle's two Skills, not its two Attacks.
+        ("secret_technique_skills", [(DEFEND, False), (SHRUG_IT_OFF, False)]),
+    )
+
+    def test_two_seeds_give_the_same_candidate_cards(self) -> None:
+        for name, offered in self.GRIDS:
+            result = convert.convert(load(name))
+            self.assertTrue(result.reliable, result.warnings)
+            middles = []
+            for seed in (1, 2):
+                with self.subTest(name, seed=seed):
+                    handle = native.load_combat_snapshot(result.doc, seed)
+                    try:
+                        self.assertEqual(sorted(_offered(handle)), offered)
+                        exported = native.get_state_json(handle)
+                        pile = native.get_pile(handle, "draw")
+                    finally:
+                        native.destroy(handle)
+                    plain = exported["piles"]["hand"][0]
+                    self.assertEqual(
+                        _as_exported(exported["pending_selection"], plain),
+                        _as_exported(result.doc["pending_selection"], plain),
+                    )
+                    middles.append(pile[1:])
+            # Past the one known top card, the two seeds ordered the middle differently.
+            self.assertNotEqual(middles[0], middles[1], name)
 
 
 # ── Against the decompiled game ──────────────────────────────────────────────

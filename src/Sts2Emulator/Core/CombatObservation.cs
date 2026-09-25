@@ -251,7 +251,7 @@ public static class CombatObservation
                     CardSelectionKind.DiscardToDrawPileTop => s.DiscardPile,
                     CardSelectionKind.DiscardToHand => s.DiscardPile,
                     CardSelectionKind.DiscardToHandFree => s.DiscardPile,
-                    CardSelectionKind.DrawPileToHand => s.DrawPile,
+                    _ when selection.Kind.ChoosesFromDrawPile() => s.DrawPile,
                     _ => s.Hand,
                 };
                 for (int i = 0; i < MaxSelectionCandidates && i < selection.Candidates.Count; i++)
