@@ -1211,62 +1211,6 @@ class BoundsTests(unittest.TestCase):
                 self.assertEqual(to_pending(screen, hand)[1], [])
 
 
-class FullHandTests(unittest.TestCase):
-    """A to-hand answer on a full hand: the game discards the card, the emulator does not."""
-
-    @staticmethod
-    def full(size: int) -> list[dict[str, Any]]:
-        return [card("STRIKE_IRONCLAD", f"h{i}") for i in range(size)]
-
-    def test_each_to_hand_kind_warns_on_a_full_hand(self) -> None:
-        discard = [card("IRON_WAVE", "x1")]
-        middle = [card("DEFEND_IRONCLAD", "d1")]
-        draw = selection.Draw(middle=middle)
-        for screen, piles in (
-            (
-                pending(
-                    "GRID",
-                    discard,
-                    source_potion="LIQUID_MEMORIES",
-                    pile="DISCARD",
-                ),
-                {"discard": discard},
-            ),
-            (
-                pending("GRID", middle, source_potion="DROPLET_OF_PRECOGNITION"),
-                {"draw": draw},
-            ),
-            (
-                pending(
-                    "CHOOSE",
-                    [card("FINESSE", "g1")],
-                    source_potion="ATTACK_POTION",
-                    low=0,
-                    can_skip=True,
-                ),
-                {},
-            ),
-        ):
-            with self.subTest(screen["source_potion"]):
-                result, warnings = to_pending(screen, self.full(10), **piles)
-                self.assertIsNotNone(result)
-                self.assertEqual(len(warnings), 1)
-                self.assertIn("CardPileCmd.cs:420-423", warnings[0])
-                self.assertEqual(to_pending(screen, self.full(9), **piles)[1], [])
-
-    def test_other_kinds_are_quiet(self) -> None:
-        discard = [card("IRON_WAVE", "x1")]
-        screen = pending("GRID", discard, source_card="HEADBUTT", pile="DISCARD")
-        self.assertEqual(to_pending(screen, self.full(10), discard=discard)[1], [])
-
-    def test_convert_flags_it(self) -> None:
-        live_doc = load("liquid_memories")
-        live_doc["hand"] = [card("STRIKE_IRONCLAD", f"h{i}") for i in range(10)]
-        result = convert.convert(live_doc)
-        self.assertIsNotNone(result.doc["pending_selection"])
-        self.assertFalse(result.reliable)
-
-
 # ── Matching candidates to piles ─────────────────────────────────────────────
 
 
@@ -1902,10 +1846,7 @@ class EmulatorAgreementTests(unittest.TestCase):
             "attack_or_skill_cards_played_this_turn",
         )
         for staging in MAPPED_STAGINGS:
-            # The emulator keeps an upgraded Purity out of the exhaust pile
-            # (CombatEngine.cs:4320-4331); the game still exhausts it, as Purity's
-            # upgrade only adds picks (decompiled Purity.OnUpgrade).
-            if staging.source[0] != "card" or staging.label == "PURITY+":
+            if staging.source[0] != "card":
                 continue
             with self.subTest(staging.label):
                 played = _play(staging)
@@ -2018,31 +1959,40 @@ class EmulatorAgreementTests(unittest.TestCase):
                     finally:
                         native.destroy(handle)
 
-    def test_a_full_hand_is_where_the_emulator_and_the_game_part(self) -> None:
-        # The game sends a card bound for a full hand to the discard pile (decompiled
-        # CardPileCmd.cs:420-423). The emulator's Liquid Memories adds it past the cap
-        # and its Droplet of Precognition leaves it in the draw pile. When the emulator
-        # follows the game, this fails, and the full-hand warning can go.
+    def test_a_full_hand_sends_the_pick_to_the_end_of_the_discard_pile(self) -> None:
+        # The game sends a card bound for a full hand to the end of the discard pile
+        # (decompiled CardPileCmd.cs:420-423), and so does the emulator: Liquid Memories'
+        # pick leaves the discard pile for its end, and Droplet of Precognition's leaves
+        # the draw pile for it.
         obs = (ctypes.c_int * native.OBS_SIZE)()
         reward = (ctypes.c_float * 1)()
         ten = tuple((STRIKE, False) for _ in range(10))
-        for staging, hand_after, draw_after in (
-            (Staging(("potion", "LIQUID_MEMORIES"), hand=ten), 11, 3),
-            (Staging(("potion", "DROPLET_OF_PRECOGNITION"), hand=ten), 10, 3),
+        for staging, from_discard, draw_after in (
+            (Staging(("potion", "LIQUID_MEMORIES"), hand=ten), True, 3),
+            (Staging(("potion", "DROPLET_OF_PRECOGNITION"), hand=ten), False, 2),
         ):
             with self.subTest(staging.label):
                 handle = native.load_combat_snapshot(_emu_doc(staging), 7)
                 try:
                     native.step(handle, 11, obs, reward)
-                    self.assertIsNotNone(
-                        native.get_state_json(handle)["pending_selection"],
-                    )
+                    opened = native.get_state_json(handle)
+                    self.assertIsNotNone(opened["pending_selection"])
+                    pick = _offered(handle)[0]
                     native.step(handle, 0, obs, reward)
                     state = native.get_state_json(handle)
                 finally:
                     native.destroy(handle)
-                self.assertEqual(len(state["piles"]["hand"]), hand_after)
+                self.assertEqual(len(state["piles"]["hand"]), 10)
                 self.assertEqual(len(state["piles"]["draw"]["unordered"]), draw_after)
+                rest = [
+                    (c["def_id"], c["upgraded"]) for c in opened["piles"]["discard"]
+                ]
+                if from_discard:
+                    rest.remove(pick)
+                self.assertEqual(
+                    [(c["def_id"], c["upgraded"]) for c in state["piles"]["discard"]],
+                    [*rest, pick],
+                )
 
     def test_gambling_chip_and_toolbox_at_combat_start(self) -> None:
         obs = (ctypes.c_int * native.OBS_SIZE)()
