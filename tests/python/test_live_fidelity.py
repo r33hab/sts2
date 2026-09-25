@@ -150,6 +150,61 @@ def after_sword_boomerang(
     return post
 
 
+def live_card(entry: str, uid: str) -> dict[str, Any]:
+    """Return a plain, unupgraded one-cost card as the live snapshot shows one."""
+    return {
+        "id": entry,
+        "upgraded": False,
+        "uid": uid,
+        "cost": 1,
+        "enchantment": None,
+        "enchant_amount": None,
+        "fields": {},
+    }
+
+
+SHRUG = moves.Move(
+    kind="card",
+    card_index=1,
+    card_uid="SHRUG_IT_OFF#0",
+    card_id="SHRUG_IT_OFF",
+    label="Shrug It Off",
+)
+
+
+def shrug_it_off() -> dict[str, Any]:
+    """Return the Sludge Spinner opening with a Shrug It Off and eleven Strikes to draw.
+
+    Shrug It Off gains 8 block and draws a card, and the draw pile holds eleven Strikes
+    and one Iron Wave in an order the loader's seed decides.
+    """
+    live = load(SPINNER)
+    live["hand"][1] = live_card("SHRUG_IT_OFF", "SHRUG_IT_OFF#0")
+    live["draw_pile"] = [
+        *(live_card("STRIKE_IRONCLAD", f"STRIKE_IRONCLAD#{10 + i}") for i in range(11)),
+        live_card("IRON_WAVE", "IRON_WAVE#0"),
+    ]
+    return live
+
+
+def after_shrug_it_off(live: dict[str, Any], drawn: str) -> dict[str, Any]:
+    """Return the position after the Shrug It Off, the card it drew named by its uid."""
+    post = copy.deepcopy(live)
+    post["discard_pile"].append(post["hand"].pop(1))
+    card = next(card for card in post["draw_pile"] if card["uid"] == drawn)
+    post["draw_pile"].remove(card)
+    post["hand"].append(card)
+    post["player"]["block"] += 8
+    post["player"]["energy"] -= 1
+    for key in (
+        "cards_played_this_turn",
+        "cards_played_this_combat",
+        "skills_played_this_turn",
+    ):
+        post["history"][key] += 1
+    return post
+
+
 def check(
     pre: dict[str, Any],
     move: Any,
@@ -323,6 +378,48 @@ class EnemyNameTests(unittest.TestCase):
         )
 
 
+class RealRunTests(unittest.TestCase):
+    """Every move of a live A10 run, checked against the position the game showed after.
+
+    `fixtures/live_run/` holds the run's 46 settled combat snapshots over three fights and
+    its action log. Snapshot i and snapshot i + 1 are the positions either side of action
+    i + 1, except where a fight ended: the snapshot after its last card is the next fight's
+    opening, and the run's last card ended the third fight.
+    """
+
+    def test_every_real_move_matches_the_game(self) -> None:
+        folder = FIXTURES.parent / "live_run"
+        snapshots = json.loads(
+            (folder / "a10_act1_snapshots.json").read_text(encoding="utf-8"),
+        )
+        actions = [
+            json.loads(line)["payload"]
+            for line in (folder / "a10_act1_actions.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        self.assertEqual((len(snapshots), len(actions)), (46, 46))
+        checked = 0
+        for pre, post, action in zip(snapshots, snapshots[1:], actions, strict=False):
+            self.assertEqual(
+                (action["floor"], action["round"]),
+                (pre["floor"], pre["round"]),
+            )
+            if post["floor"] != pre["floor"]:
+                continue  # the fight ended; the next snapshot is another fight
+            if action["kind"] == "end_turn":
+                move = moves.END_TURN
+            else:
+                move = played(pre, action["card_uid"], action["target"])
+            with self.subTest(seq=action["seq"], move=move.label):
+                result = check(pre, move, post)
+                self.assertTrue(result["comparable"], result)
+                self.assertEqual(result["deterministic_mismatches"], [])
+                self.assertEqual(result["implausible"], [])
+            checked += 1
+        self.assertEqual(checked, 43)
+
+
 # ── Random outcomes ──────────────────────────────────────────────────────────
 
 
@@ -386,12 +483,53 @@ class RandomOutcomeTests(unittest.TestCase):
         self.assertNotIn(implausible["actual"], implausible["possible"])
         self.assertGreater(len(implausible["possible"]), 1)
 
-    def test_the_resamples_decide_what_varies(self) -> None:
-        # One resample sees one outcome: every field is deterministic.
+    def test_one_resample_still_resamples_before_it_flags(self) -> None:
+        # Seed 0 hits the first Toadpole twice; the game put all three hits into it. One
+        # resample agrees with itself, so the search for the game's outcome goes on.
         pre = sword_boomerang()
         move = played(pre, "SWORD_BOOMERANG#0")
-        result = check(pre, move, after_sword_boomerang(pre, 6, 3), resamples=1)
+
+        result = check(pre, move, after_sword_boomerang(pre, 9, 0), resamples=1)
+
+        self.assertEqual(result["random_fields"], list(self.TARGETS))
+        self.assertEqual(result["deterministic_mismatches"], [])
+        self.assertEqual(result["implausible"], [])
+
+
+class RareDrawTests(unittest.TestCase):
+    """A draw the first resamples all agree on is not deterministic for that alone."""
+
+    def test_the_first_resamples_all_draw_the_common_card(self) -> None:
+        # The premise of the next test: seeds 0-15 all draw a Strike.
+        pre = shrug_it_off()
+        result = check(pre, SHRUG, after_shrug_it_off(pre, "STRIKE_IRONCLAD#10"))
         self.assertEqual(result["random_fields"], [])
+        self.assertEqual(result["deterministic_mismatches"], [])
+
+    def test_the_rare_card_drawn_is_random_not_a_mismatch(self) -> None:
+        # One draw in twelve is the Iron Wave; the game drew it. Seed 20 draws it too.
+        pre = shrug_it_off()
+
+        result = check(pre, SHRUG, after_shrug_it_off(pre, "IRON_WAVE#0"))
+
+        self.assertTrue(result["comparable"])
+        self.assertEqual(result["random_fields"], ["hand"])
+        self.assertEqual(result["deterministic_mismatches"], [])
+        self.assertEqual(result["implausible"], [])
+
+    def test_a_hand_holding_a_card_from_nowhere_is_still_flagged(self) -> None:
+        # A Pommel Strike is in no pile and no resample's hand: no draw can deal it.
+        pre = shrug_it_off()
+        post = after_shrug_it_off(pre, "STRIKE_IRONCLAD#10")
+        post["hand"][-1].update(id="POMMEL_STRIKE", uid="POMMEL_STRIKE#0")
+
+        result = check(pre, SHRUG, post)
+
+        self.assertEqual(result["deterministic_mismatches"], [])
+        self.assertEqual(result["random_fields"], ["hand"])
+        [implausible] = result["implausible"]
+        self.assertEqual(implausible["field"], "hand")
+        self.assertIn("POMMEL_STRIKE", implausible["actual"])
 
 
 # ── Checks that cannot be made ───────────────────────────────────────────────
@@ -431,18 +569,24 @@ class NotComparableTests(unittest.TestCase):
         post["player"]["powers"].append(self.UNMODELLED)
         self.assert_not_comparable(check(pre, move, post), [f"post: {self.WARNING}"])
 
-    def test_a_move_the_emulator_does_not_allow_is_not_comparable(self) -> None:
-        # No energy is left for a two-cost Bash.
+    def test_a_move_the_emulator_does_not_allow_is_a_mismatch_on_the_move(self) -> None:
+        # The game played it; the emulator has no energy left for a two-cost Bash.
         pre = load(f"{SPINNER}_after_two_defends")
         self.assertEqual(pre["player"]["energy"], 0)
         move = played(pre, "BASH#0", "SLUDGE_SPINNER_0")
 
-        result = check(pre, move, pre)
-
-        self.assertFalse(result["comparable"])
-        [warning] = result["warnings"]
-        self.assertIn("Bash", warning)
-        self.assertIn("does not allow", warning)
+        self.assertEqual(
+            check(pre, move, pre),
+            {
+                "comparable": True,
+                "deterministic_mismatches": [
+                    {"field": "move.allowed", "predicted": False, "actual": True},
+                ],
+                "random_fields": [],
+                "implausible": [],
+                "warnings": [],
+            },
+        )
 
     def test_a_pick_the_emulator_cannot_find_is_not_comparable(self) -> None:
         # Droplet of Precognition offers the draw pile, whose unknown middle the loader

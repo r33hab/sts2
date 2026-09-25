@@ -13,6 +13,7 @@ last the process itself is started, spoken to and stopped.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import importlib
 import inspect
@@ -25,7 +26,7 @@ import sys
 import tempfile
 import time
 import unittest
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any, ClassVar, NamedTuple
 from unittest import mock
@@ -39,7 +40,9 @@ cards = importlib.import_module("sts2_gym.live.cards")
 convert = importlib.import_module("sts2_gym.live.convert")
 ids = importlib.import_module("sts2_gym.live.ids")
 moves = importlib.import_module("sts2_gym.live.moves")
+fidelity = importlib.import_module("sts2_gym.live.fidelity")
 service = importlib.import_module("sts2_gym.live.service")
+strategy = importlib.import_module("sts2_gym.live.strategy")
 live_search = importlib.import_module("live_search")
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "live"
@@ -745,12 +748,71 @@ class ToActionTests(unittest.TestCase):
         count = len(emu_doc["pending_selection"]["candidates"])
         self.assertEqual(moves.to_action(moves.SKIP, live, emu_doc), (count, -1))
 
+    def test_an_aimed_move_naming_no_target_is_refused_among_several(self) -> None:
+        # Two Corpse Slugs: a Strike or a Fire Potion has to say which one it hits, or the
+        # emulator would hit the first whichever the player chose.
+        live = load("captured/floor3_corpse_slugs_round1")
+        live["player"]["potions"] = [
+            {"slot": 0, "id": "FIRE_POTION"},
+            {"slot": 1, "id": "FLEX_POTION"},
+        ]
+        emu_doc, _ = loaded(live)
+        hand = [card["id"] for card in live["hand"]]
+        for case, move in (
+            (
+                "a Strike",
+                moves.Move(
+                    kind="card",
+                    card_index=hand.index("STRIKE_IRONCLAD"),
+                    label="Strike",
+                ),
+            ),
+            (
+                "a Fire Potion",
+                moves.Move(kind="potion", potion_slot=0, label="Fire Potion"),
+            ),
+        ):
+            with (
+                self.subTest(case=case),
+                self.assertRaisesRegex(moves.MappingError, "names none, and 2"),
+            ):
+                moves.to_action(move, live, emu_doc)
+        # A move aimed at nobody needs no target: a Defend, a Flex Potion.
+        defend = hand.index("DEFEND_IRONCLAD")
+        self.assertEqual(
+            moves.to_action(
+                moves.Move(kind="card", card_index=defend, label="Defend"),
+                live,
+                emu_doc,
+            ),
+            (defend, -1),
+        )
+        self.assertEqual(
+            moves.to_action(
+                moves.Move(kind="potion", potion_slot=1, label="Flex Potion"),
+                live,
+                emu_doc,
+            ),
+            (len(hand) + 2, -1),
+        )
+
+    def test_an_aimed_move_naming_no_target_aims_at_the_one_living_enemy(self) -> None:
+        # The first Corpse Slug is dead, listed at 0 HP: the second is the only target.
+        live = dead_enemy_position()
+        emu_doc, _ = loaded(live)
+        strike = next(
+            i for i, card in enumerate(live["hand"]) if card["id"] == "STRIKE_IRONCLAD"
+        )
+        move = moves.Move(kind="card", card_index=strike, label="Strike")
+        self.assertEqual(moves.to_action(move, live, emu_doc), (strike, 1))
+
     def test_a_card_is_found_by_its_uid_alone(self) -> None:
+        # A Strike with no target aims at the one enemy there is, the Sludge Spinner.
         live = load("captured/floor2_sludge_spinner_round1")
         emu_doc, _ = loaded(live)
         last = live["hand"][4]
         move = moves.Move(kind="card", card_uid=last["uid"], label="Strike")
-        self.assertEqual(moves.to_action(move, live, emu_doc), (4, -1))
+        self.assertEqual(moves.to_action(move, live, emu_doc), (4, 0))
 
     def test_a_move_the_snapshot_does_not_hold_is_a_mapping_error(self) -> None:
         # Strike, Defend, Bash, Defend, Strike against the Sludge Spinner.
@@ -1272,7 +1334,7 @@ class CheckTests(unittest.TestCase):
             "negative resamples": self.params(resamples=-1),
             "fractional resamples": self.params(resamples=2.5),
             "boolean resamples": self.params(resamples=True),
-            "too many resamples": self.params(resamples=service.MAX_RESAMPLES + 1),
+            "too many resamples": self.params(resamples=fidelity.MAX_RESAMPLES + 1),
         }
         for case, params in cases.items():
             with self.subTest(case=case):
@@ -1438,6 +1500,43 @@ def model_dir(root: Path, generation: int = 3, *, weights: bool = True) -> Path:
     return folder
 
 
+# A stand-in training package for the default loader: its live front end, and a policy
+# that counts its own loads (a reload runs the module again in the same namespace).
+FAKE_FEATURES = '''"""A stand-in for run_train.features."""
+
+
+class Decision:
+    def __init__(self, kind, view):
+        self.type = kind
+        self.view = None
+
+
+def view_from_live(live_run):
+    return {"floor": live_run["run"]["floor"]}
+
+
+def decision_from_live(screen, view):
+    return Decision(screen["state_type"], view)
+'''
+FAKE_POLICY = '''"""A stand-in for run_train.policy."""
+
+from collections import namedtuple
+
+OptionScore = namedtuple("OptionScore", "option value p_boss scorable")
+LOADS = globals().get("LOADS", 0) + 1
+CALLS = globals().get("CALLS", [])
+
+
+def score_options(decision, view):
+    CALLS.append((decision.type, view))
+    return [
+        OptionScore({"kind": "card.skip", "action": 3}, 10.0 + LOADS, 0.1, True),
+        OptionScore({"kind": "card.take", "action": 0}, 11.0 + LOADS, 0.2, True),
+    ]
+'''
+BROKEN_POLICY = 'raise RuntimeError("the champion was trained on feature version 0")\n'
+
+
 class StrategyTests(unittest.TestCase):
     """`strategy`: the exported champion's option values, or `no_model` without one."""
 
@@ -1446,13 +1545,75 @@ class StrategyTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
 
+    def training_package(self, policy: str) -> Path:
+        """Write a stand-in `run_train` package and return the folder that holds it."""
+        folder = self.root / "packages"
+        package = folder / "run_train"
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text('"""A stand-in."""\n', encoding="utf-8")
+        (package / "features.py").write_text(FAKE_FEATURES, encoding="utf-8")
+        (package / "policy.py").write_text(policy, encoding="utf-8")
+        return folder
+
+    @staticmethod
+    @contextlib.contextmanager
+    def importable(folder: Path) -> Iterator[None]:
+        """Put a folder first on the import path, and forget what was imported from it."""
+        sys.path.insert(0, str(folder))
+        importlib.invalidate_caches()
+        try:
+            with mock.patch.dict(sys.modules):
+                for name in [n for n in sys.modules if n.split(".")[0] == "run_train"]:
+                    del sys.modules[name]
+                yield
+        finally:
+            sys.path.remove(str(folder))
+
+    def test_the_default_loader_imports_scores_and_reloads(self) -> None:
+        champion = model_dir(self.root, generation=3)
+        with self.importable(self.training_package(FAKE_POLICY)):
+            svc = service.Service(
+                NoSearch(),
+                workers=4,
+                sim_commit="abc1234",
+                strategy_model=strategy.StrategyModel(champion),
+            )
+
+            def values() -> list[float]:
+                line = request("strategy", {"live_run": LIVE_RUN, "decision": SCREEN})
+                answer = strict(svc.handle(line) or "")
+                self.assertTrue(answer["ok"], answer)
+                return [option["value"] for option in answer["result"]["options"]]
+
+            self.assertEqual(values(), [12.0, 11.0])
+            policy = sys.modules["run_train.policy"]
+            self.assertEqual(policy.CALLS, [("card_reward", {"floor": 5})])
+            self.assertEqual(values(), [12.0, 11.0])
+            self.assertEqual(policy.LOADS, 1)  # the same generation is not reloaded
+            model_dir(self.root, generation=4)
+            self.assertEqual(values(), [13.0, 12.0])
+            self.assertEqual(policy.LOADS, 2)
+
+    def test_a_training_package_that_fails_to_load_is_a_strategy_error(self) -> None:
+        def raising(model_dir: Path, info: Mapping[str, Any]) -> tuple[Any, Any]:
+            raise ValueError("the weights do not match the network")
+
+        champion = model_dir(self.root)
+        answer = self.ask(strategy.StrategyModel(champion, load=raising))
+        self.assertEqual(answer["error"]["type"], "strategy", answer)
+        self.assertIn("ValueError", answer["error"]["message"])
+        with self.importable(self.training_package(BROKEN_POLICY)):
+            answer = self.ask(strategy.StrategyModel(champion))
+        self.assertEqual(answer["error"]["type"], "strategy", answer)
+        self.assertIn("feature version 0", answer["error"]["message"])
+
     @staticmethod
     def ask(model: Any, params: object = None) -> dict[str, Any]:
         svc = service.Service(
             NoSearch(),
             workers=4,
             sim_commit="abc1234",
-            strategy=model,
+            strategy_model=model,
         )
         body = {"live_run": LIVE_RUN, "decision": SCREEN} if params is None else params
         return strict(svc.handle(request("strategy", body)) or "")
@@ -1472,7 +1633,7 @@ class StrategyTests(unittest.TestCase):
             training = FakeTraining()
             with self.subTest(case=case):
                 self.assert_no_model(
-                    self.ask(service.StrategyModel(folder, load=training)),
+                    self.ask(strategy.StrategyModel(folder, load=training)),
                 )
                 self.assertEqual(training.loads, [])
 
@@ -1487,21 +1648,21 @@ class StrategyTests(unittest.TestCase):
             (folder / "model.json").write_text(text, encoding="utf-8")
             with self.subTest(case=case):
                 self.assert_no_model(
-                    self.ask(service.StrategyModel(folder, load=FakeTraining())),
+                    self.ask(strategy.StrategyModel(folder, load=FakeTraining())),
                 )
 
     def test_without_the_training_package_there_is_no_model(self) -> None:
         # A None in sys.modules makes the import fail, as on a branch without rl/run_train.
         folder = model_dir(self.root)
         with mock.patch.dict(sys.modules, {"run_train": None}):
-            message = self.assert_no_model(self.ask(service.StrategyModel(folder)))
+            message = self.assert_no_model(self.ask(strategy.StrategyModel(folder)))
         self.assertIn("run_train", message)
 
     def test_the_options_come_back_best_first_with_the_champions_model_json(
         self,
     ) -> None:
         folder = model_dir(self.root, generation=3)
-        answer = self.ask(service.StrategyModel(folder, load=FakeTraining()))
+        answer = self.ask(strategy.StrategyModel(folder, load=FakeTraining()))
         self.assertTrue(answer["ok"], answer)
         result = answer["result"]
         self.assertEqual(set(result), {"options", "model"})
@@ -1539,7 +1700,7 @@ class StrategyTests(unittest.TestCase):
             training = FakeTraining(FakeFeatures(decision_view=decision_view))
             with self.subTest(decision_view=decision_view):
                 answer = self.ask(
-                    service.StrategyModel(model_dir(self.root), load=training),
+                    strategy.StrategyModel(model_dir(self.root), load=training),
                 )
                 self.assertTrue(answer["ok"], answer)
                 self.assertEqual(
@@ -1561,7 +1722,7 @@ class StrategyTests(unittest.TestCase):
             NoSearch(),
             workers=4,
             sim_commit="abc1234",
-            strategy=service.StrategyModel(folder, load=training),
+            strategy_model=strategy.StrategyModel(folder, load=training),
         )
 
         def best_value() -> float:
@@ -1586,7 +1747,7 @@ class StrategyTests(unittest.TestCase):
 
         features = FakeFeatures(fail=NotReadyError("no map screen seen in act 1"))
         answer = self.ask(
-            service.StrategyModel(model_dir(self.root), load=FakeTraining(features)),
+            strategy.StrategyModel(model_dir(self.root), load=FakeTraining(features)),
         )
         self.assertFalse(answer["ok"], answer)
         self.assertEqual(answer["error"]["type"], "strategy")
@@ -1594,7 +1755,7 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("no map screen seen in act 1", answer["error"]["message"])
 
     def test_bad_params_are_a_bad_request(self) -> None:
-        model = service.StrategyModel(model_dir(self.root), load=FakeTraining())
+        model = strategy.StrategyModel(model_dir(self.root), load=FakeTraining())
         cases = {
             "no live_run": {"decision": SCREEN},
             "live_run not an object": {"live_run": [1], "decision": SCREEN},
@@ -1608,7 +1769,7 @@ class StrategyTests(unittest.TestCase):
                 self.assertEqual(answer["error"]["type"], "bad_request")
 
     def test_an_unknown_param_is_ignored_with_one_log_line(self) -> None:
-        model = service.StrategyModel(model_dir(self.root), load=FakeTraining())
+        model = strategy.StrategyModel(model_dir(self.root), load=FakeTraining())
         params = {"live_run": LIVE_RUN, "decision": SCREEN, "from_the_future": 1}
         with self.assertLogs("sts2_gym.live.service", level="WARNING") as logs:
             answer = self.ask(model, params)

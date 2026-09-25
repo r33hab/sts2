@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from sts2_gym import names
-from sts2_gym.live import cards, ids, selection
+from sts2_gym.live import cards, ids, potions, selection
 from sts2_gym.live.convert import CHARACTERS, POTION_SLOT_CAPACITY
 
 # Words a title keeps in lower case unless they lead it: "Touch of Insanity".
@@ -176,15 +176,19 @@ def to_action(
     the hand card holding `card_uid` when the index is not given; a `card_uid` or `card_id`
     beside the index must be the card there. A potion is its slot, whose potion must be
     `potion_id` when that is given. A pick is the emulator candidate the maps found to be
-    live candidate `select_index`, and a skip is one past the last candidate. The target is
-    the emulator index of the living enemy `target` names, or -1 for a move aimed at
-    nobody. Whether the emulator allows the action is not asked here.
+    live candidate `select_index`, and a skip is one past the last candidate. Whether the
+    emulator allows the action is not asked here.
+
+    The target is the emulator index of the living enemy `target` names, or -1 for a move
+    aimed at nobody. A card or potion the player aims at an enemy, sent with no target,
+    aims at the one enemy that can be aimed at, and is refused when there are more: the
+    emulator would otherwise aim it at the first, whichever one the player chose.
 
     `maps` is `index_maps(live, emu_doc)`, built with the loaded draw order when a pick from
     the draw pile's shuffled middle must be found; building it can raise `MappingError`
-    (see `index_maps`). So can a move that names what the live snapshot does not hold or
-    aims at an enemy that is not alive, and a pick no emulator candidate is known to be
-    raises `UnmappedSelectionError`.
+    (see `index_maps`). So can a move that names what the live snapshot does not hold, or
+    aims at an enemy that is not alive or at none of several, and a pick no emulator
+    candidate is known to be raises `UnmappedSelectionError`.
 
     Raises:
         MappingError: For a move that does not answer the selection that is open, or
@@ -204,11 +208,17 @@ def to_action(
             f"a selection is open, which only a pick or a skip answers, not a {move.kind}",
         )
     if move.kind == "card":
-        action = maps.hand.index(_hand_index(live, move))
-        return action, _target_index(maps, emu_doc, move.target)
+        index = _hand_index(live, move)
+        info = names.card(ids.card_id(live["hand"][index]["id"]))
+        aimed = info is not None and info.targets_an_enemy()
+        return maps.hand.index(index), _target_index(maps, emu_doc, move, aimed=aimed)
     if move.kind == "potion":
-        action = len(maps.hand) + 1 + _potion_slot(maps, move)
-        return action, _target_index(maps, emu_doc, move.target)
+        slot = _potion_slot(maps, move)
+        aimed = potions.aims_at_an_enemy(
+            ids.potion_id(_potion_in(maps.potion_ids, slot)),
+        )
+        action = len(maps.hand) + 1 + slot
+        return action, _target_index(maps, emu_doc, move, aimed=aimed)
     if move.kind == "end_turn":
         return len(maps.hand), -1
     raise MappingError(f"no move of kind {move.kind!r}")
@@ -642,34 +652,57 @@ def _hand_index(live: Mapping[str, Any], move: Move) -> int:
         card = hand[index]
     else:
         raise MappingError("a card move names no hand card: no card_index, no card_uid")
+    _check_named(card, move, f"live hand card {index}")
+    return index
+
+
+def _check_named(card: Mapping[str, Any], move: Move, where: str) -> None:
+    """Check that a live card is the one a move names, by the uid and id it gives.
+
+    Raises:
+        MappingError: If the move gives a uid or an id the card does not have.
+
+    """
     for key, given in (("uid", move.card_uid), ("id", move.card_id)):
         if given is not None and card[key] != given:
             raise MappingError(
-                f"the move names card {key} {given}, but live hand card {index} is "
-                f"{card[key]}",
+                f"the move names card {key} {given}, but {where} is {card[key]}",
             )
-    return index
 
 
 def _target_index(
     maps: IndexMaps,
     emu_doc: Mapping[str, Any],
-    entity_id: str | None,
+    move: Move,
+    *,
+    aimed: bool,
 ) -> int:
     """Return the emulator index of the enemy a move aims at, -1 for a move aimed at none.
 
+    `aimed` says whether the card or potion is one the player aims at an enemy. Sent with
+    no target, such a move aims at the one living enemy there is.
+
     Raises:
-        MappingError: If no live enemy is `entity_id`, or that enemy is not alive: dead, or
-            reviving at 0 HP, where no card can aim.
+        MappingError: If no live enemy is the move's target, or that enemy is not alive
+            (dead, or reviving at 0 HP, where no card can aim), or if an aimed move names
+            no target while more than one enemy can be aimed at.
 
     """
-    if entity_id is None:
-        return -1
-    if entity_id not in maps.entity_ids:
-        raise MappingError(f"no enemy {entity_id} is in the live snapshot")
-    index = maps.entity_ids.index(entity_id)
+    if move.target is None:
+        if not aimed:
+            return -1
+        living = [i for i, enemy in enumerate(emu_doc["enemies"]) if enemy["hp"] > 0]
+        if len(living) != 1:
+            raise MappingError(
+                f"{move.label} is aimed at an enemy but names none, and {len(living)} "
+                "can be aimed at",
+            )
+        return living[0]
+    if move.target not in maps.entity_ids:
+        raise MappingError(f"no enemy {move.target} is in the live snapshot")
+    index = maps.entity_ids.index(move.target)
     if emu_doc["enemies"][index]["hp"] <= 0:
-        raise MappingError(f"enemy {entity_id} is not alive, so no move aims at it")
+        raise MappingError(f"enemy {move.target} is not alive, so no move aims at it")
     return index
 
 
@@ -704,12 +737,7 @@ def _candidate_action(live: Mapping[str, Any], maps: IndexMaps, move: Move) -> i
         raise MappingError("a pick names no select_index")
     screen = live["pending_selection"]["candidates"]
     card = _at(screen, move.select_index, "live candidates")
-    for key, given in (("uid", move.card_uid), ("id", move.card_id)):
-        if given is not None and card[key] != given:
-            raise MappingError(
-                f"the pick names card {key} {given}, but live candidate "
-                f"{move.select_index} is {card[key]}",
-            )
+    _check_named(card, move, f"live candidate {move.select_index}")
     for action, found in enumerate(maps.candidates):
         if found == move.select_index:
             return action

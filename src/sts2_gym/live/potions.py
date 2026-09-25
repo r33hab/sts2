@@ -1,5 +1,6 @@
-"""Which potions the emulator can actually use: `PotionEffects.IsModelled`, off its source.
+"""Which potions the emulator can actually use, and which ones the player aims.
 
+Whether a potion is used at all is `PotionEffects.IsModelled`, read off its source.
 `CombatEngine.ValidActions` offers a held potion only when `PotionEffects.IsModelled` says
 it has a real combat effect (CombatEngine.cs:2434), and `IsModelled` is exactly "not in
 `PotionEffects.Unsupported`" (PotionEffects.cs:39-42). A potion in that set is known
@@ -18,7 +19,26 @@ import re
 from functools import cache
 from pathlib import Path
 
+from sts2_gym import names
 from sts2_gym.live import ids
+
+# The potions a player aims: `TargetType => TargetType.AnyEnemy` in the decompiled
+# MegaCrit.Sts2.Core.Models.Potions. The emulator's `PotionDef` carries no target type yet,
+# so the names are listed here and resolved through `names.potions()`. The test suite
+# checks this list against the decompiled source whenever that source is present. The
+# search (`rl/live_search.py`) and the move mapping (`moves.to_action`) both read it here.
+ENEMY_TARGETED_POTIONS = frozenset(
+    {
+        "BeetleJuice",
+        "FirePotion",
+        "PoisonPotion",
+        "PotionOfDoom",
+        "PotionShapedRock",
+        "PowderedDemise",
+        "VulnerablePotion",
+        "WeakPotion",
+    },
+)
 
 _POTION_EFFECTS = (
     Path(__file__).resolve().parents[3]
@@ -114,3 +134,8 @@ def unsupported_potion_ids() -> frozenset[int]:
 def is_modelled(potion_id: int) -> bool:
     """Whether using `potion_id` has a real combat effect: `PotionEffects.IsModelled`."""
     return potion_id not in unsupported_potion_ids()
+
+
+def aims_at_an_enemy(potion_id: int) -> bool:
+    """Whether using `potion_id` needs the player to pick which enemy."""
+    return names.potions().get(potion_id) in ENEMY_TARGETED_POTIONS

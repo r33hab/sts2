@@ -1,11 +1,11 @@
 """One-step fidelity: whether the simulator predicts what the game did with a move.
 
 The coach sends `check` the live position before a move, the move in game terms and the
-live position after it. The position before is converted and loaded `resamples` times,
-each under its own seed, which reseeds every random stream and reshuffles the draw pile's
-unknown middle. In each, the move is mapped back to the emulator's action
-(`moves.to_action`) and stepped. The position after is converted too, and the two sides
-are compared on what the player can see:
+live position after it. The position before is converted and loaded under one seed after
+another -- a seed reseeds every random stream and reshuffles the draw pile's unknown
+middle -- and in each the move is mapped back to the emulator's action (`moves.to_action`)
+and stepped. The position after is converted too, and the two sides are compared on what
+the player can see:
 
 - the player's HP, block, energy, stars, orbs and powers;
 - each enemy's HP, block and powers, under its live `entity_id` (`_Names`);
@@ -17,34 +17,44 @@ converted position after. A power is known by the game power its buff stands for
 (`powers.BUFF_ID_TO_LIVE`), so the emulator's bookkeeping buffs, which stand for none, are
 not compared, and an absent power reads as 0, as the emulator never holds a buff at 0.
 
-A field every resample predicts alike is deterministic, and a mismatch when the game shows
-another value. A field the resamples disagree on is random, and the game's value is
-implausible when no resample produced it.
+**Only the impossible is flagged, never the merely unsampled.** A field the resamples
+agree on is deterministic, and one they disagree on is random. When the game shows a
+value no resample has, more are drawn, up to `MAX_RESAMPLES`, and a field that shows a
+second value on the way is random from then on. Only a value still unseen after all of
+them is a finding: a deterministic mismatch, or an implausible random outcome. The hand
+must be impossible as well (`_Hand`): a hand the draw could deal is not flagged however
+rare it is, because which of many hands a draw deals is exactly what a few hundred
+resamples cannot cover.
 
 An enemy that died may disappear: the game lists the living only, and the emulator drops
 the dead unless a power keeps them. So an enemy that one side lists and another does not
 is compared by its HP alone, absent reading as 0, and its block and powers only where
 every side lists it.
 
-A check that cannot be made is not comparable, and says why in its warnings, rather than
-report a mismatch the simulator never made. That happens when the converter could not
-carry the position before or after faithfully (its warnings, each marked with the side),
-when the emulator does not allow the move, or when it cannot tell which of its
-candidates a pick is.
+A move the emulator does not allow, where the game made it, is a mismatch of its own, on
+the pseudo-field `move.allowed`. A check that cannot be made at all is not comparable, and
+says why in its warnings, rather than report a mismatch the simulator never made: when the
+converter could not carry the position before or after faithfully (its warnings, each
+marked with the side), or when the emulator cannot tell which of its candidates a pick is.
 """
 
 from __future__ import annotations
 
 import ctypes
+import json
+from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from functools import cache
-from typing import Any
+from typing import Any, cast
 
 from sts2_gym import names, native
 from sts2_gym.live import ConversionError, ids, moves, powers
 from sts2_gym.live.convert import ConversionResult, convert
 
 DEFAULT_RESAMPLES = 16
+# Resamples drawn at most, the first ones included, before an unseen value is a finding.
+MAX_RESAMPLES = 256
 
 # A field is its path: ("player", "block"), ("enemies", "CORPSE_SLUG_0", "hp"),
 # ("enemies", "CORPSE_SLUG_0", "powers", "VULNERABLE_POWER"), ("hand",).
@@ -52,12 +62,27 @@ Field = tuple[str, ...]
 Value = int | tuple[str, ...]
 Outcome = dict[Field, Value]
 
+HAND: Field = ("hand",)
 # The order fields are reported in; each enemy's fields stay together.
 _GROUPS = ("player", "enemies", "hand", "draw_pile", "discard_pile", "exhaust_pile")
+# The emulator's shuffle stream: a reshuffle of the discard pile draws from it.
+_SHUFFLE = native.RNG_STREAMS["Shuffle"]
 
 
 class _NotComparableError(Exception):
     """A check that cannot be made; the message is the warning that says why."""
+
+
+class _RefusedError(Exception):
+    """The emulator does not allow the move in the position before."""
+
+
+@dataclass(frozen=True)
+class _Sample:
+    """What one resample shows, and whether its move reshuffled the discard pile."""
+
+    fields: Outcome
+    reshuffled: bool
 
 
 def check(
@@ -71,7 +96,9 @@ def check(
 
     Returns the protocol's `CheckResult`: `comparable`, `deterministic_mismatches` as
     {field, predicted, actual}, `random_fields`, `implausible` as {field, actual,
-    possible}, and `warnings`. The emulator is asked `resamples` times, under seeds 0 up.
+    possible}, and `warnings`. The emulator is asked `resamples` times first, under seeds
+    0 up, and then once more at a time, up to `MAX_RESAMPLES`, while any field shows a
+    value the game did not.
 
     `ConversionError` is raised for a snapshot the converter refuses, its path starting
     with the side, `pre.` or `post.`. `native.SnapshotError` is raised for a converted
@@ -81,20 +108,19 @@ def check(
     """
     before = _converted(pre, "pre")
     after = _converted(post, "post")
-    warnings = [*_marked("pre", before), *_marked("post", after)]
-    if warnings:
-        return _not_comparable(warnings)
-    names_after = _Names(pre, post)
-    try:
-        predicted = [
-            _predict(pre, before.doc, move, seed, names_after)
-            for seed in range(resamples)
-        ]
-    except _NotComparableError as reason:
-        return _not_comparable([str(reason)])
+    if not (before.reliable and after.reliable):
+        return _not_comparable([*_marked("pre", before), *_marked("post", after)])
     # The converted enemies are the live ones, in their order.
     actual = _visible(after.doc, [enemy["entity_id"] for enemy in post["enemies"]])
-    return _compare(predicted, actual)
+    world = _World(pre, before.doc, move, _Names(pre, post))
+    try:
+        samples = world.samples(resamples, actual)
+    except _NotComparableError as reason:
+        return _not_comparable([str(reason)])
+    except _RefusedError:
+        return _refused()
+    hand = _Hand(before.doc, after.doc, samples)
+    return _compare([sample.fields for sample in samples], actual, hand)
 
 
 # ── The two sides ────────────────────────────────────────────────────────────
@@ -161,51 +187,97 @@ class _Names:
         return named
 
 
-def _predict(
-    pre: Mapping[str, Any],
-    doc: dict[str, Any],
-    move: moves.Move,
-    seed: int,
-    names_after: _Names,
-) -> Outcome:
-    """Load the position before under one seed, step the move, and read what it shows.
+class _World:
+    """The position before, loaded under a seed and stepped by the move."""
 
-    The maps are built afresh for each seed: a pick from the draw pile's middle is found
-    through the order this seed shuffled. Loading can raise `native.SnapshotError`, and
-    building the maps or mapping the move can raise `moves.MappingError`.
+    def __init__(
+        self,
+        pre: Mapping[str, Any],
+        doc: dict[str, Any],
+        move: moves.Move,
+        names_after: _Names,
+    ) -> None:
+        self._pre = pre
+        self._doc = json.dumps(doc).encode("utf-8")  # encoded once, loaded many times
+        self._discarded = len(doc["piles"]["discard"])
+        self._move = move
+        self._names = names_after
 
-    Raises:
-        _NotComparableError: If the emulator cannot tell which of its candidates the pick
-            is, or does not allow the move.
+    def samples(self, resamples: int, actual: Outcome) -> list[_Sample]:
+        """Draw `resamples` resamples, then more while a value the game shows is unseen.
 
-    """
-    handle = native.load_combat_snapshot(doc, seed)
-    try:
-        emu_doc = native.get_state_json(handle)
-        maps = moves.index_maps(
-            pre,
-            emu_doc,
-            draw_order=native.get_pile(handle, "draw"),
-        )
+        A field whose value turns up in a later resample drops out of the search; the
+        resamples stop when none is left unseen, or at `MAX_RESAMPLES`.
+        """
+        taken = [self.sample(seed) for seed in range(resamples)]
+        outcomes = [sample.fields for sample in taken]
+        unseen = {
+            field
+            for field in _fields([actual, *outcomes])
+            if not _unlisted(field, [actual, *outcomes])
+            and actual.get(field, 0)
+            not in {outcome.get(field, 0) for outcome in outcomes}
+        }
+        while unseen and len(taken) < MAX_RESAMPLES:
+            sample = self.sample(len(taken))
+            taken.append(sample)
+            unseen = {
+                field
+                for field in unseen
+                if not _unlisted(field, [sample.fields])
+                and sample.fields.get(field, 0) != actual.get(field, 0)
+            }
+        return taken
+
+    def sample(self, seed: int) -> _Sample:
+        """Load the position before under one seed, step the move, and read what it shows.
+
+        The maps are built afresh for each seed: a pick from the draw pile's middle is
+        found through the order this seed shuffled. Loading can raise
+        `native.SnapshotError`, and building the maps or mapping the move can raise
+        `moves.MappingError`.
+
+        Raises:
+            _NotComparableError: If the emulator cannot tell which of its candidates the
+                pick is.
+            _RefusedError: If the emulator does not allow the move.
+
+        """
+        handle = native.load_combat_snapshot(self._doc, seed)
         try:
-            action, target = moves.to_action(move, pre, emu_doc, maps=maps)
-        except moves.UnmappedSelectionError as error:
-            raise _NotComparableError(
-                f"{move.label}: the emulator cannot tell which of its candidates the "
-                f"pick is ({error}), so it predicts nothing",
-            ) from error
-        if not native.valid_actions(handle, action + 1)[action]:
-            raise _NotComparableError(
-                f"the emulator does not allow {move.label} in the position before, so "
-                "it predicts nothing",
+            emu_doc = native.get_state_json(handle)
+            maps = moves.index_maps(
+                self._pre,
+                emu_doc,
+                draw_order=native.get_pile(handle, "draw"),
             )
-        obs = (ctypes.c_int * native.OBS_SIZE)()
-        reward = (ctypes.c_float * 1)()
-        native.step(handle, action, obs, reward, target)
-        predicted = native.get_state_json(handle)
-        return _visible(predicted, names_after.of(predicted["enemies"]))
-    finally:
-        native.destroy(handle)
+            try:
+                action, target = moves.to_action(
+                    self._move,
+                    self._pre,
+                    emu_doc,
+                    maps=maps,
+                )
+            except moves.UnmappedSelectionError as error:
+                raise _NotComparableError(
+                    f"{self._move.label}: the emulator cannot tell which of its "
+                    f"candidates the pick is ({error}), so it predicts nothing",
+                ) from error
+            if not native.valid_actions(handle, action + 1)[action]:
+                raise _RefusedError
+            shuffles = native.rng_call_count(handle, _SHUFFLE)
+            obs = (ctypes.c_int * native.OBS_SIZE)()
+            reward = (ctypes.c_float * 1)()
+            native.step(handle, action, obs, reward, target)
+            predicted = native.get_state_json(handle)
+            reshuffled = (
+                native.rng_call_count(handle, _SHUFFLE) > shuffles
+                or len(predicted["piles"]["discard"]) < self._discarded
+            )
+            fields = _visible(predicted, self._names.of(predicted["enemies"]))
+            return _Sample(fields, reshuffled)
+        finally:
+            native.destroy(handle)
 
 
 def _visible(doc: Mapping[str, Any], enemy_names: Sequence[str]) -> Outcome:
@@ -234,9 +306,8 @@ def _visible(doc: Mapping[str, Any], enemy_names: Sequence[str]) -> Outcome:
         fields["enemies", name, "block"] = enemy["block"]
         fields.update(_powers(("enemies", name), enemy["buffs"]))
     piles = doc["piles"]
-    draw = piles["draw"]
-    fields["hand",] = tuple(sorted(_card(card) for card in piles["hand"]))
-    fields["draw_pile", "count"] = sum(len(draw[region]) for region in draw)
+    fields[HAND] = tuple(sorted(_cards(piles["hand"])))
+    fields["draw_pile", "count"] = len(_draw_pile(piles))
     fields["discard_pile", "count"] = len(piles["discard"])
     fields["exhaust_pile", "count"] = len(piles["exhaust"])
     return fields
@@ -253,10 +324,18 @@ def _powers(owner: Field, buffs: Iterable[Mapping[str, int]]) -> dict[Field, int
     return shown
 
 
-def _card(card: Mapping[str, Any]) -> str:
-    """Name a card by its live id, with a + when it is upgraded."""
-    entry = _card_entries().get(card["def_id"]) or names.card_name(card["def_id"])
-    return entry + ("+" if card["upgraded"] else "")
+def _draw_pile(piles: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    draw = piles["draw"]
+    return [*draw["known_top"], *draw["unordered"], *draw["known_bottom"]]
+
+
+def _cards(pile: Iterable[Mapping[str, Any]]) -> list[str]:
+    """Name each card by its live id, with a + when it is upgraded."""
+    return [
+        (_card_entries().get(card["def_id"]) or names.card_name(card["def_id"]))
+        + ("+" if card["upgraded"] else "")
+        for card in pile
+    ]
 
 
 def _orb(orb: Mapping[str, Any]) -> str:
@@ -283,7 +362,51 @@ def _orb_entries() -> dict[int, str]:
 # ── The comparison ───────────────────────────────────────────────────────────
 
 
-def _compare(predicted: Sequence[Outcome], actual: Outcome) -> dict[str, Any]:
+class _Hand:
+    """Whether the game's hand after the move is one the simulator could deal at all.
+
+    A hand is possible when it holds no more of any card than the cards it can come from:
+
+    - what the simulator put in hand in some resample, which covers the cards the move
+      keeps there and those it generates, whatever the simulator does;
+    - the draw pile before the move;
+    - once a reshuffle is possible, the discard pile before the move and the hand, which
+      goes there at the end of a turn. A reshuffle is possible when a resample drew from
+      the shuffle stream or lost a discarded card, or the game's discard pile shrank.
+
+    It is a necessary condition, and a lenient one: it lets through some hands the draw
+    could not deal, so that it never flags one it could.
+    """
+
+    def __init__(
+        self,
+        before: Mapping[str, Any],
+        after: Mapping[str, Any],
+        samples: Sequence[_Sample],
+    ) -> None:
+        piles = before["piles"]
+        sources: Counter[str] = Counter()
+        for sample in samples:
+            sources |= Counter(cast("tuple[str, ...]", sample.fields[HAND]))
+        sources += Counter(_cards(_draw_pile(piles)))
+        reshuffled = any(sample.reshuffled for sample in samples) or len(
+            after["piles"]["discard"],
+        ) < len(piles["discard"])
+        if reshuffled:
+            sources += Counter(_cards(piles["discard"])) + Counter(
+                _cards(piles["hand"]),
+            )
+        self._sources = sources
+
+    def possible(self, hand: Value) -> bool:
+        return isinstance(hand, tuple) and Counter(hand) <= self._sources
+
+
+def _compare(
+    predicted: Sequence[Outcome],
+    actual: Outcome,
+    hand: _Hand,
+) -> dict[str, Any]:
     """Hold the game's outcome against the resamples', field by field."""
     mismatches: list[dict[str, Any]] = []
     random_fields: list[str] = []
@@ -294,15 +417,16 @@ def _compare(predicted: Sequence[Outcome], actual: Outcome) -> dict[str, Any]:
         outcomes = {outcome.get(field, 0) for outcome in predicted}
         shown = actual.get(field, 0)
         name = _render(field)
+        if len(outcomes) > 1:
+            random_fields.append(name)
+        if shown in outcomes or (field == HAND and hand.possible(shown)):
+            continue
         if len(outcomes) == 1:
             (value,) = outcomes
-            if value != shown:
-                mismatches.append(
-                    {"field": name, "predicted": _json(value), "actual": _json(shown)},
-                )
-            continue
-        random_fields.append(name)
-        if shown not in outcomes:
+            mismatches.append(
+                {"field": name, "predicted": _json(value), "actual": _json(shown)},
+            )
+        else:
             implausible.append(
                 {
                     "field": name,
@@ -360,6 +484,19 @@ def _json(value: Value) -> int | list[str]:
 def _order(value: Value) -> tuple[int, int, tuple[str, ...]]:
     """Sort a field's values: numbers by size, cards and orbs by name."""
     return (0, value, ()) if isinstance(value, int) else (1, 0, value)
+
+
+def _refused() -> dict[str, Any]:
+    """Answer a move the emulator does not allow, where the game made it."""
+    return {
+        "comparable": True,
+        "deterministic_mismatches": [
+            {"field": "move.allowed", "predicted": False, "actual": True},
+        ],
+        "random_fields": [],
+        "implausible": [],
+        "warnings": [],
+    }
 
 
 def _not_comparable(warnings: list[str]) -> dict[str, Any]:
