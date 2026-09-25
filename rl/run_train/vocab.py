@@ -18,6 +18,7 @@ encounter classes.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -155,6 +156,17 @@ def relic_rank(relic_id: int) -> int:
 
 def potion_rank(potion_id: int) -> int:
     return _ranks("potions")[potion_id]
+
+
+def sha256() -> str:
+    """Return the SHA-256 of the three vocabularies, which an export records (DESIGN.md 7).
+
+    It hashes the sorted id tables the ranks come from, so it changes exactly when an
+    encoding would.
+    """
+    tables = {"cards": card_ids(), "relics": relic_ids(), "potions": potion_ids()}
+    text = json.dumps(tables, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 # --------------------------------------------------------------------------------------

@@ -1668,15 +1668,18 @@ given the seed.
 config.json                effective config; a resume with another feature_version refuses
 status.json                atomic (tmp + rename); fields below
 loop.pid, loop.log
-champion.json              {generation, checkpoint, npz, eval path}
+champion.json              {generation, checkpoint, npz, eval path, previous}; generation null = the rules policy
 champion/eval.json         the champion's EvalResult; the rules baseline's to start with (2.9, E5)
+champion/eval.prev.json    the file champion/eval.json last replaced (E5)
 gen_0000/                  generation 0 = rules policy
   shards/r0007.jsonl.gz    up to 25 runs (RunRecords); written only by the parent: tmp, fsync, rename
   quarantine.jsonl         one line per quarantined seed as it happens (seed, status, reason, exit code, last encounter, traceback tail); appended and fsynced by the parent
+  retries.jsonl            one line per first failure as it happens, recovered or not; appended and fsynced by the parent
   manifest.json            written last: seeds, shard files, the quarantine list, the policy, the config, the runner's counts and retries
+  selfplay.json            the generation's records summed once: runs, boss kills, mean floor, unknown decisions, forced skips, quarantines, and played_by (the learner generation that played it; null = rules)
   learner.pt, learner.npz  the checkpoint trained after this generation
   eval.json                the learner's EvalResult: one SeedResult per eval seed, with EvalMeta
-  promotion.json           the decision: champion before and after, S, both summaries, n01, n10
+  promotion.json           the decision: champion before and after, S, both summaries, n01, n10, reset_to, reevaluated
 final_test.json            the last final-test report
 ```
 
@@ -1728,8 +1731,11 @@ combat_budget, ascension, budget_check (2.7), last_update (ISO 8601, UTC).
 
 `runner.py` owns every multi-process job: self-play generations, evaluations, the final
 test and the budget check. It starts `workers` processes from a `spawn` context. Each
-calls `os.nice(10)` and loads its own native library (one per process, because the
-emulator is not thread-safe).
+runs at nice 10 (whatever its parent's niceness, since the loop nices itself to train)
+and loads its own native library (one per process, because the emulator is not
+thread-safe). A watchdog thread in each worker exits it once its parent is gone, so a
+worker hung in a native step never outlives a loop killed outright. `JobConfig` refuses
+`workers < 1`, `seed_timeout <= 0` and `run_step_cap < 1`.
 
 **One seed at a time, over a private pipe.** Each worker has its own
 `multiprocessing.Pipe`, and there is no shared task queue. A process killed while it
@@ -2186,6 +2192,33 @@ and tests.
   measured runs/hour against section 2.5's extrapolation: that is the first
   multi-process measurement, and it checks the 0.6 planning factor.
 - Run the budget recheck of 2.7 (boss kills first) and record its outcome.
+
+**As built (Task 4):**
+
+- `loop.Loop(root, config)` runs the phases of 5.7 (`step()` runs one, `run()` runs on);
+  `cli.py` is the command line, and `python -m rl.run_train run` is the loop in the
+  foreground, which `start` detaches. `config.json` is `{feature_version, job, training,
+loop}`: a restart takes the stored config and the options given on top of it.
+- **Self-play.** Generation 0 is the rules policy at eps0. Generation N is played by the
+  latest learner, generation N-1's, at the temperature of that learner's generation, so
+  generation 1 plays at tau_0 = 0.6. A rollback makes the champion the latest learner:
+  the next generation is played by it and trains from its `.pt`, and a rules champion
+  means the rules policy at eps0 and fresh weights.
+- **Promotion writes** `champion/eval.prev.json` (the eval compared against), then
+  `champion.json` (the switch), then the challenger's eval as `champion/eval.json`, then
+  `promotion.json`. A crash after the switch is finished from `gen_N/eval.json` and
+  `eval.prev.json`; a `champion/eval.json` whose policy hash is not the champion's is
+  restored from the champion's generation.
+- **The self-play boss-kill rate** of a model is that of the newest generation it played
+  (`selfplay.json`'s `played_by`). A learner has played none when it is promoted, so its
+  rate is null until the next generation finishes, and E7's gate stays shut until then.
+- **Export** writes `model.pt`, `model.npz` and then `model.json`: npz, generation, W,
+  `selfplay_boss_kill_rate`, the eval summary, the combat budget, the ascension and
+  `ascension_stands_in_for`, the feature version, `vocab_sha256` (SHA-256 of the sorted
+  card, relic and potion id tables, `vocab.sha256()`), both native API versions and the
+  `EvalMeta`. A rules champion has no weights, and `export` refuses it.
+- The budget recheck of 2.7 is not run by the loop; `status.json` shows
+  `budget_check: null`.
 
 Commit `feat(train): resumable generation loop with champion promotion`.
 
