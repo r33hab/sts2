@@ -131,6 +131,7 @@ from combat_mcts import (
 from combat_tokens import MAX_POTIONS, POTION_OFFSET
 
 from sts2_gym import names, native
+from sts2_gym.live.potions import ENEMY_TARGETED_POTIONS
 
 DEATH_VALUE = -100.0
 LINE_DEPTH = 12
@@ -168,15 +169,6 @@ _LOADER_MISSING = "load_combat_snapshot unavailable: merge the loader branch"
 # What talking to a worker whose process has gone raises: EOF on its pipe, or a broken pipe.
 _PIPE_GONE = (EOFError, OSError)
 
-# The potions a player aims: `PotionDef.TargetType == CardTarget.AnyEnemy` in the
-# emulator's Generated/Potions.g.cs, the field `PotionEffects.NeedsEnemyTarget` reads and
-# the one the decompiled MegaCrit.Sts2.Core.Models.Potions declare as `TargetType =>
-# TargetType.AnyEnemy`. The test suite checks it against that source whenever it is present.
-ENEMY_TARGETED_POTIONS = frozenset(
-    names.potions()[potion]
-    for potion, target in names.potion_targets().items()
-    if target == "AnyEnemy"
-)
 
 # Where the observation keeps what this reads, from the emulator's own exports. The potion
 # block has no export of its own; `combat_tokens` derives it.
