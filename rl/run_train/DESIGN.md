@@ -15,10 +15,10 @@ root; line numbers are at `37e4264`. Numbers in section 2 were measured on this 
    6.5), because the combat prior's encoder needs a combat handle.
 2. **The default combat budget is 120/500**: 120 simulations per decision in ordinary
    fights, and 500 in elite and boss fights, where the deaths are. Measured single-process:
-   9.5 s per rules-policy run (3,040 runs/h on 8 workers), and 31.6 s per run that reaches
-   the boss (911/h, or 547/h under a conservative 0.6 scaling factor). The target is
-   300/h. Boss kills lean towards more ordinary-fight simulations, so Task 4 rechecks the
-   budget against 250/500 on boss kills (2.7).
+   12.7 s per rules-policy run (2,270 runs/h on 8 workers), and 31.9 s per run that
+   reaches the boss (904/h, or 542/h under a conservative 0.6 scaling factor). The target
+   is 300/h. No budget difference is resolved at 58 seeds, so Task 4 rechecks the budget
+   against 250/500 on boss kills (2.7).
 3. **Ascension is a config value, default 0** (controller ruling). The run engine at
    `37e4264` models A8 only. The ascension parameter arrives with the `spire-coach-gaps`
    branch (native run reset, `native.py` and `run_env.py`, default 0), and every
@@ -274,47 +274,54 @@ searches run clones; the export waits for the prior integration in section 6.5.*
 - **Machine.** Apple M4 Max, 10 performance and 4 efficiency cores, 36 GB, macOS 27.0.
   The native library was built from this worktree (`bash scripts/build.sh osx-arm64`),
   Python 3.12 under uv.
-- **One process, as the dispatch asked.** Other agents were building and testing in
-  sibling worktrees throughout, and the load average stayed between 2.1 and 4.8. Each
-  probe run records it at start and end in its JSON.
+- **Re-measured after Task 2A's review.** Sections 2.3-2.6 come from a re-measurement on
+  2026-09-25, on the engine and probe of `69399bc`: 372 runs, strictly one at a time and
+  each in its own process, budgets interleaved per seed so that load drift lands on every
+  budget alike. Other agents were working on the machine; the 1-minute load average
+  before each run was 1.6-4.8. The 30 runs first timed above 4.8 were re-timed on a
+  quieter machine, and their re-timed values are the ones used.
+- **What changed since the first measurement** (at `284c9a0`), in three steps:
+  1. the probe's first seed helper, replaced by the streams of 5.10;
+  2. the engine before the `0b09b19` merge, which brought combat effects for all 63
+     potions and the snapshot loader's clone fix;
+  3. the probe's own copy of the rules scoring, which transformed Ascender's Bane (an
+     Eternal curse the game never offers for a transform) where the shared scoring of
+     `rules.py` transforms a Strike.
+
+  On the current engine the scoring change alone changed 18 of 128 runs over 64 seeds:
+  +0.12 floors at 30 sims and +0.25 at 120/500, with the same boss kills. Steps 1 and 2
+  account for the rest, for example 13.43 → 14.91 mean floor and 1 → 7 boss kills at
+  120/500. The micro-benchmarks of 2.2 and the scaling floor of 2.5 are the first
+  measurement's; neither depends on the rules policy.
+
 - **Timing noise, measured.** A run is deterministic given (seed, budget): MCTS is seeded
-  from the run seed, and the rules policy has no randomness. Every main seed was played
-  twice at every budget. Identical runs differed in wall time by 1.2-2.3% on average
-  (worst 12%). A 120-sim rerun of 10 seeds 2.5 hours later matched to 0.2% (5.07 s
-  against 5.06 s). Budgets are interleaved per seed, so load drift lands on every budget
-  alike.
+  from the run seed, and the rules policy has no randomness. The 30 re-timed runs
+  reproduced their outcomes exactly, and their times moved by -4% to +24% (1.2% on
+  average). In the first measurement, identical runs differed in wall time by 1.2-2.3%
+  on average (worst 12%).
 - **What a run is.** Neow to the Act 1 boss kill or to death. Combat is
   `combat_mcts.run_search` + `best_action` (c = 0.1, tempo rollout, CRN over the first
   20%) on run clones (1.3). Everything else is the probe's `RulesPolicy`, which is the
-  baseline Task 2A promotes. Seeds are `PRB00000`...; 58 of them are used below
-  (`PRB00058` aborts the process, 1.5.7).
+  baseline Task 2A promotes, on `rules.py`'s scoring. Seeds are `PRB00000`...; 58 of
+  them are used below. `PRB00011` aborts the process at 120/500 (the defect of 1.5.7), so
+  that budget has 57.
 - **Ascension.** Every number here is A8, the only level this engine build runs
   (1.5.1). At the default A0 the enemies are weaker (no Tough or Deadly values), elites
   fewer (5, not 8), the ancient heal full, the belt 3 slots and Ascender's Bane absent.
   Runs will last longer and fights end sooner, so the full-length figures of 2.4 are the
   planning basis. Task 4 re-measures at the configured ascension after integration.
-- **Seeding.** These measurements used the probe's first seed helper, which hashed only a
-  seed's last 8 bytes and passed the same determinization seeds to every run. The probe
-  now derives independent streams from the whole seed (5.10). That changes which random
-  numbers a run draws, not what a simulation costs. A 20-seed rerun with the new streams
-  gave 1.36, 2.68, 5.18 and 10.01 s per run at 30, 60, 120 and 120/500 sims, against
-  1.45, 2.80, 4.89 and 8.44 s on the same seeds with the old ones. An ordinary-fight
-  decision at 120 sims cost 55 ms in both. The per-run differences are different random
-  paths: at 120/500 the new runs reached floor 14.0 on average, against 13.2.
-- **Commands.**
+- **Commands.** Each run was `probe_throughput.play_run` for one (seed, budget) in a
+  fresh process. The first command below is that for one seed k (2.3: 20 seeds at 30 and
+  60, 58 at the rest). The second plays 2.4's six boosted seeds, all in one process; the
+  measurement ran each in its own. The third is 2.5's floor, from the first measurement.
+  "120/500" means 120 simulations per decision in ordinary fights and 500 in elite and
+  boss fights.
   ```
-  uv run python rl/run_train/probe_throughput.py --sims 30,60,120,250,500 --runs 20 \
-      --repeats 2 --boost-hp 250 --boost-runs 6 --json probe_full.json
-  uv run python rl/run_train/probe_throughput.py --sims 120,250,500,120/500 --runs 40 \
-      --seed-base 20 --no-micro          # aborted at PRB00058; the 38 seeds before it are used
-  uv run python rl/run_train/probe_throughput.py --sims 250/500 --runs 58 --no-micro
-  uv run python rl/run_train/probe_throughput.py --sims 120/500 --runs 20 --no-micro
-  uv run python rl/run_train/probe_throughput.py --sims 120/500,250/500 --runs 0 --no-micro \
+  uv run python rl/run_train/probe_throughput.py --sims <budget> --runs 1 --seed-base <k> --no-micro
+  uv run python rl/run_train/probe_throughput.py --sims <budget> --runs 0 --no-micro \
       --boost-hp 250 --boost-runs 6
   taskpolicy -b uv run python rl/run_train/probe_throughput.py --sims 120 --runs 10 --no-micro
   ```
-  "120/500" means 120 simulations per decision in ordinary fights and 500 in elite and
-  boss fights.
 
 ### 2.2 The pieces
 
@@ -326,61 +333,63 @@ searches run clones; the export waits for the prior integration in section 6.5.*
 | per native step inside that rollout                              |                                 25.6 us |            17.9 us |
 
 The run handle costs **1.45x** per simulation (1.45-1.46x over three repetitions).
-Inside whole runs, a combat decision costs 12.8, 24.3, 48.8, 100.7 and 200.9 ms at 30,
-60, 120, 250 and 500 sims. That is 0.40-0.43 ms per simulation, linear in the budget;
+Inside whole runs, a combat decision costs 12.4, 24.4, 48.8, 101.8 and 200.8 ms at 30,
+60, 120, 250 and 500 sims. That is 0.40-0.41 ms per simulation, linear in the budget;
 rollouts from later in a fight are shorter than the turn-0 ones above. Everything
 outside search (non-combat steps, the rules policy, info reads) costs **0.05 s per run**,
-so search is 97-99.8% of a run's time. Stage 2's throughput is its combat budget.
+so search is 96.7-99.8% of a run's time. Stage 2's throughput is its combat budget.
 
 ### 2.3 Whole Act 1 runs with the rules policy (single process)
 
 | budget      | seeds | s/run (95% CI) | median |   max | mean floor (95% CI) | reached boss | boss kills | runs/h on 8 workers (linear) |
 | ----------- | ----: | -------------: | -----: | ----: | ------------------: | -----------: | ---------: | ---------------------------: |
-| 30          |    20 |   1.45 (±0.29) |   1.34 |  3.35 |       12.35 (±1.91) |            7 |          0 |                       19,900 |
-| 60          |    20 |   2.80 (±0.53) |   2.86 |  5.08 |       12.50 (±1.98) |            8 |          1 |                       10,300 |
-| 120         |    58 |   5.76 (±0.59) |   5.36 | 11.40 |       12.98 (±0.99) |           21 |          1 |                        5,000 |
-| **120/500** |    58 |   9.48 (±1.13) |   8.11 | 19.57 |       13.43 (±0.99) |           25 |          1 |                        3,040 |
-| 250         |    58 |  12.05 (±1.26) |  11.26 | 29.94 |       12.98 (±1.05) |           23 |          2 |                        2,390 |
-| 250/500     |    58 |  15.67 (±1.94) |  15.54 | 49.91 |       13.19 (±1.03) |           26 |          5 |                        1,840 |
-| 500         |    58 |  25.35 (±2.37) |  25.45 | 54.37 |       13.90 (±0.98) |           30 |          6 |                        1,140 |
+| 30          |    20 |   1.50 (±0.24) |   1.44 |  2.51 |       13.00 (±1.85) |            8 |          0 |                       19,200 |
+| 60          |    20 |   2.89 (±0.46) |   2.95 |  4.85 |       13.05 (±1.78) |            8 |          0 |                        9,980 |
+| 120         |    58 |   6.46 (±0.59) |   6.66 | 11.34 |       14.40 (±0.97) |           35 |          6 |                        4,460 |
+| **120/500** |    57 |  12.67 (±1.68) |  11.91 | 41.85 |       14.91 (±0.90) |           39 |          7 |                        2,270 |
+| 250         |    58 |  13.02 (±1.22) |  13.22 | 24.12 |       14.19 (±0.97) |           34 |          7 |                        2,210 |
+| 250/500     |    58 |  17.77 (±2.01) |  16.40 | 49.19 |       14.83 (±0.91) |           39 |          7 |                        1,620 |
+| 500         |    58 |  26.09 (±2.61) |  25.67 | 52.10 |       14.26 (±0.97) |           34 |          9 |                        1,100 |
 
-The rules policy takes 51-58 non-combat engine steps and 6.6-7.4 fights per run. In 358
-logged runs it met no unknown decision type and never had to take an event's emulator-only
-leave, so Review Focus 5 holds for the baseline. Per fight (20-58 seeds per budget; the
-elite and boss counts are 20-72 and 5-26, so read the trend, not the digits):
+The rules policy takes 54-64 non-combat engine steps and 7.0-8.2 fights per run. In the
+329 runs of this measurement it met no unknown decision type and never had to take an
+event's emulator-only leave, so Review Focus 5 holds for the baseline. Per fight (20-58
+seeds per budget; the elite and boss counts are 24-85 and 8-39, so read the trend, not
+the digits):
 
 | budget  | normal: P(death), HP lost | elite: P(death), HP lost | boss: P(death) |
 | ------- | ------------------------- | ------------------------ | -------------- |
-| 30      | 0.02, 5.9                 | 0.41, 36.7               | 1.00           |
-| 60      | 0.01, 5.1                 | 0.48, 32.0               | 0.88           |
-| 120     | 0.02, 5.0                 | 0.60, 36.4               | 1.00           |
-| 120/500 | 0.01, 5.2                 | 0.48, 31.0               | 1.00           |
-| 250     | 0.00, 3.9                 | 0.46, 33.3               | 0.88           |
-| 250/500 | 0.02, 4.8                 | 0.36, 30.7               | 0.81           |
-| 500     | 0.01, 3.8                 | 0.28, 31.8               | 0.73           |
+| 30      | 0.03, 4.7                 | 0.33, 30.8               | 1.00           |
+| 60      | 0.03, 3.2                 | 0.35, 29.6               | 1.00           |
+| 120     | 0.01, 3.4                 | 0.25, 25.7               | 0.83           |
+| 120/500 | 0.01, 3.2                 | 0.16, 24.8               | 0.82           |
+| 250     | 0.01, 3.1                 | 0.24, 25.6               | 0.79           |
+| 250/500 | 0.01, 2.8                 | 0.20, 24.3               | 0.82           |
+| 500     | 0.01, 2.8                 | 0.25, 25.3               | 0.74           |
 
-**Deaths concentrate in elite and boss fights.** Normal fights kill 0-2% of the time at
-every budget. A fight takes 13-16 decisions when ordinary, 19-21 at an elite and 23-32 at
+**Deaths concentrate in elite and boss fights.** Normal fights kill 1-3% of the time at
+every budget. A fight takes 14-15 decisions when ordinary, 20-21 at an elite and 29-32 at
 the boss.
 
 ### 2.4 Full-length runs
 
-The rules policy dies on floor 13 on average, so a better policy's runs will be longer.
-To time runs that reach the boss, the probe sets HP to 250 at the start (`--boost-hp 250`,
-`Sts2Run_DebugSetHp`). Six seeds per budget, and all reach the boss:
+The rules policy ends on floor 14 on average (13.0-14.9 across budgets), so a better
+policy's runs will be longer. To time runs that reach the boss, the probe sets HP to 250
+at the start (`--boost-hp 250`, `Sts2Run_DebugSetHp`). Six seeds per budget, and all reach
+the boss:
 
 | budget      | s/run |  max | fights | boss fight: s, decisions | runs/h on 8 workers (linear) |
 | ----------- | ----: | ---: | -----: | ------------------------ | ---------------------------: |
-| 30          |   4.1 |  5.7 |   10.0 | 1.1, 50                  |                        7,030 |
-| 60          |   7.5 | 10.9 |   10.0 | 2.2, 49                  |                        3,840 |
-| 120         |  14.6 | 19.7 |   10.3 | 4.0, 42                  |                        1,970 |
-| **120/500** |  31.6 | 51.3 |   10.0 | 14.7, 39                 |                          911 |
-| 250         |  29.4 | 38.6 |   10.0 | 8.8, 47                  |                          980 |
-| 250/500     |  40.9 | 54.2 |   10.0 | 16.2, 44                 |                          704 |
-| 500         |  56.8 | 70.4 |   10.3 | 15.5, 44                 |                          507 |
+| 30          |   4.1 |  4.8 |   10.3 | 1.2, 49                  |                        7,100 |
+| 60          |   7.4 |  9.2 |   10.3 | 1.9, 38                  |                        3,900 |
+| 120         |  13.9 | 15.7 |   10.3 | 3.9, 39                  |                        2,080 |
+| **120/500** |  31.9 | 40.8 |   10.3 | 14.0, 35                 |                          904 |
+| 250         |  28.2 | 34.2 |   10.3 | 7.7, 38                  |                        1,020 |
+| 250/500     |  42.8 | 51.4 |   10.3 | 16.4, 39                 |                          673 |
+| 500         |  53.7 | 63.7 |   10.3 | 15.1, 37                 |                          536 |
 
 This is a generous estimate of a full run's cost. At 250 HP the search is rarely pressed
-to end a fight quickly, and boss fights ran 39-50 decisions against 23-32 in real runs.
+to end a fight quickly, and boss fights ran 35-49 decisions against 29-32 in real runs.
 
 ### 2.5 Runs per hour on 8 workers
 
@@ -400,42 +409,45 @@ measurement while other agents shared the machine. It is bounded instead:
 
 | budget      | today, linear | today, x 0.6 | full length, linear | full length, x 0.6 |
 | ----------- | ------------: | -----------: | ------------------: | -----------------: |
-| 30          |        19,900 |       11,900 |               7,030 |              4,220 |
-| 60          |        10,300 |        6,160 |               3,840 |              2,300 |
-| 120         |         5,000 |        3,000 |               1,970 |              1,180 |
-| **120/500** |         3,040 |        1,820 |                 911 |            **547** |
-| 250         |         2,390 |        1,430 |                 980 |                588 |
-| 250/500     |         1,840 |        1,100 |                 704 |                422 |
-| 500         |         1,140 |          680 |                 507 |                304 |
+| 30          |        19,200 |       11,500 |               7,100 |              4,260 |
+| 60          |         9,980 |        5,990 |               3,900 |              2,340 |
+| 120         |         4,460 |        2,670 |               2,080 |              1,250 |
+| **120/500** |         2,270 |        1,360 |                 904 |            **542** |
+| 250         |         2,210 |        1,330 |               1,020 |                613 |
+| 250/500     |         1,620 |          972 |                 673 |                404 |
+| 500         |         1,100 |          662 |                 536 |                322 |
 
 **Every budget measured clears 300 runs/h on 8 workers.** At 30, 60 and 120 sims (the
 three the brief names) the margin is 4-14x even at full length and with the 0.6 factor.
 
 ### 2.6 What the budget buys
 
-Paired by seed (same seed, same rules policy, only the budget differs), 58 seeds. "Boss
-kills" counts each side's kills. "Only one side cleared" counts the seeds where exactly one
-side killed the boss, with the exact McNemar p-value:
+Paired by seed (same seed, same rules policy, only the budget differs), 57-58 seeds. "Boss
+kills" counts each side's kills. "Only one side cleared" counts the seeds where exactly
+one side killed the boss, with the exact McNemar p-value:
 
 | comparison                   | mean floor difference (paired SE) | boss kills     | only one side cleared (p) |
 | ---------------------------- | --------------------------------- | -------------- | ------------------------- |
-| 500 - 120                    | **+0.91 (0.40)**                  | 6 vs 1         | 6 vs 1 (0.125)            |
-| 120/500 - 120                | **+0.45 (0.23)**                  | 1 vs 1         | 1 vs 1 (1.000)            |
-| 250 - 120                    | +0.00 (0.43)                      | 2 vs 1         | 2 vs 1 (1.000)            |
-| 250/500 - 120/500            | -0.24 (0.47)                      | 5 vs 1         | 4 vs 0 (0.125)            |
-| 500 - 120/500                | +0.47 (0.46)                      | 6 vs 1         | 5 vs 0 (0.062)            |
-| 60 - 30, 120 - 30 (20 seeds) | +0.15 (0.29), -0.05 (0.21)        | 1 vs 0, 0 vs 0 |                           |
+| 500 - 120                    | -0.14 (0.38)                      | 9 vs 6         | 6 vs 3 (0.508)            |
+| 120/500 - 120                | +0.56 (0.42)                      | 7 vs 5         | 5 vs 3 (0.727)            |
+| 250 - 120                    | -0.21 (0.40)                      | 7 vs 6         | 5 vs 4 (1.000)            |
+| 250/500 - 120/500            | +0.05 (0.34)                      | 7 vs 7         | 4 vs 4 (1.000)            |
+| 500 - 120/500                | -0.53 (0.32)                      | 9 vs 7         | 6 vs 4 (0.754)            |
+| 60 - 30, 120 - 30 (20 seeds) | +0.05 (0.84), +1.85 (1.11)        | 0 vs 0, 3 vs 0 | 0 vs 0, 3 vs 0 (0.250)    |
 
-Two floor differences are resolved: flat 500 over flat 120 (t = 2.3), and 120/500 over
-120 (t = 2.0). Raising the ordinary-fight budget from 120 to 250 bought no floors, with or
-without 500 in the hard fights. FINDINGS saw the same for ordinary fights: 60 to 300 sims
-was +0.8 HP (the augmented rows of its "Plain MCTS figures it out" table).
+No floor difference is resolved. The largest are 120 over 30 on 20 seeds (+1.85, t = 1.7),
+flat 500 below 120/500 (-0.53, t = -1.6) and 120/500 over 120 (+0.56, t = 1.3). The first
+measurement's two resolved differences, flat 500 over flat 120 (t = 2.3) and 120/500 over
+120 (t = 2.0), did not hold up (2.1). Raising the ordinary-fight budget from 120 to 250
+bought no floors, with or without 500 in the hard fights. FINDINGS saw the same for
+ordinary fights: 60 to 300 sims was +0.8 HP (the augmented rows of its "Plain MCTS figures
+it out" table).
 
-**Boss kills lean the other way.** No boss-kill difference is resolved at 58 seeds, but
-every one points the same way: more ordinary-fight simulations bring more HP to the boss.
-250/500 cleared 4 seeds that 120/500 did not, and never the reverse. Scored with the value
-the policy maximizes (V with W = 26, 5.2), 250/500 - 120/500 is +0.38 floors (paired SE
-0.62) and 500 - 120/500 is +1.24 (0.66).
+**Boss kills are not resolved either.** Flat 500 kills the most bosses (9 of 58, against 6
+at 120 and 7 at 120/500), but no comparison is significant. The first measurement's lean
+towards more ordinary-fight simulations is gone: 250/500 and 120/500 each cleared 4 seeds
+the other did not. Scored with the value the policy maximizes (V with W = 26, 5.2),
+250/500 - 120/500 is +0.05 floors (paired SE 0.59) and 500 - 120/500 is -0.21 (0.69).
 
 ### 2.7 The default budget: 120/500
 
@@ -444,19 +456,23 @@ budget clears 300 runs/h, so the choice is about strength per unit of compute: w
 extra simulations change outcomes, and what they cost. The reasons:
 
 1. **It clears 300 runs/h with margin under every assumption measured.** Full-length runs
-   give 911/h by linear extrapolation and 547/h with the 0.6 factor. Today's run length
-   gives 1,820-3,040/h.
-2. **Its compute goes where outcomes change.** Deaths come from elites and the boss
-   (2.3). There 500 sims cut elite deaths from 0.60 (120) to 0.48, and 0.28 at flat 500.
-   A searcher that dies in elites more often than the live coach does teaches V to avoid
-   elites. The live coach searches about 8,000 simulations per decision (spec 7.3), so
-   self-play's hard fights should be as strong as can be afforded.
-3. **It is measurably better than flat 120**: +0.45 floors, paired SE 0.23.
-4. **Extra ordinary-fight budget has not been shown to pay, but boss kills lean towards
-   it** (2.6). 250/500 costs 29% more per full-length run than 120/500. With neither side
-   resolved, throughput breaks the tie for now, and Task 4 settles it (below).
-5. **Flat 500 is an upgrade candidate, not the default.** It costs 1.8x at full length and
-   has no margin under the 0.6 factor (304/h).
+   give 904/h by linear extrapolation and 542/h with the 0.6 factor. Today's run length
+   gives 1,360-2,270/h.
+2. **Its compute goes where outcomes change.** Deaths come from elites and the boss (2.3).
+   There, elite deaths were 0.16 at 120/500 (13 of 79) against 0.25 at 120 (20 of 81).
+   Flat 500, which plays elites at the same 500 sims, measured 0.25 (20 of 81), so this is
+   within noise. A searcher that dies in elites more often than the live coach does
+   teaches V to avoid elites. The live coach searches about 8,000 simulations per decision
+   (spec 7.3), so self-play's hard fights should be as strong as can be afforded.
+3. **It is ahead of flat 120, though not resolved**: +0.56 floors, paired SE 0.42. The
+   first measurement's +0.45 (SE 0.23) did not hold up (2.6).
+4. **Extra ordinary-fight budget has not been shown to pay** (2.6): 250/500 - 120/500 is
+   +0.05 floors, and the two are even on boss kills. 250/500 costs 34% more per
+   full-length run than 120/500. With neither side resolved, throughput breaks the tie for
+   now, and Task 4 settles it (below).
+5. **Flat 500 is an upgrade candidate, not the default.** It costs 1.7x at full length,
+   has little margin under the 0.6 factor (322/h), and measured -0.53 floors against
+   120/500 (not resolved) with 9 boss kills against 7.
 
 **The Task 4 recheck.** Once generation 1 is trained, Task 4 plays 200 budget-check seeds
 (`B0000`-`B0199`, used nowhere else) with the generation-1 learner at argmax, at 120/500
@@ -466,12 +482,12 @@ and at 250/500, paired by seed. It switches the default to 250/500 when all thre
    McNemar on the seeds only one budget cleared, one-sided p < 0.05.
 2. **Floors are not given up.** The paired 95% CI lower bound on the mean-floor difference
    (250/500 - 120/500) is above -0.25.
-3. **Throughput holds.** Let f be generation 0's measured runs/h divided by 3,040, the
+3. **Throughput holds.** Let f be generation 0's measured runs/h divided by 2,270, the
    single-process extrapolation for the same policy and budget (2.3). The budget stays
-   eligible while its full-length rate from 2.4 times f is at least 300 runs/h: 704 f for
-   250/500, which needs f >= 0.43.
+   eligible while its full-length rate from 2.4 times f is at least 300 runs/h: 673 f for
+   250/500, which needs f >= 0.45.
 
-Flat 500 joins the check on the same terms when 507 f >= 300, that is f >= 0.59. The
+Flat 500 joins the check on the same terms when 536 f >= 300, that is f >= 0.56. The
 outcome goes into `status.json` and into this section. A budget change is a config
 change that starts a new data era: shards record the budget, the fight buffer keeps only
 fights at the current budget, V's 8-generation window ages the rest out, and the champion
@@ -486,9 +502,9 @@ ordinary. Every fight is recorded with the budget it was played at.
 
 ### 2.8 What a generation costs
 
-A generation of 2,000 runs takes 40-66 min at today's run length. At full length it takes
+A generation of 2,000 runs takes 53-88 min at today's run length. At full length it takes
 2.2 h (linear) to 3.7 h (0.6 factor). The 200-seed evaluation takes 13-22 min at full
-length, and training about 10 min. That is roughly 6-26 generations and 13,000-70,000
+length, and training about 10 min. That is roughly 6-21 generations and 13,000-55,000
 self-play runs a day.
 
 ---
@@ -1342,7 +1358,7 @@ decks `d_j = deck - i + P_j` (upgraded for TransformToRandomUpgraded):
      1.67 event option screens per run, and 27 distinct events. Act 1 can meet 31 events:
      the two act-1 pools hold 40 names (`RunMapGenerator.cs:276-410`), and 9 of them
      refuse act index 0 (`scripts/soak_act_one.py:40-50`). At the default budget's
-     13,000-70,000 runs a day (2.8), each act-1 event is visited roughly 650-3,500 times
+     13,000-55,000 runs a day (2.8), each act-1 event is visited roughly 650-2,750 times
      a day. The (event x option) one-hot plus the shared trunk generalise across states.
 - **Map choices** are `map.node` afterstates: the chosen node becomes the position,
   block C summarises everything reachable after it, and block B says what the room is.
@@ -1375,7 +1391,7 @@ embedding of a deck is the count-weighted sum of per-card vectors.
 shop and rest judgement (spec section 3). Upstream measured that cutting a combat net
 from 935k to 167k parameters moved validation NLL by 0.002 ("capacity never was the
 limit", FINDINGS). The regime is data-bound: about 16k runs per buffer window (5.4), and
-a few dozen correlated decisions per run (51-58 engine steps, many of them auto screens,
+a few dozen correlated decisions per run (54-64 engine steps, many of them auto screens,
 2.3). So the width goes into shared embeddings, a 64-dimensional vector per card for
 cards that appear thousands of times a day, and a two-layer 256 trunk. Weight decay and
 early stopping handle the rest. Inference in the workers is numpy (`NumpyMLP` loaded
@@ -1397,7 +1413,7 @@ asserts the numpy and torch outputs agree within 1e-5.
   the same 16 rows (`RunConstants.MapBossRow`), so Act 2 spans floors 18 to 34. Act 2 is
   not validated in the emulator yet (spec section 3), so nothing can measure how far such a
   run gets. W assumes half of Act 2: 18 + 8 = 26. That is deliberately modest for a
-  policy that dies near floor 13 of Act 1 today.
+  policy that ends near floor 14 of Act 1 today.
   - What W buys: turning 1 percentage point of "dies at the boss" into "kills the boss"
     is worth 0.01 \* (26 - 17) = 0.09 floors. At W = 18 it would be worth 0.01, and V
     would barely tell a deck that can kill the boss from one that only reaches it.
@@ -1460,7 +1476,7 @@ given the seed.
 
 ### 5.6 Generations, evaluation, promotion
 
-- **A generation** is **2,000 runs** at the default budget: 40-66 min on 8 workers at
+- **A generation** is **2,000 runs** at the default budget: 53-88 min on 8 workers at
   today's run length, and 2.2-3.7 h once runs reach the boss (2.8). Training follows
   (minutes), then evaluation of the new learner.
 - **Seed sets.** They never overlap. Every seed is drawn from `0-9A-Z` without I and O,
@@ -1498,11 +1514,11 @@ given the seed.
   Mean floor counts a boss kill as 18, the plan's "mean floor reached"; mean `V_W` is
   reported beside it. Boss-kill rates carry Wilson 95% intervals.
 
-- **What the rule can see.** The per-seed floor SD measured in section 2 is about 4.0, so
-  the challenger's CI half-width is 1.96 \* 4.0 / sqrt(200) = 0.55 floors. Two policies'
-  paired per-seed differences have an SD of 3.0-3.6 (2.6). A true gain of delta floors is
-  therefore promoted with probability of about Phi((delta - 0.55) / 0.23): 14% for 0.3,
-  50% for 0.55, 97% for 1.0. The rule is deliberately conservative, and it costs
+- **What the rule can see.** The per-seed floor SD measured in section 2 is about 3.7, so
+  the challenger's CI half-width is 1.96 \* 3.7 / sqrt(200) = 0.51 floors. Two policies'
+  paired per-seed differences have an SD of 2.4-3.2 (2.6). A true gain of delta floors is
+  therefore promoted with probability of about Phi((delta - 0.51) / 0.20): 15% for 0.3,
+  50% for 0.51, 99% for 1.0. The rule is deliberately conservative, and it costs
   nothing to keep training through unpromoted generations. The guard allows the noise of
   a paired count, and two kills more.
 - **Self-play uses the latest learner**, not the champion (AlphaZero, not AlphaGo Zero).
