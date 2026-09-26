@@ -326,10 +326,13 @@ def compare(challenger: EvalResult, champion: EvalResult) -> Comparison:
     mine, best = challenger.summary(s), champion.summary(s)
     n01 = sum(theirs[seed].boss_killed and not ours[seed].boss_killed for seed in s)
     n10 = sum(ours[seed].boss_killed and not theirs[seed].boss_killed for seed in s)
+    # The value, not the floor: floors saturate at the boss, where a kill is only floor
+    # 18, while the value weighs a kill at W, the currency the policy maximizes (5.2).
     ci_rule = rolled_back = False
-    if mine.ci95 is not None and best.mean_floor is not None:
-        low, high = mine.ci95
-        ci_rule, rolled_back = low > best.mean_floor, high < best.mean_floor
+    _, value_ci = mean_ci([v for seed in s if (v := ours[seed].value) is not None])
+    if value_ci is not None and best.mean_value is not None:
+        low, high = value_ci
+        ci_rule, rolled_back = low > best.mean_value, high < best.mean_value
     guard = boss_kill_guard(n01, n10)
     return Comparison(
         seeds=s,

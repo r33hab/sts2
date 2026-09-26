@@ -192,11 +192,28 @@ class CompareTests(unittest.TestCase):
             for i, x in enumerate(s)
         ]
         comparison = compare_rows(challenger, champion)
-        # 14.3 - 1.96 * 0.905 / 10 = 14.12 > 10.8.
+        # 14.3 - 1.96 * 0.905 / 10 = 14.12 > 11.6, the champion's mean value.
         self.assertTrue(comparison.ci_rule)
         self.assertEqual((comparison.n01, comparison.n10), (10, 0))
         self.assertFalse(comparison.guard)  # 10 > max(2, ceil(1.96 sqrt(10))) = 7
         self.assertFalse(comparison.promoted)
+
+    def test_more_boss_kills_win_on_value_even_with_a_lower_mean_floor(self):
+        # Floors saturate at the boss (a kill is floor 18); the value weighs a kill at
+        # W = 26: 23.8 against 21.5 here, though the mean floor is 17.4 against 17.5.
+        s = seeds(100)
+        champion = [
+            (x, "completed", 18, True) if i < 50 else (x, "completed", 17, False)
+            for i, x in enumerate(s)
+        ]
+        challenger = [
+            (x, "completed", 18, True) if i < 80 else (x, "completed", 15, False)
+            for i, x in enumerate(s)
+        ]
+        comparison = compare_rows(challenger, champion)
+        self.assertLess(comparison.challenger.mean_floor, comparison.champion.mean_floor)
+        self.assertTrue(comparison.ci_rule)
+        self.assertTrue(comparison.promoted)
 
     def test_the_ci_rule_uses_the_lower_bound_not_the_mean(self):
         s = seeds(8)

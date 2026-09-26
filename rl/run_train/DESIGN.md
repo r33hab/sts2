@@ -1790,7 +1790,7 @@ Task 5, the default 10 (E11).
 | `W` (value of a boss kill)    | 26                                                                                        | 5.2                      |
 | `runs_per_generation`         | 2,000                                                                                     | 5.6                      |
 | seed sets                     | 200 eval, 500 final test, 200 budget check                                                | 5.6                      |
-| promotion                     | CI rule on mean floor + boss-kill guard, on the seeds both completed                      | 5.6                      |
+| promotion                     | CI rule on the value (a kill worth W) + boss-kill guard, on the seeds both completed                      | 5.6                      |
 | `tau_g`, `eps`, `eps0`        | max(0.10, 0.60 \* 0.85^g), 0.02, 0.15                                                     | 5.5                      |
 | `beta` (bootstrap blend)      | 0.3                                                                                       | 5.2                      |
 | buffers (V / fights)          | 8 generations / 400k fights                                                               | 5.4                      |
