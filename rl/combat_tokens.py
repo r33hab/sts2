@@ -166,6 +166,14 @@ ENDTURN_CLAMP = 15.0
 # case we are in, and reports the spread where there is one.
 ENDTURN_TRIALS = 5
 
+# HP past which a creature's exact number means nothing: more than any real enemy holds (the
+# largest, Aeonglass, has 535; the test reads the generated table). A Waterfall Giant waiting
+# to blow stands at 999999999 (`TriggerAboutToBlowState`), which the observation reads as
+# its bound, 32768 -- as `hp / 50` a channel of 655, hundreds of times anything a fight
+# holds. HP-derived channels are clamped here; nothing else is, so a negative buff amount
+# keeps its sign.
+HP_BOUND = 600
+
 # WHOSE a token is, as its own embedded id rather than a number. 0 is the player, 1..N
 # are enemy slots. Every token carries one, so a buff and the body it sits on share an
 # owner and attention can match them exactly.
@@ -335,7 +343,7 @@ def encode(handle: int, obs, encounter_id: int) -> Tokens:
     push(
         TYPE_GLOBAL,
         VOCAB.encounter.get(encounter_id, 0),
-        F_HP=hp / max(1, max_hp),
+        F_HP=min(1.0, hp / max(1, max_hp)),
         F_BLOCK=block / 50.0,
         F_ENERGY=energy / 10.0,
         F_DRAW_N=draw_n / 20.0,
@@ -430,10 +438,14 @@ def encode(handle: int, obs, encounter_id: int) -> Tokens:
             F_MAGNITUDE=counter / 20.0,
         )
 
+    # An empty buff slot reads (0, 0). Id 0 alone is not empty: it is Strength
+    # (`BuffId.Strength`), whose magnitude is never 0 in the list, because
+    # `BuffSystem.Apply` removes a buff that reaches 0. Skipping every id 0 hid Strength,
+    # positive and negative, from the network.
     for slot in range(MAX_PLAYER_BUFFS):
         base = PLAYER_BUFF_OFFSET + slot * 2
         buff_id, magnitude = obs[base], obs[base + 1]
-        if buff_id == 0:
+        if buff_id == 0 and magnitude == 0:
             continue
         push(
             TYPE_BUFF,
@@ -461,8 +473,8 @@ def encode(handle: int, obs, encounter_id: int) -> Tokens:
             TYPE_ENEMY,
             VOCAB.enemy.get(def_id, 0),
             owner=slot + 1,
-            F_ENEMY_HP=e_hp / 50.0,
-            F_ENEMY_HP_FRAC=e_hp / max(1, e_max),
+            F_ENEMY_HP=min(e_hp, HP_BOUND) / 50.0,
+            F_ENEMY_HP_FRAC=min(1.0, e_hp / max(1, e_max)),
             F_ENEMY_BLOCK=e_block / 50.0,
         )
         # This turn's announced move, kind and size, attached to its body by the owner id.
@@ -484,7 +496,7 @@ def encode(handle: int, obs, encounter_id: int) -> Tokens:
             )
         for buff_slot in range(MAX_ENEMY_BUFFS):
             b = base + 5 + buff_slot * 2
-            if obs[b] == 0:
+            if obs[b] == 0 and obs[b + 1] == 0:  # empty; id 0 is Strength (above)
                 continue
             push(
                 TYPE_ENEMY_BUFF,

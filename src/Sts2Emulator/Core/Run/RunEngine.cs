@@ -1033,8 +1033,8 @@ public sealed class RunEngine
         obs[offset + 11] = State.RewardCards[2];
         // The FOURTH option lives at the end of the observation rather than here, so that
         // adding it moved nothing. See `RunConstants.FourthRewardObsOffset`.
-        obs[RunConstants.FourthRewardObsOffset] = State.LastingCandyRewardCard;
-        obs[RunConstants.FourthRewardObsOffset + 1] = State.LastingCandyRewardUpgraded ? 1 : 0;
+        obs[offset + RunConstants.FourthRewardObsOffset] = State.LastingCandyRewardCard;
+        obs[offset + RunConstants.FourthRewardObsOffset + 1] = State.LastingCandyRewardUpgraded ? 1 : 0;
         for (int i = 0; i < RunConstants.MapChoices; i++)
         {
             // Types only. What is BEHIND a node is not on the game's map -- see

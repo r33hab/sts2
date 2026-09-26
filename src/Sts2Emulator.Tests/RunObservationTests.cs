@@ -290,4 +290,33 @@ public class RunObservationTests
         // precisely so that adding it moved none of the offsets above. See E493.
         Assert.Equal(RunConstants.FourthRewardObsOffset + 2, RunConstants.RunExtraObsSize);
     }
+
+    /// <summary>
+    /// Lasting Candy's fourth option sits at the end of the RUN block, like every other run
+    /// field: at CombatObsSize + FourthRewardObsOffset. Written without the block's offset,
+    /// it landed inside the combat block, and a reader of the run block saw card 0.
+    /// </summary>
+    [Fact]
+    public void TheFourthRewardOptionIsWrittenInsideTheRunBlock()
+    {
+        var engine = new RunEngine();
+        engine.Reset("ABCDEF");
+        var plain = Observe(engine);
+        int card = engine.State.Deck[0].DefId;
+        engine.State.LastingCandyRewardCard = card;
+        engine.State.LastingCandyRewardUpgraded = true;
+
+        var obs = Observe(engine);
+
+        int at = RunConstants.CombatObsSize + RunConstants.FourthRewardObsOffset;
+        Assert.Equal(card, obs[at]);
+        Assert.Equal(1, obs[at + 1]);
+        for (int i = 0; i < obs.Length; i++)
+        {
+            if (i != at && i != at + 1)
+            {
+                Assert.Equal(plain[i], obs[i]); // nothing outside those two cells moved
+            }
+        }
+    }
 }
