@@ -129,15 +129,18 @@ public class BellowsTests
 public class IceCreamTests
 {
     /// <summary>
-    /// `ShouldPlayerResetEnergy` is false from turn two onwards, so energy CARRIES rather
-    /// than refilling. Turn one still resets, which is what puts energy on the board.
+    /// `ShouldPlayerResetEnergy` is false from turn two onwards, and then `CombatManager`
+    /// calls `PlayerCombatState.AddMaxEnergyToCurrent()` instead of `ResetEnergy()`: the
+    /// leftover energy CARRIES and the turn's energy is added on top. Turn one still
+    /// resets, which is what puts energy on the board. (This test used to expect the
+    /// leftover alone, which left an Ice Cream player on zero energy for the rest of the
+    /// fight once a turn spent everything.)
     /// </summary>
     [Fact]
     public void EnergyCarriesFromTurnTwoOnwards()
     {
-        // Carrying is only visible once something has been SPENT: an unspent turn looks
-        // identical either way, because the carried amount and the refill are both the
-        // maximum. So spend one and check the turn starts short.
+        // Carrying is only visible once something has been SPENT: spend one and check
+        // the next turn starts with the leftover plus a full turn's energy.
         var fight = Fight.WithRelics(RelicEffects.IceCream);
         fight.State.PlayerHp = 999;
         fight.State.Hand = [Card(SI.StrikeSilent)];
@@ -148,7 +151,7 @@ public class IceCreamTests
 
         fight.EndTurn();
 
-        Assert.Equal(max - 1, fight.State.Energy);
+        Assert.Equal(max - 1 + max, fight.State.Energy);
     }
 }
 

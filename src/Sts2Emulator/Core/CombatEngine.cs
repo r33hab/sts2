@@ -1412,11 +1412,16 @@ public static class CombatEngine
         state.LastAttackOrSkillThisTurn = null;
         // `VoidFormPower.BeforeSideTurnStart` clears its own count.
         state.VoidFormCardsPlayedThisTurn = 0;
-        // `IceCream.ShouldPlayerResetEnergy` is false from turn two on, so the energy
-        // carries instead of refilling.
+        // `IceCream.ShouldPlayerResetEnergy` is false from turn two on, and then
+        // `CombatManager` calls `AddMaxEnergyToCurrent` instead of `ResetEnergy`: the
+        // leftover energy carries AND the turn's energy is added on top.
         if (Effects.RelicEffects.ShouldResetEnergy(state, state.Turn + 1))
         {
             state.Energy = EffectiveMaxEnergyForTurn(state, state.Turn + 1);
+        }
+        else
+        {
+            state.Energy += EffectiveMaxEnergyForTurn(state, state.Turn + 1);
         }
         state.PlayerHpLostThisTurn = 0;
         state.CardsPlayedThisTurn = 0;
