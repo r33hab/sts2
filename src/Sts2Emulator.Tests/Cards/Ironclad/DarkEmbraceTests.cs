@@ -73,4 +73,27 @@ public class DarkEmbraceTests
         Assert.Equal(6, state.Hand.Count);
         Assert.Equal(1, state.ExhaustPile.Count(c => c.DefId == IC.AscendersBane));
     }
+
+    [Fact]
+    public void FlakCannonSurvivesADarkEmbraceShuffleMidExhaust()
+    {
+        // Each status Flak Cannon exhausts draws through Dark Embrace. With the draw pile
+        // empty, that draw shuffles the discard pile -- the pile being exhausted -- into
+        // the draw pile, and exhausting at a live index ran off the list's end.
+        var state = CombatFactory.NewCombat(seed: 0);
+        BuffSystem.Apply(state.PlayerBuffs, BuffId.DarkEmbrace, 1);
+        state.Hand = [new CardInstance(194, false)]; // Flak Cannon
+        state.DrawPile = [];
+        state.DiscardPile =
+        [
+            new CardInstance(ST.Dazed, false),
+            new CardInstance(ST.Dazed, false),
+            new CardInstance(IC.StrikeIronclad, false),
+        ];
+        state.Energy = 3;
+
+        CombatEngine.Step(state, 0, new Random(0));
+
+        Assert.Equal(2, state.ExhaustPile.FindAll(c => c.DefId == ST.Dazed).Count);
+    }
 }
