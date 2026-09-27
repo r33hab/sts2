@@ -33,7 +33,7 @@ from test_run_train_features import (  # noqa: E402
     make_view,
 )
 
-from rl.run_train import FEATURE_VERSION, features, models, shards  # noqa: E402
+from rl.run_train import FEATURE_VERSION, features, models, shards, vocab  # noqa: E402
 from rl.run_train.features import CardRef  # noqa: E402
 from sts2_gym.env import ENCOUNTER_NAMES  # noqa: E402
 
@@ -96,23 +96,25 @@ def torch_fight_logits(net, rows, encounters, weak) -> np.ndarray:
 
 class ArchitectureTests(unittest.TestCase):
     def test_the_designed_sizes(self):
-        # DESIGN.md 5.1: dense 22 + 25 + 88 + 1 = 136 and 338; embeddings 64 + 32 + 8.
+        # DESIGN.md 5.1: dense 22 + 25 + 88 + 1 = 136; V's 338 plus block X's 12 = 350
+        # (FULL_RUNS.md); embeddings 64 + 32 + 8. Version 1 reads 338 of 1851.
         self.assertEqual(models.FIGHT_DENSE, 136)
-        self.assertEqual(models.VALUE_DENSE, 338)
+        self.assertEqual(models.VALUE_DENSE, 350)
+        self.assertEqual(models.V1_VALUE_DENSE, 338)
         self.assertEqual(models.COUNTS, 1154 + 296 + 63)
-        self.assertEqual(models.VALUE_INPUT, 1851)
-        self.assertEqual((models.FIGHT_CLASSES, models.FLOOR_CLASSES), (22, 18))
+        self.assertEqual((models.VALUE_INPUT, models.V1_VALUE_INPUT), (1863, 1851))
+        self.assertEqual((models.FIGHT_CLASSES, models.FLOOR_CLASSES), (22, 53))
         self.assertEqual(shards.FLOOR_CLASSES, models.FLOOR_CLASSES)
         self.assertEqual(models.N_ENCOUNTERS, len(ENCOUNTER_NAMES))
         self.assertEqual(set(ENCOUNTER_NAMES), set(range(models.N_ENCOUNTERS)))
 
     def test_parameter_counts_are_the_designs(self):
-        # "About 180k" and "about 270k" parameters (5.1). Both share the embedding size,
+        # "About 180k" and "about 280k" parameters (5.1). Both share the embedding size,
         # 1154 x 64 + 296 x 32 + 63 x 8 = 83,832. FightNet's layers are 240 -> 256 -> 128
-        # -> 22, and V's are 442 -> 256 -> 256 -> 18 plus the one-unit end-HP head.
+        # -> 22, and V's are 454 -> 256 -> 256 -> 53 plus the one-unit end-HP head.
         count = lambda net: sum(p.numel() for p in net.parameters())  # noqa: E731
         self.assertEqual(count(models.FightNet()), 181_262)
-        self.assertEqual(count(models.RunValueNet()), 267_915)
+        self.assertEqual(count(models.RunValueNet()), 279_982)
 
     def test_numpy_inference_never_imports_torch(self):
         # Self-play workers and the engine service run numpy only (5.1).
@@ -254,21 +256,33 @@ class CheckpointTests(unittest.TestCase):
 
 class ValueTests(unittest.TestCase):
     @staticmethod
-    def distribution(**mass: float) -> np.ndarray:
-        """Return a floor distribution from {"f<k>": p}, k = 1..18 (18 = boss killed)."""
-        p = np.zeros(models.FLOOR_CLASSES)
+    def distribution(classes: int = 18, **mass: float) -> np.ndarray:
+        """Return a floor distribution from {"f<k>": p}, class k-1 for floor k.
+
+        The last class is the won run (18 classes: the Act 1 export, where it is the boss
+        kill; 53: a full-run model, where floor 53 is "won").
+        """
+        p = np.zeros(classes)
         for key, value in mass.items():
-            p[models.floor_class(int(key[1:]))] = value
+            p[int(key[1:]) - 1] = value
         return p
 
     def test_v_w_and_p_boss_from_a_hand_built_distribution(self):
+        # The Act 1 export's 18 classes value exactly as they always have.
         p = self.distribution(f5=0.25, f12=0.25, f17=0.3, f18=0.2)
         # V_W = sum_k k p_k + W p_18 (5.2): 5/4 + 12/4 + 17 * 0.3 + 26 * 0.2 = 14.55.
         self.assertAlmostEqual(float(models.expected_floors(p, 26.0)), 14.55)
         self.assertAlmostEqual(float(models.expected_floors(p, 18.0)), 12.95)
-        self.assertAlmostEqual(float(models.boss_chance(p)), 0.2)
+        self.assertAlmostEqual(float(models.win_chance(p)), 0.2)
         both = models.expected_floors(np.stack([p, p]), 26.0)
         np.testing.assert_allclose(both, [14.55, 14.55])
+
+    def test_a_full_run_distribution_counts_a_win_as_floor_53(self):
+        # 53 classes: floors 1-52, then won. 0.5 * 17 + 0.3 * 40 + 0.2 * 53 = 31.1.
+        p = self.distribution(53, f17=0.5, f40=0.3, f53=0.2)
+        self.assertAlmostEqual(float(models.expected_floors(p, 53.0)), 31.1)
+        self.assertAlmostEqual(float(models.win_chance(p)), 0.2)
+        self.assertEqual(models.floor_class(vocab.WON_FLOOR), models.FLOOR_CLASSES - 1)
 
     def test_w_changes_the_ranking_only_through_p_18(self):
         # Same p_18: the order never depends on W.
@@ -296,8 +310,9 @@ class ValueTests(unittest.TestCase):
     def test_final_floors_map_to_classes(self):
         self.assertEqual(models.floor_class(1), 0)
         self.assertEqual(models.floor_class(17), 16)
-        self.assertEqual(models.floor_class(18), models.BOSS_CLASS)
-        for bad in (0, 19):
+        self.assertEqual(models.floor_class(52), 51)
+        self.assertEqual(models.floor_class(53), models.FLOOR_CLASSES - 1)  # won
+        for bad in (0, 54):
             with self.assertRaises(ValueError):
                 models.floor_class(bad)
 
@@ -378,7 +393,10 @@ class InputTests(unittest.TestCase):
             dense[:, : features.A_SIZE],
             rows[:, features.A_OFFSET : features.A_OFFSET + features.A_SIZE],
         )
-        np.testing.assert_array_equal(counts, rows[:, features.E_OFFSET :])
+        np.testing.assert_array_equal(
+            counts,
+            rows[:, features.E_OFFSET : features.COUNTS_END],
+        )
         self.assertEqual(dense[0, features.A_SIZE + features.D_SIZE + 8], 1.0)
 
     def test_negative_inputs_keep_their_sign(self):

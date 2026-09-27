@@ -13,9 +13,13 @@ embedding is the count-weighted sum of its cards' vectors -- before one MLP:
   encounter ids and a weak flag (136 wide), with the embeddings (240) -> 256 -> 128 -> 22
   logits: class 0 is death, classes 1-21 the HP lost in buckets (-inf, 0], 1-4, 5-8, ...,
   73-76 and 77+ (`fight_class`).
-- **RunValueNet (V)** reads blocks A, B, C, D and the fight block H (338 wide), with the
-  embeddings (442) -> 256 -> dropout 0.1 -> 256 -> 18 floor logits (class k-1: the run ended
-  on floor k; class 17: the Act 1 boss died) and a sigmoid end-HP fraction.
+- **RunValueNet (V)** reads blocks A, B, C, D, X and the fight block H (350 wide), with
+  the embeddings (454) -> 256 -> dropout 0.1 -> 256 -> 53 floor logits (class k-1: the run
+  ended on floor k, 1-52; class 52: the run was won) and a sigmoid end-HP fraction.
+
+A feature-version-1 checkpoint (the Act 1 export: no block X, 18 classes, class 17 the
+Act 1 boss kill) still loads for inference: `load_numpy` accepts it, and its nets read
+the first `V1_BASE_SIZE` numbers of a version-2 vector (`NumpyNets.base_size`).
 
 The inputs are assembled here, in numpy, for training and inference alike, so the two
 cannot drift (`fight_inputs`, `value_inputs`). The one transformation is a clamp on the HP
@@ -33,12 +37,13 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from . import FEATURE_VERSION, features
+from . import FEATURE_VERSION, features, vocab
 from .features import (
     A_OFFSET,
     A_SIZE,
     B_OFFSET,
     BASE_SIZE,
+    COUNTS_END,
     D_OFFSET,
     D_SIZE,
     E_OFFSET,
@@ -46,6 +51,9 @@ from .features import (
     F_SIZE,
     FIGHT_BLOCK_SIZE,
     G_SIZE,
+    V1_BASE_SIZE,
+    X_OFFSET,
+    X_SIZE,
 )
 from .shards import write_atomic
 
@@ -58,7 +66,8 @@ if TYPE_CHECKING:
     from .features import FightQuery
 
 __all__ = [
-    "BOSS_CLASS",
+    "LEGACY_FEATURE_VERSION",
+    "LEGACY_FLOOR_CLASSES",
     "COUNTS",
     "FIGHT_CLASSES",
     "FIGHT_DENSE",
@@ -71,7 +80,7 @@ __all__ = [
     "NumpyFightNet",
     "NumpyNets",
     "NumpyValueNet",
-    "boss_chance",
+    "win_chance",
     "expected_floors",
     "expected_loss",
     "fight_class",
@@ -93,9 +102,12 @@ __all__ = [
 
 # Class 0 is death, 1 lost nothing, 2-20 lost 1-4 ... 73-76, and 21 lost 77 or more.
 FIGHT_CLASSES = 22
-# Class k-1: the run ended on floor k (1-17); class 17: the Act 1 boss died.
-FLOOR_CLASSES = 18
-BOSS_CLASS = FLOOR_CLASSES - 1
+# Class k-1: the run ended on floor k (1-52); the last class: the run was won. The count
+# is derived from the run engine's map (`vocab.FLOOR_CLASSES`).
+FLOOR_CLASSES = vocab.FLOOR_CLASSES
+# The Act 1 export's format: feature version 1, floors 1-17 and the Act 1 boss kill.
+LEGACY_FEATURE_VERSION = 1
+LEGACY_FLOOR_CLASSES = 18
 _LOSS_BUCKET = 4  # HP per loss bucket
 
 # The HP a loss class stands for, for E[HP lost]: bucket centres (2.5 for 1-4), 0 for
@@ -104,7 +116,6 @@ _LOSS_BUCKET = 4  # HP per loss bucket
 LOSS_CENTRES = np.array(
     [0.0, 0.0, *(_LOSS_BUCKET * j + 2.5 for j in range(FIGHT_CLASSES - 2))],
 )
-_FLOORS = np.arange(1, FLOOR_CLASSES, dtype=np.float64)  # the floors of classes 0-16
 
 
 def fight_class(hp_before: int, hp_after: int) -> int:
@@ -122,33 +133,38 @@ def fight_class(hp_before: int, hp_after: int) -> int:
 
 
 def floor_class(final_floor: int) -> int:
-    """Return the floor class of a run's final floor: 1-17, or 18 for a boss kill (E10).
+    """Return the floor class of a run's final floor: 1-52, or 53 for a won run.
 
     Raises:
-        ValueError: For a floor outside 1-18.
+        ValueError: For a floor outside 1-53.
 
     """
     if not 1 <= final_floor <= FLOOR_CLASSES:
         raise ValueError(
-            f"a final floor is 1-18 (18 = the boss died), not {final_floor}",
+            f"a final floor is 1-{FLOOR_CLASSES} ({FLOOR_CLASSES} = the run was won), "
+            f"not {final_floor}",
         )
     return final_floor - 1
 
 
 def expected_floors(p: np.ndarray, w: float) -> np.ndarray:
-    """Return `V_W = sum_k k * p_k + W * p_18` over the last axis (5.2).
+    """Return `V_W = sum_k k * p_k + W * p_last` over the last axis (5.2).
 
-    Expected final floor, with a boss kill worth `w` floors (the design's W = 26: the floor
-    Act 2 opens on plus half of it). W is in no training target, so it changes the ranking
-    of two options only through their boss-kill chances.
+    Expected final floor: class k-1 is floor k, and the last class (a won run; the Act 1
+    boss kill for a version-1 model) is worth `w`, the last floor + 1 (W = 53). Any class
+    count works, so the 18-class Act 1 export is valued as it always was.
     """
     p = np.asarray(p)
-    return p[..., :BOSS_CLASS] @ _FLOORS + w * p[..., BOSS_CLASS]
+    floors = np.arange(1, p.shape[-1], dtype=np.float64)
+    return p[..., :-1] @ floors + w * p[..., -1]
 
 
-def boss_chance(p: np.ndarray) -> np.ndarray:
-    """Return `p_18`, the chance the Act 1 boss dies, over the last axis (5.2)."""
-    return np.asarray(p)[..., BOSS_CLASS]
+def win_chance(p: np.ndarray) -> np.ndarray:
+    """Return the last class's probability over the last axis: a won run (5.2).
+
+    For a version-1 model it is the Act 1 boss kill, which was that model's "won".
+    """
+    return np.asarray(p)[..., -1]
 
 
 def softmax(logits: np.ndarray) -> np.ndarray:
@@ -175,13 +191,16 @@ def expected_loss(probs: np.ndarray, hp: ArrayLike) -> np.ndarray:
 N_ENCOUNTERS = 88
 DECK_EMBED, RELIC_EMBED, POTION_EMBED = 64, 32, 8
 EMBED = DECK_EMBED + RELIC_EMBED + POTION_EMBED
-COUNTS = E_SIZE + F_SIZE + G_SIZE  # blocks E, F and G, which close the base vector
+COUNTS = E_SIZE + F_SIZE + G_SIZE  # blocks E, F and G, which close version 1's vector
 _STATE = A_SIZE + D_SIZE  # FightNet's per-view dense part
 FIGHT_DENSE = _STATE + N_ENCOUNTERS + 1
 _BCD = slice(B_OFFSET, D_OFFSET + D_SIZE)  # blocks B, C and D sit side by side
-VALUE_DENSE = A_SIZE + (_BCD.stop - _BCD.start) + FIGHT_BLOCK_SIZE
+_X = slice(X_OFFSET, X_OFFSET + X_SIZE)
+V1_VALUE_DENSE = A_SIZE + (_BCD.stop - _BCD.start) + FIGHT_BLOCK_SIZE
+VALUE_DENSE = V1_VALUE_DENSE + X_SIZE
 VALUE_INPUT = BASE_SIZE + FIGHT_BLOCK_SIZE
-assert E_OFFSET + COUNTS == BASE_SIZE
+V1_VALUE_INPUT = V1_BASE_SIZE + FIGHT_BLOCK_SIZE
+assert E_OFFSET + COUNTS == COUNTS_END
 
 # HP past which the number means nothing: more than any creature in the game holds. The
 # Waterfall Giant's 999999999 is the sentinel the emulator has; a sentinel must never
@@ -199,7 +218,7 @@ def _scalars(rows: np.ndarray) -> np.ndarray:
 
 
 def _counts(rows: np.ndarray) -> np.ndarray:
-    return np.ascontiguousarray(rows[:, E_OFFSET:BASE_SIZE], dtype=np.float32)
+    return np.ascontiguousarray(rows[:, E_OFFSET:COUNTS_END], dtype=np.float32)
 
 
 def _encounter_one_hot(encounters: np.ndarray) -> np.ndarray:
@@ -253,17 +272,27 @@ def fight_inputs(
 
 
 def value_inputs(rows: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Return V's (dense, counts) for rows of the 1851-wide vector (base plus H).
+    """Return V's (dense, counts) for rows of the 1863-wide vector (base plus H).
+
+    Rows of version 1's 1851 numbers (its base plus H) give version 1's dense part, with
+    no block X: the Act 1 export reads those.
 
     Raises:
         ValueError: For rows of another width.
 
     """
     rows = np.asarray(rows, dtype=np.float32)
-    if rows.ndim != 2 or rows.shape[1] != VALUE_INPUT:
-        raise ValueError(f"V reads {VALUE_INPUT}-wide rows, not shape {rows.shape}")
-    dense = np.concatenate([_scalars(rows), rows[:, _BCD], rows[:, BASE_SIZE:]], axis=1)
-    return dense, _counts(rows)
+    if rows.ndim != 2 or rows.shape[1] not in {VALUE_INPUT, V1_VALUE_INPUT}:
+        raise ValueError(
+            f"V reads {VALUE_INPUT}-wide rows ({V1_VALUE_INPUT} for feature version "
+            f"{LEGACY_FEATURE_VERSION}), not shape {rows.shape}",
+        )
+    base = rows.shape[1] - FIGHT_BLOCK_SIZE
+    parts = [_scalars(rows), rows[:, _BCD]]
+    if base == BASE_SIZE:
+        parts.append(rows[:, _X])
+    parts.append(rows[:, base:])
+    return np.concatenate(parts, axis=1), _counts(rows)
 
 
 # --------------------------------------------------------------------------------------
@@ -381,15 +410,20 @@ class NumpyValueNet:
         dense: np.ndarray,
         counts: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Return the 18 floor logits and the end-HP fraction for assembled inputs."""
+        """Return the floor logits and the end-HP fraction for assembled inputs."""
         joined = np.concatenate([dense, self.embed(counts)], axis=1)
         hidden = _relu(joined @ self.w1.T + self.b1)
         hidden = _relu(hidden @ self.w2.T + self.b2)
         end_hp = _sigmoid(hidden @ self.hp_w.T + self.hp_b)[:, 0]
         return hidden @ self.floor_w.T + self.floor_b, end_hp
 
+    @property
+    def floor_classes(self) -> int:
+        """53, or 18 for the Act 1 export."""
+        return int(self.floor_w.shape[0])
+
     def floor_probs(self, rows: np.ndarray) -> np.ndarray:
-        """Return the floor distribution `p_1 .. p_18` of each 1851-wide row."""
+        """Return the floor distribution of each row (base plus H; `value_inputs`)."""
         logits, _ = self.forward(*value_inputs(rows))
         return softmax(logits)
 
@@ -402,6 +436,15 @@ class NumpyNets:
     value: NumpyValueNet
     meta: dict[str, Any]
 
+    @property
+    def feature_version(self) -> int:
+        return int(self.meta["feature_version"])
+
+    @property
+    def base_size(self) -> int:
+        """How much of a current base vector these nets read: version 1 reads its own."""
+        return V1_BASE_SIZE if self.feature_version == LEGACY_FEATURE_VERSION else BASE_SIZE
+
 
 CHECKPOINT_FORMAT = "run_train/value-models"
 
@@ -411,8 +454,15 @@ def npz_for(pt: Path | str) -> Path:
     return Path(pt).with_suffix(".npz")
 
 
-def _checked(meta: dict[str, Any], path: Path | str) -> dict[str, Any]:
+def _checked(
+    meta: dict[str, Any],
+    path: Path | str,
+    *,
+    legacy: bool = False,
+) -> dict[str, Any]:
     """Return a checkpoint's metadata once it is known to be loadable here.
+
+    `legacy` also accepts feature version 1, the Act 1 export, for inference only.
 
     Raises:
         ValueError: For another format, or another `FEATURE_VERSION` (3.2).
@@ -420,6 +470,8 @@ def _checked(meta: dict[str, Any], path: Path | str) -> dict[str, Any]:
     """
     if meta.get("format") != CHECKPOINT_FORMAT:
         raise ValueError(f"{path} is not a {CHECKPOINT_FORMAT} checkpoint")
+    if legacy and meta.get("feature_version") == LEGACY_FEATURE_VERSION:
+        return meta
     if meta.get("feature_version") != FEATURE_VERSION:
         raise ValueError(
             f"{path} was trained on feature version {meta.get('feature_version')}, and "
@@ -431,8 +483,9 @@ def _checked(meta: dict[str, Any], path: Path | str) -> dict[str, Any]:
 def load_numpy(npz: Path | str) -> NumpyNets:
     """Load a checkpoint's numpy export for inference.
 
-    A file that is not a value-model checkpoint, or was trained on another
-    `FEATURE_VERSION`, raises `ValueError`.
+    A file that is not a value-model checkpoint, or was trained on a `FEATURE_VERSION`
+    other than this build's or version 1 (the Act 1 export), raises `ValueError`. A
+    version-1 checkpoint must have 18 floor classes, and a current one 53.
 
     Raises:
         ValueError: If the file holds no checkpoint metadata (a `.pt`, say).
@@ -444,7 +497,7 @@ def load_numpy(npz: Path | str) -> NumpyNets:
         raise ValueError(
             f"{npz} is not the .npz export of a {CHECKPOINT_FORMAT} checkpoint",
         )
-    meta = _checked(json.loads(str(arrays.pop("meta"))), npz)
+    meta = _checked(json.loads(str(arrays.pop("meta"))), npz, legacy=True)
 
     def part(prefix: str) -> dict[str, np.ndarray]:
         return {
@@ -453,11 +506,22 @@ def load_numpy(npz: Path | str) -> NumpyNets:
             if key.startswith(prefix)
         }
 
-    return NumpyNets(
+    nets = NumpyNets(
         NumpyFightNet(part("fight/")),
         NumpyValueNet(part("value/")),
         meta,
     )
+    expected = (
+        LEGACY_FLOOR_CLASSES
+        if nets.feature_version == LEGACY_FEATURE_VERSION
+        else FLOOR_CLASSES
+    )
+    if nets.value.floor_classes != expected:
+        raise ValueError(
+            f"{npz} has {nets.value.floor_classes} floor classes; feature version "
+            f"{nets.feature_version} has {expected}",
+        )
+    return nets
 
 
 # --------------------------------------------------------------------------------------
@@ -568,7 +632,12 @@ def save(
     """
     import torch  # noqa: PLC0415 -- numpy-only processes never import torch (5.1)
 
-    meta = {**meta, "format": CHECKPOINT_FORMAT, "feature_version": FEATURE_VERSION}
+    meta = {
+        **meta,
+        "format": CHECKPOINT_FORMAT,
+        "feature_version": FEATURE_VERSION,
+        "floor_classes": FLOOR_CLASSES,
+    }
     buffer = io.BytesIO()
     torch.save(
         {"meta": meta, "fight": fight.state_dict(), "value": value.state_dict()},

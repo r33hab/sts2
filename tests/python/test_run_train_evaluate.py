@@ -41,8 +41,8 @@ def outcome_play(task, on_fight) -> dict:
         "generation": task.generation,
         "policy": selfplay.make_policy(task.policy_spec).describe(),
         "outcome": {
-            "final_floor": 18 if killed else 4 + digest % 13,
-            "boss_killed": killed,
+            "final_floor": 53 if killed else 4 + digest % 13,
+            "won": killed,
             "died": not killed,
             "truncated": False,
         },
@@ -51,7 +51,7 @@ def outcome_play(task, on_fight) -> dict:
 
 
 def results(rows: list[tuple[str, str, int | None, bool]]) -> tuple[SeedResult, ...]:
-    """Build SeedResults from (seed, status, floor, boss_killed) rows."""
+    """Build SeedResults from (seed, status, floor, won) rows."""
     out = []
     for seed, status, floor, killed in rows:
         value = None
@@ -110,15 +110,15 @@ class StatisticsTests(unittest.TestCase):
                 self.assertAlmostEqual(interval[1], high, places=4)
         self.assertIsNone(evaluate.wilson(0, 0))
 
-    def test_the_boss_kill_guard_allows_a_paired_counts_noise_and_two_kills(self):
+    def test_the_win_guard_allows_a_paired_counts_noise_and_two_kills(self):
         # Erratum E8: n01 - n10 <= max(2, ceil(1.96 sqrt(n01 + n10))); 2 is a floor.
-        self.assertTrue(evaluate.boss_kill_guard(0, 0))
-        self.assertTrue(evaluate.boss_kill_guard(2, 0))
-        self.assertTrue(evaluate.boss_kill_guard(5, 0))  # ceil(4.38) = 5
-        self.assertFalse(evaluate.boss_kill_guard(6, 0))  # ceil(4.80) = 5
-        self.assertTrue(evaluate.boss_kill_guard(7, 1))  # 6 <= ceil(5.54)
-        self.assertFalse(evaluate.boss_kill_guard(8, 1))  # 7 > ceil(5.88)
-        self.assertTrue(evaluate.boss_kill_guard(0, 30))
+        self.assertTrue(evaluate.win_guard(0, 0))
+        self.assertTrue(evaluate.win_guard(2, 0))
+        self.assertTrue(evaluate.win_guard(5, 0))  # ceil(4.38) = 5
+        self.assertFalse(evaluate.win_guard(6, 0))  # ceil(4.80) = 5
+        self.assertTrue(evaluate.win_guard(7, 1))  # 6 <= ceil(5.54)
+        self.assertFalse(evaluate.win_guard(8, 1))  # 7 > ceil(5.88)
+        self.assertTrue(evaluate.win_guard(0, 30))
 
 
 class SummaryTests(unittest.TestCase):
@@ -142,7 +142,7 @@ class SummaryTests(unittest.TestCase):
         self.assertAlmostEqual(summary.mean_floor, statistics.fmean(floors))
         half = 1.96 * statistics.stdev(floors) / 2
         self.assertAlmostEqual(summary.ci95[1] - summary.ci95[0], 2 * half)
-        self.assertEqual(summary.boss_kill_rate, 0.25)
+        self.assertEqual(summary.win_rate, 0.25)
         self.assertEqual(summary.wilson95, evaluate.wilson(1, 4))
         self.assertAlmostEqual(summary.mean_value, statistics.fmean([W, 12, 9, 15]))
 
@@ -152,7 +152,7 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(result.summary(["E02", "E03", "E04"]).mean_floor, 10.5)
         empty = result.summary(["E04"])
         self.assertEqual(
-            (empty.n, empty.mean_floor, empty.ci95, empty.boss_kill_rate),
+            (empty.n, empty.mean_floor, empty.ci95, empty.win_rate),
             (0, None, None, None),
         )
         self.assertEqual(result.completed(), ["E01", "E02", "E03", "E07"])
@@ -179,7 +179,7 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(comparison.seeds, tuple(s))
         self.assertEqual(comparison.excluded_eval_seeds, {})
 
-    def test_the_ci_rule_passes_but_the_boss_kill_guard_fails(self):
+    def test_the_ci_rule_passes_but_the_win_guard_fails(self):
         # The champion clears ten seeds the challenger dies at the boss on; everywhere
         # else the challenger is four floors better.
         s = seeds(100)
@@ -198,7 +198,7 @@ class CompareTests(unittest.TestCase):
         self.assertFalse(comparison.guard)  # 10 > max(2, ceil(1.96 sqrt(10))) = 7
         self.assertFalse(comparison.promoted)
 
-    def test_more_boss_kills_win_on_value_even_with_a_lower_mean_floor(self):
+    def test_more_wins_win_on_value_even_with_a_lower_mean_floor(self):
         # Floors saturate at the boss (a kill is floor 18); the value weighs a kill at
         # W = 26: 23.8 against 21.5 here, though the mean floor is 17.4 against 17.5.
         s = seeds(100)
@@ -333,7 +333,7 @@ class EvaluateTests(unittest.TestCase):
             ),
         )
         self.assertEqual(meta.feature_version, FEATURE_VERSION)
-        self.assertEqual(meta.W, 26.0)
+        self.assertEqual(meta.W, 53.0)  # the last floor + 1 (FULL_RUNS.md)
         self.assertEqual(meta.seeds_sha256, evaluate.seeds_sha256(eval_seeds))
         self.assertNotEqual(meta.seeds_sha256, evaluate.seeds_sha256(eval_seeds[:2]))
         self.assertIsNone(meta.policy_sha256)  # the rules policy has no checkpoint
@@ -369,10 +369,10 @@ class EvaluateTests(unittest.TestCase):
             outcome = record["outcome"]
             self.assertEqual(seed_result.status, "completed")
             self.assertEqual(seed_result.floor, outcome["final_floor"])
-            self.assertEqual(seed_result.boss_killed, outcome["boss_killed"])
+            self.assertEqual(seed_result.won, outcome["won"])
             self.assertEqual(
                 seed_result.value,
-                W if outcome["boss_killed"] else outcome["final_floor"],
+                W if outcome["won"] else outcome["final_floor"],
             )
             assert seed_result.seconds is not None
             self.assertGreater(seed_result.seconds, 0)

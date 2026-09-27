@@ -38,8 +38,9 @@ def synthetic_record(seed: str = "T0000R0000", **overrides: object) -> dict:
         "combat": {"budget": "120/500", "c": 0.1, "crn_fraction": 0.2},
         "ascension": 9,
         "outcome": {
-            "final_floor": 18,
-            "boss_killed": True,
+            "final_floor": 53,
+            "won": True,
+            "acts_cleared": 3,
             "died": False,
             "end_hp": 31,
             "end_max_hp": 80,
@@ -173,7 +174,7 @@ class SchemaTests(unittest.TestCase):
         validator = jsonschema.Draft202012Validator(shards.RUN_RECORD_SCHEMA)
         validator.validate(synthetic_record())
         broken = synthetic_record()
-        del broken["outcome"]["boss_killed"]
+        del broken["outcome"]["won"]
         self.assertFalse(validator.is_valid(broken))
         extra = synthetic_record(surprise=1)
         self.assertFalse(validator.is_valid(extra))
@@ -201,9 +202,9 @@ class SchemaTests(unittest.TestCase):
         # The generating network's distribution for the chosen afterstate (5.2).
         validator = jsonschema.Draft202012Validator(shards.RUN_RECORD_SCHEMA)
         record = synthetic_record()
-        record["decisions"][0]["p_floor"] = [1 / 18] * 18
+        record["decisions"][0]["p_floor"] = [1 / 53] * 53
         validator.validate(record)
-        for bad in ([0.5] * 17, [2.0] + [0.0] * 17, "uniform"):
+        for bad in ([1 / 18] * 18, [2.0] + [0.0] * 52, "uniform"):
             record["decisions"][0]["p_floor"] = bad
             self.assertFalse(validator.is_valid(record), bad)
         del record["decisions"][0]["p_floor"]

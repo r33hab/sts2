@@ -111,9 +111,11 @@ class LayoutTests(unittest.TestCase):
         self.assertEqual(vocab.card_rank(min(vocab.card_ids())), 0)
         self.assertEqual(vocab.card_rank(max(vocab.card_ids())), 576)
 
-    def test_the_vector_is_1843_wide_in_the_designed_blocks(self):
-        self.assertEqual(FEATURE_VERSION, 1)
-        self.assertEqual(features.BASE_SIZE, 1843)
+    def test_the_vector_is_1855_wide_in_the_designed_blocks(self):
+        # Version 2 appends block X to version 1's 1843 numbers, which stay as they were.
+        self.assertEqual(FEATURE_VERSION, 2)
+        self.assertEqual(features.BASE_SIZE, 1855)
+        self.assertEqual(features.V1_BASE_SIZE, 1843)
         blocks = [
             (features.A_OFFSET, 22),
             (features.B_OFFSET, 258),
@@ -122,14 +124,25 @@ class LayoutTests(unittest.TestCase):
             (features.E_OFFSET, 1154),
             (features.F_OFFSET, 296),
             (features.G_OFFSET, 63),
+            (features.X_OFFSET, 12),
         ]
         position = 0
         for offset, size in blocks:
             self.assertEqual(offset, position)
             position += size
-        self.assertEqual(position, 1843)
-        self.assertEqual(features.encode(make_view()).shape, (1843,))
+        self.assertEqual(position, 1855)
+        self.assertEqual(features.encode(make_view()).shape, (1855,))
         self.assertEqual(features.encode(make_view()).dtype, np.float32)
+
+    def test_the_floor_classes_come_from_the_run_engines_map(self):
+        # 16 map rows (the ancient on row 0) plus a boss per act, three acts, and A10's
+        # second boss one row above the last one: floors 1-52, and "won" as floor 53.
+        self.assertEqual((vocab.MAP_BOSS_ROW, vocab.ACTS), (16, 3))
+        self.assertEqual(vocab.FLOORS_PER_ACT, 17)
+        self.assertEqual((vocab.LAST_FLOOR, vocab.WON_FLOOR), (52, 53))
+        self.assertEqual(vocab.FLOOR_CLASSES, 53)
+        self.assertEqual(vocab.act_index_of_region(), {1: 0, 2: 0, 3: 1, 4: 2})
+        self.assertEqual([vocab.weak_fights(r) for r in (1, 2, 3, 4)], [3, 3, 2, 2])
 
     def test_event_one_hot_covers_every_emulator_event(self):
         # 43 + (event_id-1)*4 + option for ids 1..58, and 275 for anything else.
@@ -173,6 +186,30 @@ class EncodeTests(unittest.TestCase):
         a = x[features.A_OFFSET : features.A_OFFSET + 22]
         self.assertEqual((a[7], a[8]), (0.0, 1.0))
         self.assertEqual(list(a[16:22]), [0, 0, 0, 0, 1, 0])  # Soul Fysh, fifth
+
+    def test_block_x_places_the_view_in_the_whole_run(self):
+        # An Act 1 view: act one-hot [1, 0, 0], no later region or boss, floor 3 / 52.
+        x = features.encode(make_view())
+        block = x[features.X_OFFSET : features.X_OFFSET + features.X_SIZE]
+        np.testing.assert_allclose(
+            block,
+            np.array([1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3 / 52], dtype=np.float32),
+        )
+        # Glory (act 3) with the Queen (78), fifth of the later bosses, on floor 40.
+        x = features.encode(
+            make_view(act_index=2, act_region=vocab.REGION_GLORY, boss=78, floor=40),
+        )
+        block = x[features.X_OFFSET : features.X_OFFSET + features.X_SIZE]
+        np.testing.assert_allclose(
+            block,
+            np.array([0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 40 / 52], dtype=np.float32),
+        )
+        a = x[features.A_OFFSET : features.A_OFFSET + 22]
+        self.assertEqual(a[6], 2.0)  # the act index in block A too
+        self.assertEqual(list(a[16:22]), [0] * 6)  # no Act 1 boss
+        # Version 1's numbers are untouched by block X.
+        v1 = features.encode(make_view())[: features.V1_BASE_SIZE]
+        self.assertEqual(v1.shape, (1843,))
 
     def test_deck_aggregates(self):
         deck = (

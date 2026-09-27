@@ -43,3 +43,39 @@ export in `spire-coach/data/models/strategy/` are left alone.
    `label`.
 8. **Start option.** `start --export-dest` (stored in the job config); `runs/full`
    exports to `runs/full/export`.
+
+## What changed
+
+- **Run engine** (`934e246`): the act-2 backstop, Act 3's ancients and per-act encounter
+  counters (plan item 1), each with an xunit test in `ActTransitionTests`.
+- **Session and record** (`engine.py`, `selfplay.py`, `shards.py` schema 3):
+  `RunSession` plays until phase Complete; `won` is complete, alive, on the last act's
+  boss; `acts_cleared` is the act index plus a win. The record's outcome has `won` and
+  `acts_cleared` (no `boss_killed`), a won run's `final_floor` is 53, and a fight's weak
+  flag counts normal fights per act against the region's own weak count (3, 3, 2, 2).
+  `run_step_cap` is 20,000 (an Act 1 run took about 250 steps) and `seed_timeout` 3,600 s.
+- **Floors and W** (`vocab.py`): `MAP_BOSS_ROW` and the act count are parsed from
+  `RunConstants.cs`; `FLOOR_CLASSES = 53`, `WON_FLOOR = W = 53`. The job config's W
+  defaults to it, and `EvalMeta` and `model.json` record the job's W.
+- **Features v2** (`features.py`): block X (12 numbers) after G: act one-hot, Hive and
+  Glory, the six Act 2-3 bosses, floor / 52. The engine front end reads the act index
+  from the region (`ActCandidatesByIndex`). Encounter pools come from
+  `EncounterTags.g.cs` for all four regions, so H covers Acts 2-3.
+- **Models** (`models.py`): V reads A, B, C, D, X and H (350 dense), 53 floor logits;
+  `expected_floors` and `win_chance` work for any class count. `load_numpy` also takes a
+  feature-version-1 checkpoint with 18 classes, whose nets read the first 1843 numbers
+  (`NumpyNets.base_size`); `load_torch` never does, so nothing warm-starts from it.
+- **Screens**: Crystal Sphere (`sphere`, `sphere.cell`, the rules take the big tool on the
+  lowest cell) and the Fake Merchant (`shop`: `shop.relic` read off a faithful clone,
+  scorable; `merchant.throw`, unscorable; `shop.leave`). Act 2-3 ancients are `neow`.
+- **Promotion** (`evaluate.py`): `win_guard` over won runs; the CI rule stays on the value.
+  Summaries and `status.json` report `win_rate`; `selfplay.json` adds `reached_act` and
+  `died_in_act`.
+- **Live** (`vocab.BOSSES`, `policy.py`, `strategy.py`): the six Act 2-3 bosses; the Act 1
+  export (no `floor_classes`, W = 26, `selfplay_boss_kill_rate`) and full-run exports
+  (`floor_classes: 53`, `selfplay_win_rate`) both load and score, checked against the real
+  Act 1 export on Act 1 and Act 2 views; every option the strategy path returns has a
+  `label` ("Take Bash+", "Elite (col 3)", "Buy Anchor (150g)", "Smith Bash", "Rest", the
+  event option's title).
+- **Start option**: `start --export-dest DIR`, stored in `config.json` (`loop.export_dest`;
+  empty means the coach's folder, which only the Act 1 job uses).

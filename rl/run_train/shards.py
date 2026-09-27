@@ -24,6 +24,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from . import vocab
 from .features import OPTION_KINDS, CardRef, Decision, MapNode, Option, Pending, RunView
 
 __all__ = [
@@ -49,11 +50,12 @@ __all__ = [
 ]
 
 # Bumped whenever the record's layout changes. 2 (Task 3): decisions carry `p_floor`, and
-# a lookahead policy block its `W`.
-SCHEMA_VERSION = 2
-# A floor distribution: final floors 1-17 and the Act 1 boss kill (`models.FLOOR_CLASSES`,
-# which imports this module; a test holds the two equal).
-FLOOR_CLASSES = 18
+# a lookahead policy block its `W`. 3 (full runs): the outcome says `won` and
+# `acts_cleared` instead of `boss_killed`, and floors run to the won run's 53.
+SCHEMA_VERSION = 3
+# A floor distribution: final floors 1-52 and the won run (`models.FLOOR_CLASSES`, which
+# imports this module; both read `vocab.FLOOR_CLASSES`).
+FLOOR_CLASSES = vocab.FLOOR_CLASSES
 
 RunRecord = dict[str, Any]
 
@@ -418,16 +420,23 @@ RUN_RECORD_SCHEMA: dict[str, Any] = {
             "type": "object",
             "required": [
                 "final_floor",
-                "boss_killed",
+                "won",
+                "acts_cleared",
                 "died",
                 "end_hp",
                 "end_max_hp",
                 "truncated",
             ],
             "properties": {
-                # 1-17, or 18 for an Act 1 boss kill (DESIGN.md 5.6, erratum E10).
-                "final_floor": {"type": "integer", "minimum": 1, "maximum": 18},
-                "boss_killed": _BOOL,
+                # 1-52, or 53 for a won run (FULL_RUNS.md).
+                "final_floor": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": vocab.WON_FLOOR,
+                },
+                "won": _BOOL,
+                # Act bosses killed: 0-3, 3 exactly when the run is won.
+                "acts_cleared": {"type": "integer", "minimum": 0, "maximum": vocab.ACTS},
                 "died": _BOOL,
                 "end_hp": _COUNT,
                 "end_max_hp": _COUNT,

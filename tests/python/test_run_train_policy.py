@@ -46,6 +46,7 @@ from rl.run_train import (  # noqa: E402
     selfplay,
     shards,
     train,
+    vocab,
 )
 from rl.run_train.engine import CombatBudget  # noqa: E402
 from rl.run_train.features import CardRef, Decision, Option  # noqa: E402
@@ -101,7 +102,89 @@ def by_hand(
     base = features.encode_afterstate(view, option)[None, :]
     block = nets.fight.summary(base, features.fight_queries(view))
     p = nets.value.floor_probs(np.concatenate([base, block], axis=1))[0]
-    return float(models.expected_floors(p, w)), float(p[models.BOSS_CLASS])
+    return float(models.expected_floors(p, w)), float(p[-1])
+
+
+def act1_export(directory: Path, seed: int = 11) -> Path:
+    """Lay out an export in the Act 1 format the live coach loads today.
+
+    Feature version 1 (no block X: V reads 338 dense numbers), 18 floor classes whose last
+    is the Act 1 boss kill, W = 26, `selfplay_boss_kill_rate`, and no `floor_classes`.
+    FightNet's shape never changed, so a fresh one stands in for it.
+    """
+    torch.manual_seed(seed)
+    rng = np.random.default_rng(seed)
+    arrays = {
+        f"fight/{name}": array
+        for name, array in models.numpy_params(models.FightNet()).items()
+    }
+    shapes = {
+        "embed.deck.weight": (64, 1154),
+        "embed.relics.weight": (32, 296),
+        "embed.potions.weight": (8, 63),
+        "hidden1.weight": (256, models.V1_VALUE_DENSE + models.EMBED),
+        "hidden1.bias": (256,),
+        "hidden2.weight": (256, 256),
+        "hidden2.bias": (256,),
+        "floor_head.weight": (models.LEGACY_FLOOR_CLASSES, 256),
+        "floor_head.bias": (models.LEGACY_FLOOR_CLASSES,),
+        "end_hp_head.weight": (1, 256),
+        "end_hp_head.bias": (1,),
+    }
+    for name, shape in shapes.items():
+        arrays[f"value/{name}"] = rng.normal(0.0, 0.3, shape).astype(np.float32)
+    meta = {"format": models.CHECKPOINT_FORMAT, "feature_version": 1, "generation": 12}
+    arrays["meta"] = np.array(json.dumps(meta, sort_keys=True))
+    directory.mkdir(parents=True, exist_ok=True)
+    np.savez(directory / "model.npz", allow_pickle=False, **arrays)
+    info = {
+        "npz": "model.npz",
+        "generation": 12,
+        "W": 26.0,
+        "selfplay_boss_kill_rate": 0.662,
+        "feature_version": 1,
+    }
+    (directory / "model.json").write_text(json.dumps(info), encoding="utf-8")
+    return directory
+
+
+class Act1ExportTests(unittest.TestCase):
+    """The live coach keeps scoring with the Act 1 export until a full-run one replaces it."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def test_the_act1_export_loads_and_scores_every_act(self):
+        model = policy.load(act1_export(self.dir / "act1"))
+        self.assertEqual(model.nets.feature_version, 1)
+        self.assertEqual(model.nets.base_size, features.V1_BASE_SIZE)
+        self.assertEqual(model.nets.value.floor_classes, 18)
+        self.assertEqual((model.W, model.win_chance), (26.0, True))
+        glory = make_view(act_index=2, act_region=vocab.REGION_GLORY, boss=78, floor=40)
+        for view in (make_view(), glory):
+            scores = policy.score_options(REWARD, view, model)
+            for score in scores:
+                # By hand on version 1's own 1843 numbers, valued with its 18 classes.
+                base = features.encode_afterstate(view, score.option)[None, :1843]
+                block = model.nets.fight.summary(base, features.fight_queries(view))
+                p = model.nets.value.floor_probs(np.concatenate([base, block], axis=1))
+                self.assertEqual(p.shape, (1, 18))
+                self.assertAlmostEqual(
+                    number(score.value),
+                    float(models.expected_floors(p[0], 26.0)),
+                    places=4,  # float32, batched against one row
+                )
+                self.assertAlmostEqual(number(score.p_boss), float(p[0, -1]), places=5)
+
+    def test_a_full_run_export_records_its_class_count_and_a_mismatch_is_refused(self):
+        npz = save_checkpoint(self.dir)
+        model = policy.load(export(self.dir / "full", npz, W=53.0, floor_classes=53))
+        self.assertEqual(model.nets.value.floor_classes, 53)
+        self.assertEqual(model.nets.base_size, features.BASE_SIZE)
+        with self.assertRaisesRegex(ValueError, "floor classes"):
+            policy.load(export(self.dir / "wrong", npz, floor_classes=18))
 
 
 class ScoreOptionsTests(unittest.TestCase):
@@ -113,7 +196,7 @@ class ScoreOptionsTests(unittest.TestCase):
         cls.champion = export(
             cls.dir / "champion",
             cls.npz,
-            selfplay_boss_kill_rate=0.2,
+            selfplay_win_rate=0.2,
         )
         cls.model = policy.load(cls.champion)
 
@@ -253,14 +336,14 @@ class WinChanceGateTests(unittest.TestCase):
         # The eval rate does not open the gate; only the recorded self-play rate does.
         scores = self.scores(
             "low",
-            selfplay_boss_kill_rate=0.049,
-            eval={"boss_kill_rate": 0.3},
+            selfplay_win_rate=0.049,
+            eval={"win_rate": 0.3},
         )
         self.assertTrue(all(s.value is not None for s in scores))
         self.assertTrue(all(s.p_boss is None for s in scores))
 
     def test_at_five_percent_the_win_chance_is_p_18(self):
-        scores = self.scores("open", selfplay_boss_kill_rate=0.05)
+        scores = self.scores("open", selfplay_win_rate=0.05)
         nets = models.load_numpy(self.npz)
         for score in scores:
             _, p_boss = by_hand(nets, make_view(), score.option, 26.0)
@@ -287,11 +370,11 @@ class ChampionTests(unittest.TestCase):
 
     def test_the_exported_champion_is_found_and_a_new_one_is_picked_up(self):
         champion = self.dir / "strategy"
-        export(champion, self.first, selfplay_boss_kill_rate=0.1)
+        export(champion, self.first, selfplay_win_rate=0.1)
         with mock.patch.object(policy, "STRATEGY_MODEL_DIR", champion):
             first = policy.score_options(REWARD, make_view())
             self.assertEqual(first, policy.score_options(REWARD, make_view(), champion))
-            export(champion, self.second, selfplay_boss_kill_rate=0.1, generation=6)
+            export(champion, self.second, selfplay_win_rate=0.1, generation=6)
             second = policy.score_options(REWARD, make_view())
         self.assertNotEqual([s.value for s in first], [s.value for s in second])
         nets = models.load_numpy(self.second)
@@ -332,7 +415,7 @@ class ChampionTests(unittest.TestCase):
         champion = export(
             home / "Documents" / "git" / "spire-coach" / "data" / "models" / "strategy",
             self.first,
-            selfplay_boss_kill_rate=0.07,
+            selfplay_win_rate=0.07,
         )
         view = make_view()
         script = """

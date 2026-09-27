@@ -170,6 +170,10 @@ class ConstantsTests(unittest.TestCase):
             "NodeAncient": vocab.NODE_ANCIENT,
             "ActOvergrowth": vocab.REGION_OVERGROWTH,
             "ActUnderdocks": vocab.REGION_UNDERDOCKS,
+            "ActHive": vocab.REGION_HIVE,
+            "ActGlory": vocab.REGION_GLORY,
+            "FakeMerchantRelicCost": engine.FAKE_MERCHANT_RELIC_COST,
+            "MapBossRow": vocab.MAP_BOSS_ROW,
         }
         for name, value in mirrored.items():
             with self.subTest(name=name):
@@ -395,6 +399,41 @@ class UnknownDecisionTests(unittest.TestCase):
             )
         finally:
             session.close()
+
+
+class ActTwoScreenTests(unittest.TestCase):
+    """Crystal Sphere and the Fake Merchant are known decisions, not unknown ones."""
+
+    @staticmethod
+    def context(legal: list[int]) -> Any:
+        return mock.Mock(legal=legal, handle=0)
+
+    def test_the_crystal_sphere_offers_one_unscorable_cell_per_legal_divination(self):
+        screen = engine._crystal_sphere(self.context([3, 40, 124]))
+        assert screen.decision is not None
+        self.assertEqual(screen.decision.type, "sphere")
+        self.assertEqual(
+            [(o.kind, o.action, o.scorable) for o in screen.decision.options],
+            [("sphere.cell", 3, False), ("sphere.cell", 40, False), ("sphere.cell", 124, False)],
+        )
+        self.assertIsNone(screen.reason)
+
+    def test_the_fake_merchant_sells_scorable_relics_read_off_a_clone(self):
+        bought = {0: 11, 2: 12, 4: None}
+        with mock.patch.object(engine, "_bought_relic", lambda _h, a: bought[a]):
+            screen = engine._fake_merchant(self.context([0, 2, 4, 6, 7]))
+        assert screen.decision is not None
+        self.assertEqual(screen.decision.type, "shop")
+        self.assertEqual(
+            [(o.kind, o.action, o.relic, o.price, o.scorable) for o in screen.decision.options],
+            [
+                ("shop.relic", 0, 11, 50, True),
+                ("shop.relic", 2, 12, 50, True),
+                ("unknown", 4, None, 0, False),
+                ("merchant.throw", 6, None, 0, False),
+                ("shop.leave", 7, None, 0, True),
+            ],
+        )
 
 
 class FlattenedOptionTests(unittest.TestCase):

@@ -250,7 +250,8 @@ class ViewFromLiveTests(unittest.TestCase):
             "player.potions[0].id": lambda p: p["player"]["potions"][0].update(
                 id="NOPE",
             ),
-            "map.boss.id": lambda p: p["map"]["boss"].update(id="KAISER_CRAB_BOSS"),
+            # Every act's bosses are known now; an unmodelled one is not.
+            "map.boss.id": lambda p: p["map"]["boss"].update(id="UNMODELLED_BOSS"),
             "map.nodes[0].type": lambda p: p["map"]["nodes"][0].update(type="Start"),
         }
         for path, mutate in cases.items():

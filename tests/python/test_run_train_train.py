@@ -72,7 +72,7 @@ def floor_mass(**mass: float) -> list[float]:
 def died_on(floor: int) -> dict:
     return {
         "final_floor": floor,
-        "boss_killed": False,
+        "won": False,
         "died": True,
         "end_hp": 0,
         "end_max_hp": 80,

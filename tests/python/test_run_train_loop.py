@@ -51,11 +51,14 @@ from rl.run_train.evaluate import EvalResult, SeedResult  # noqa: E402
 A9 = 9
 RUNS = 10
 EVAL_SEEDS = evaluate.load_seeds(evaluate.EVAL_SEEDS)[:40]
+# W = 26, not the default 53: the loop's mechanics never depend on W, and a smaller W
+# keeps the fake values' spread small enough for 40 seeds to tell the strengths apart.
 JOB = runner.JobConfig(
     workers=2,
     combat_budget=CombatBudget(3, 3),
     ascension=A9,
     ascension_stands_in_for=10,
+    W=26.0,
     shard_size=4,
 )
 CONFIG = loop.LoopConfig(job=JOB, runs_per_generation=RUNS)
@@ -70,14 +73,14 @@ LOOP_LOG = "rl.run_train.loop"
 
 
 def fake_outcome(seed: str, strength: int) -> tuple[int, bool]:
-    """Return (final floor, boss killed) for a seed under a policy of this strength.
+    """Return (final floor, won) for a seed under a policy of this strength.
 
-    A sixth of the seeds kill the boss unless the policy is weaker than the rules; every
-    other floor is 4-16 moved by the strength.
+    A sixth of the seeds are won (floor 53) unless the policy is weaker than the rules;
+    every other floor is 4-16 moved by the strength.
     """
     digest = int(hashlib.sha256(seed.encode()).hexdigest(), 16)
     if digest % 6 == 0 and strength >= 0:
-        return 18, True
+        return vocab.WON_FLOOR, True
     return max(1, min(17, 4 + digest % 13 + strength)), False
 
 
@@ -116,7 +119,8 @@ def fake_play(task, on_fight, sleep: float = 0.0) -> dict:
         "ascension": task.config.ascension,
         "outcome": {
             "final_floor": floor,
-            "boss_killed": killed,
+            "won": killed,
+            "acts_cleared": vocab.ACTS if killed else 0,
             "died": not killed,
             "end_hp": 30 if killed else 0,
             "end_max_hp": 80,
@@ -211,7 +215,7 @@ def rules_eval(changes: dict | None = None) -> EvalResult:
 
 
 def outcomes(result: EvalResult) -> list[tuple]:
-    return [(r.seed, r.status, r.floor, r.boss_killed, r.value) for r in result.results]
+    return [(r.seed, r.status, r.floor, r.won, r.value) for r in result.results]
 
 
 def without_time(record: dict) -> dict:
@@ -306,7 +310,8 @@ class ConfigTests(unittest.TestCase):
                 config.job.shard_size,
                 config.job.run_step_cap,
             ),
-            (8, "120/500", 26.0, 600.0, 25, 6000),
+            # W is the won run's floor, 53; a full run needs more time and steps.
+            (8, "120/500", 53.0, 3600.0, 25, 20000),
         )
         self.assertEqual(config.training, train.TrainConfig())
         self.assertEqual(
@@ -370,6 +375,62 @@ class ConfigTests(unittest.TestCase):
             (root / "config.json").write_text(json.dumps(data))
             with self.assertRaisesRegex(ValueError, "feature version"):
                 cli.configure(root, parser.parse_args(["start", "--root", str(root)]))
+
+    def test_export_dest_is_a_start_option_the_loop_keeps(self):
+        # Only the job the coach follows exports to its folder; a new job names its own.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "full"
+            parser = cli.build_parser()
+            self.assertEqual(cli.export_dest(loop.LoopConfig()), policy.STRATEGY_MODEL_DIR)
+            config = cli.configure(
+                root,
+                parser.parse_args(
+                    ["start", "--root", str(root), "--export-dest", str(root / "export")],
+                ),
+            )
+            self.assertEqual(cli.export_dest(config), (root / "export").resolve())
+            # A restart without the option keeps it: config.json holds it.
+            again = cli.configure(root, parser.parse_args(["start", "--root", str(root)]))
+            self.assertEqual(cli.export_dest(again), (root / "export").resolve())
+            self.assertEqual(
+                json.loads((root / "config.json").read_text())["loop"]["export_dest"],
+                str((root / "export").resolve()),
+            )
+
+
+class TallyTests(unittest.TestCase):
+    def test_a_generation_counts_wins_acts_reached_and_deaths_per_act(self):
+        tally = loop._Tally()  # noqa: SLF001
+        outcomes = [
+            (5, False, 0),  # died in act 1
+            (17, False, 0),  # died at the act-1 boss
+            (25, False, 1),  # died in act 2
+            (45, False, 2),  # died in act 3
+            (53, True, 3),  # won
+        ]
+        for floor, won, cleared in outcomes:
+            tally.add(
+                {
+                    "outcome": {
+                        "final_floor": floor,
+                        "won": won,
+                        "acts_cleared": cleared,
+                        "died": not won,
+                        "truncated": False,
+                    },
+                    "stats": {
+                        "unknown_decisions": {},
+                        "forced_skips": {},
+                        "potion_left_full_belt": 0,
+                    },
+                },
+            )
+        summary = tally.to_json()
+        self.assertEqual((summary["runs"], summary["wins"]), (5, 1))
+        self.assertEqual(summary["win_rate"], 0.2)
+        self.assertEqual(summary["reached_act"], {"2": 3, "3": 2})
+        self.assertEqual(summary["died_in_act"], {"1": 2, "2": 1, "3": 1})
+        self.assertEqual(summary["mean_floor"], (5 + 17 + 25 + 45 + 53) / 5)
 
 
 # --------------------------------------------------------------------------------------
@@ -437,7 +498,7 @@ class PhaseTableTests(LoopTestCase):
         summary = self.read(self.gen(0) / "selfplay.json")
         self.assertEqual((summary["runs"], summary["played_by"]), (RUNS, None))
         kills = sum(fake_outcome(f"T0000R{i:04d}", 0)[1] for i in range(RUNS))
-        self.assertEqual(summary["boss_kill_rate"], kills / RUNS)
+        self.assertEqual(summary["win_rate"], kills / RUNS)
 
     def test_without_a_manifest_only_seeds_no_shard_or_quarantine_line_lists_are_played(
         self,
@@ -606,7 +667,7 @@ class PromotionTests(LoopTestCase):
             EvalResult.load(self.gen(0) / "eval.json").summary().to_json(),
         )
         # It has played no self-play yet: generation 1 will be its first.
-        self.assertIsNone(status["champion"]["selfplay_boss_kill_rate"])
+        self.assertIsNone(status["champion"]["selfplay_win_rate"])
         self.assertEqual(status["champion"]["W"], 26.0)
         self.assertEqual(status["champion"]["eval_meta"]["ascension_stands_in_for"], 10)
         challenger = status["last_challenger"]
@@ -660,7 +721,7 @@ class PromotionTests(LoopTestCase):
             + shards.shard_paths(self.gen(1) / "shards"),
         )
 
-    def test_no_promotion_when_the_boss_kill_guard_fails_though_the_ci_rule_passes(
+    def test_no_promotion_when_the_win_guard_fails_though_the_ci_rule_passes(
         self,
     ):
         run = self.make_loop()
@@ -794,7 +855,7 @@ class ExportTests(LoopTestCase):
         self.gen(3).mkdir()
         shards.write_json(
             self.gen(3) / "selfplay.json",
-            {"generation": 3, "played_by": 2, "runs": 100, "boss_kill_rate": 0.07},
+            {"generation": 3, "played_by": 2, "runs": 100, "win_rate": 0.07},
         )
         return pt, npz
 
@@ -810,7 +871,8 @@ class ExportTests(LoopTestCase):
             "npz": "model.npz",
             "generation": 2,
             "W": 26.0,
-            "selfplay_boss_kill_rate": 0.07,
+            "selfplay_win_rate": 0.07,
+            "floor_classes": 53,  # both export formats load (policy.load)
             "eval": summary.to_json(),
             "combat_budget": "3",
             "ascension": A9,
@@ -903,7 +965,7 @@ class ExportTests(LoopTestCase):
         assert ci is not None
         self.assertAlmostEqual(report["floor_difference"]["mean"], mean)
         self.assertEqual(report["floor_difference"]["ci95"], list(ci))
-        self.assertEqual(report["boss_kill_difference"]["mean"], 0.0)
+        self.assertEqual(report["win_difference"]["mean"], 0.0)
         self.assertEqual(report["champion"]["summary"]["n"], len(both))
         self.assertEqual(report["rules"]["summary"]["n"], len(both))
         self.assertEqual(report["champion"]["generation"], 0)
