@@ -433,6 +433,10 @@ public static class RunMapGenerator
 
         state.CurrentActIndex++;
         state.EventSequenceIndex = 0;
+        // `RoomSet.normalEncountersVisited` and its elite twin belong to the act's own
+        // room set, so each act starts on its own weak fights.
+        state.NormalEncountersVisited = 0;
+        state.EliteEncountersVisited = 0;
         state.AwaitingActStartNode = true;
         state.UnknownMapPointsVisited = 0;
         state.UnknownMapPointMonsterOdds = 0.1;

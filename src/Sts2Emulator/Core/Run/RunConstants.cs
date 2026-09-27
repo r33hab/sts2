@@ -603,6 +603,30 @@ public static class RunConstants
     public static ReadOnlySpan<int> OrobasPool2 => [2, 68, 211];
     public static ReadOnlySpan<int> OrobasPool3 => [268, 6];
 
+    // Act 3's ancients (decompiled `Models.Events/Nonupeipe.cs`, `Tanx.cs`, `Vakuu.cs`),
+    // each pool in its declaration order. Nonupeipe: BlessedAntler, BrilliantScarf,
+    // DelicateFrond, DiamondDiadem, FurCoat, Glitter, JewelryBox, LoomingFruit, SignetRing,
+    // then BeautifulBracelet with four Swift-enchantable cards. Tanx: Claws, Crossbow,
+    // IronClub, MeatCleaver, Sai, SpikedGauntlets, TanxsWhistle, ThrowingAxe, WarHammer,
+    // then TriBoomerang with three Instinct-enchantable cards. Vakuu: BloodSoakedRose,
+    // WhisperingEarring, Fiddle; PreservedFog, SereTalon, DistinguishedCape;
+    // ChoicesParadox, MusicBox, LordsParasol, JeweledMask.
+    public static ReadOnlySpan<int> NonupeipePool => [21, 33, 58, 60, 95, 102, 121, 138, 238];
+    public static ReadOnlySpan<int> TanxPool => [50, 53, 118, 148, 228, 247, 258, 263, 286];
+    public static ReadOnlySpan<int> VakuuPool1 => [22, 289, 88];
+    public static ReadOnlySpan<int> VakuuPool2 => [207, 235, 62];
+    public static ReadOnlySpan<int> VakuuPool3 => [47, 159, 139, 120];
+
+    /// <summary>Every blessing an act-3 ancient can offer, conditional ones included.</summary>
+    public static int[] ActThreeAncientPool(string ancient) =>
+        ancient switch
+        {
+            AncientNonupeipe => [.. NonupeipePool, RelicBeautifulBracelet],
+            AncientTanx => [.. TanxPool, RelicTriBoomerang],
+            AncientVakuu => [.. VakuuPool1, .. VakuuPool2, .. VakuuPool3],
+            _ => [],
+        };
+
     // The ancients' blessings that DO something when taken.
     public const int RelicElectricShrymp = 71;
     public const int RelicBeautifulBracelet = 12;
