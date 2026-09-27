@@ -896,6 +896,21 @@ class WarningTests(unittest.TestCase):
         doc["hand"][0]["cost"] = 0
         self.assertEqual(len(convert.convert(doc).warnings), 1)
 
+    def test_free_attack_power_explains_a_free_attack(self) -> None:
+        # CombatEngine.EffectiveCost (:2297-2303) checks the buff alone, with no memory
+        # of which card asks: EVERY Attack in hand reads 0 while FreeAttackPower is held
+        # (Unrelenting's own buff), not only the one that will spend it. The fixture's
+        # hand is Strike, Defend, Bash -- both Attacks read 0 here, and the Skill does not.
+        doc = load("player")
+        doc["player"]["powers"].append({"id": "FREE_ATTACK_POWER", "amount": 1})
+        doc["hand"][0]["cost"] = 0  # STRIKE, an Attack
+        doc["hand"][2]["cost"] = 0  # BASH, an Attack
+        result = convert.convert(doc)
+        self.assertEqual(result.warnings, [])
+        # A Skill is not an Attack: at 0 it is still unexplained.
+        doc["hand"][1]["cost"] = 0
+        self.assertEqual(len(convert.convert(doc).warnings), 1)
+
     def test_missing_base_damage_comes_from_the_move_table(self) -> None:
         # WHIP_SLAP is 3 twice (EnemyAI.cs:3285-3301); the table knows it exactly.
         doc = load("enemy")
