@@ -59,6 +59,64 @@ COMPANIONS = frozenset(
 MODEL_BY_ENTRY = {model.entry: model for model in enemy_ai.MONSTERS.values()}
 STRIKE = 472  # Cards.g.cs StrikeIronclad
 
+# Act 2-3 models with no Act 1 fixture corpus to walk: `fights()`/`hit_fights()` are real
+# Act 1 captures only, so a model here can never turn up "on display" or get a next-move
+# roll checked against one, however correct it is. Checked instead against the decompiled
+# source directly (DecompiledConsistencyTests, which needs none of that corpus) and, per
+# monster, its own fixture-free tests in ToAiTests. Shrinks if an Act 2-3 corpus is ever
+# built; until then this is what tells "no coverage yet" apart from "coverage gap".
+NO_ACT1_CORPUS = frozenset(
+    {
+        "CRUSHER",
+        "BOWLBUG_SILK",
+        "TUNNELER",
+        "THIEVING_HOPPER",
+        "DEVOTED_SCULPTOR",
+        "GLOBE_HEAD",
+        "OWL_MAGISTRATE",
+        "THE_LOST",
+        "THE_FORGOTTEN",
+        "ROCKET",
+        "MECHA_KNIGHT",
+        "MAGI_KNIGHT",
+        "AXEBOT",
+        "PARAFRIGHT",
+        # Checked against the emulator by the Act 2-3 corpus instead (`act23_fights`).
+        "THE_OBSCURA",
+        "FLAIL_KNIGHT",
+        "SPECTRAL_KNIGHT",
+        "SCROLL_OF_BITING",
+        "SLUMBERING_BEETLE",
+        "BOWLBUG_ROCK",
+        "TEST_SUBJECT",
+    }
+)
+
+# Act 2-3 encounters whose every creature has a model, played the way the Act 1 corpus is
+# (`act23_fights`), so those models are checked against the emulator itself as well.
+ACT23_ENCOUNTERS = (
+    "obscura",
+    "knights",
+    "scrolls",
+    "scrolls-weak",
+    "slumbering-beetle",
+    "test-subject",
+)
+
+# The Test Subject killed once, early and late: AdaptablePower keeps the corpse, and it
+# comes back on its second form (decompiled AdaptablePower.cs, TestSubject.cs).
+ACT23_HITS = (
+    ("test-subject", "TEST_SUBJECT", 1, 0),
+    ("test-subject", "TEST_SUBJECT", 1, 2),
+)
+
+# Moves that ending turns cannot reach: the Rock's DIZZY needs a headbutt blocked whole,
+# and the Test Subject's third form a second death. Fixture-free tests cover them.
+ACT23_UNREACHED = {
+    "BOWLBUG_ROCK": {"DIZZY_MOVE"},
+    "TEST_SUBJECT": {"PHASE3_LACERATE_MOVE", "BIG_POUNCE", "BURNING_GROWL_MOVE"},
+}
+
 # Every Act 1 encounter, by the emulator's name for it (env.ENCOUNTER_NAMES): the fights
 # of Acts/Overgrowth.cs and Acts/Underdocks.cs (GenerateAllEncounters) and the two Act 1
 # events that start one, Dense Vegetation and Punch Off. Corpse Slugs and Seapunk are
@@ -158,6 +216,10 @@ NOT_AI = frozenset({"powered_hits_this_turn"})
 # `TriggerAboutToBlowState`'s `SetMaxAndCurrentHp(Creature, 999999999m)` (decompiled
 # WaterfallGiant.cs:301-313): the dead giant revived, not a new creature.
 REVIVED_GIANT_MAX_HP = 999_999_999
+
+# `TestSubject.RespawnMove` raises its max HP to the next form's (CombatEngine.cs
+# RespawnTestSubject): the same creature, respawned.
+RESPAWNING_DEF_IDS = frozenset({ids.enemy_id("TEST_SUBJECT")})
 
 
 # ── The emulator side ────────────────────────────────────────────────────────
@@ -270,7 +332,8 @@ def creatures(frames: list[Frame]) -> dict[tuple[Any, ...], list[Seen]]:
     A creature is known by its def id, its max HP (the game rolls it unique on the side,
     Creature.SetUniqueMonsterHpValue) and its place among any twins; one that appears on a
     dead creature's key is a new one. The Waterfall Giant's revive at 999999999 HP is the
-    same creature, so it keeps the max HP it was known by. Its log gains the move it shows
+    same creature, so it keeps the max HP it was known by, and so does a respawned Test
+    Subject. Its log gains the move it shows
     on joining and then the move rolled at each turn's start -- never STUNNED,
     REVIVE_MOVE or a model's forced move, which the game sets without logging
     (Creature.StunInternal, IllusionPower.AfterDeath, MonsterModel.SetMoveImmediate).
@@ -286,7 +349,8 @@ def creatures(frames: list[Frame]) -> dict[tuple[Any, ...], list[Seen]]:
         twins: Counter[tuple[int, int]] = Counter()
         for i, emu in enumerate(frame.doc["enemies"]):
             max_hp = emu["max_hp"]
-            if max_hp == REVIVED_GIANT_MAX_HP and i in known_max_hp:
+            respawned = emu["def_id"] in RESPAWNING_DEF_IDS
+            if (max_hp == REVIVED_GIANT_MAX_HP or respawned) and i in known_max_hp:
                 max_hp = known_max_hp[i]
             known_max_hp[i] = max_hp
             base = (emu["def_id"], max_hp)
@@ -550,6 +614,34 @@ def hit_fights() -> Iterator[Fight]:
                     )
 
 
+def act23_fights() -> Iterator[Fight]:
+    """List the Act 2-3 corpus: three floors and three ascensions each, then the hits.
+
+    Yields:
+        One fight per combination.
+
+    """
+    for encounter in ACT23_ENCOUNTERS:
+        for floor in (1, 2, 3):
+            for ascension in ASCENSIONS:
+                yield Fight(
+                    encounter,
+                    seed=floor * 7 + 1,
+                    floor=floor,
+                    ascension=ascension,
+                )
+    for encounter, entry, hp, turn in ACT23_HITS:
+        for ascension in ASCENSIONS:
+            for seed in (1, 2, 3):
+                yield Fight(
+                    encounter,
+                    seed=seed,
+                    floor=seed,
+                    ascension=ascension,
+                    hit=(entry, hp, turn),
+                )
+
+
 class _Played:
     """Every fight played once and shared by the test classes (a second or so in all)."""
 
@@ -562,8 +654,8 @@ class _Played:
         return cls._cache[fight]
 
 
-class SelfConsistencyTests(unittest.TestCase):
-    """`to_ai` rebuilds, from the game's view alone, what the emulator itself holds."""
+class _Rebuilds(unittest.TestCase):
+    """Rebuild every creature of a fight and compare it with the emulator's own."""
 
     def check(self, fight: Fight, *, null_attacks: bool = False) -> Counter[str]:
         shown: Counter[str] = Counter()
@@ -582,6 +674,10 @@ class SelfConsistencyTests(unittest.TestCase):
                         f"log {item.live['state_log']} showing {item.live['move_id']}",
                     )
         return shown
+
+
+class SelfConsistencyTests(_Rebuilds):
+    """`to_ai` rebuilds, from the game's view alone, what the emulator itself holds."""
 
     def test_every_act1_fight_rebuilds_every_turn(self) -> None:
         for fight in fights():
@@ -636,9 +732,58 @@ class SelfConsistencyTests(unittest.TestCase):
                 for item in items:
                     shown[f"{item.seen.model.entry} {item.seen.shown}"] += 1
         for model in enemy_ai.MONSTERS.values():
+            if model.entry in NO_ACT1_CORPUS:
+                continue
             for move in model.moves:
                 with self.subTest(monster=model.entry, move=move):
                     self.assertGreater(shown[f"{model.entry} {move}"], 0)
+
+
+class Act23SelfConsistencyTests(_Rebuilds):
+    """The Act 2-3 corpus: `to_ai` rebuilds what the emulator holds, every turn."""
+
+    MODELS = frozenset(ACT23_UNREACHED) | {
+        "THE_OBSCURA",
+        "FLAIL_KNIGHT",
+        "SPECTRAL_KNIGHT",
+        "SCROLL_OF_BITING",
+        "SLUMBERING_BEETLE",
+    }
+
+    def test_every_act23_fight_rebuilds_every_turn(self) -> None:
+        shown: Counter[str] = Counter()
+        for fight in act23_fights():
+            shown += self.check(fight)
+        for entry in sorted(self.MODELS):
+            model = MODEL_BY_ENTRY[entry]
+            for move in set(model.moves) - ACT23_UNREACHED.get(entry, set()):
+                with self.subTest(monster=entry, move=move):
+                    self.assertGreater(shown[f"{entry} {move}"], 0)
+
+    def test_the_act23_fights_are_walks_the_game_machines_can_make(self) -> None:
+        walked: set[str] = set()
+        for fight in act23_fights():
+            for seen_list in creatures(_Played.frames(fight)).values():
+                entry = seen_list[0].model.entry
+                parsed = machine(entry)
+                log = seen_list[-1].log
+                with self.subTest(fight=fight.label(), monster=entry, log=log):
+                    self.assertIn(log[0], parsed.openers())
+                    # A forced move (the Test Subject's RESPAWN_MOVE) leads on to its
+                    # own follow-up, as a stun does.
+                    forced = set().union(
+                        *(
+                            parsed.successors(move)
+                            for move in seen_list[0].model.forced
+                        ),
+                    )
+                    for before, after, interrupted in steps(seen_list):
+                        legal = parsed.successors(before)
+                        if interrupted:
+                            legal = legal | {before} | stun_targets(parsed) | forced
+                        self.assertIn(after, legal, f"{before} -> {after}")
+                walked.add(entry)
+        self.assertLessEqual(self.MODELS, walked)
 
 
 class ThrowawayChooseIntentsTests(unittest.TestCase):
@@ -690,10 +835,11 @@ class ThrowawayChooseIntentsTests(unittest.TestCase):
                         self.assertEqual(got["intent"], want["intent"])
         deterministic = {m.entry for m in enemy_ai.MONSTERS.values() if not m.rng}
         # The gremlins only arrive in the hit fights, which the field checks cover, and a
-        # Gas Bomb's one move ends it, so there is no next intent to roll.
+        # Gas Bomb's one move ends it, so there is no next intent to roll. NO_ACT1_CORPUS
+        # never gets walked here at all: there is no Act 1 fight to find it in.
         self.assertLessEqual(
             deterministic - set(checked),
-            {"SNEAKY_GREMLIN", "FAT_GREMLIN", "GAS_BOMB"},
+            {"SNEAKY_GREMLIN", "FAT_GREMLIN", "GAS_BOMB"} | NO_ACT1_CORPUS,
         )
 
 
@@ -864,7 +1010,7 @@ class DecompiledConsistencyTests(unittest.TestCase):
 
     def test_every_act1_monster_has_a_supported_model(self) -> None:
         wanted = {ids.game_entry(name) for name in _act1_monster_classes()}
-        self.assertEqual(wanted, set(MODEL_BY_ENTRY))
+        self.assertEqual(wanted, set(MODEL_BY_ENTRY) - NO_ACT1_CORPUS)
         self.assertEqual(len(wanted), 51)
         self.assertEqual(enemy_ai.SUPPORTED, frozenset(enemy_ai.MONSTERS))
 
@@ -915,7 +1061,8 @@ class DecompiledConsistencyTests(unittest.TestCase):
                             stunned_steps[entry] += 1
                         self.assertIn(after, legal, f"{before} -> {after}")
                 walked[entry] += len(log)
-        self.assertEqual(set(walked), set(MODEL_BY_ENTRY))
+        # NO_ACT1_CORPUS is never walked: there is no Act 1 fight to find it in.
+        self.assertEqual(set(walked), set(MODEL_BY_ENTRY) - NO_ACT1_CORPUS)
         # The stun, revive and forced paths were walked too.
         self.assertLessEqual(
             {
@@ -1041,6 +1188,43 @@ class ToAiTests(unittest.TestCase):
         self.assertEqual(warnings, [])
         self.assertEqual(ai, {**enemy_ai.ai_defaults(), "move_index": 3})
         self.assertEqual(intent, emu_intent("Attack", 12))
+        self.assertEqual(buffs, [])
+
+    def test_a_crusher_takes_its_ring_damage_from_the_table(self) -> None:
+        # No EnemyAI.cs case yet (Act 2); Monsters/Crusher.cs's ThrashDamage is 14 from
+        # DeadlyEnemies and 12 below, with no number live.
+        live = enemy(
+            "CRUSHER",
+            ["THRASH_MOVE"],
+            "THRASH_MOVE",
+            intents=[attack_intent(None, None)],
+        )
+        self.assertEqual(to_ai(live, turn=0, ascension=0)[1], emu_intent("Attack", 12))
+        self.assertEqual(to_ai(live, turn=0, ascension=9)[1], emu_intent("Attack", 14))
+
+    def test_a_crusher_wraps_its_ring_after_a_full_lap(self) -> None:
+        # THRASH, ENLARGING_STRIKE, BUG_STING, ADAPT, GUARDED_STRIKE, THRASH again, and a
+        # seventh move lands back on ENLARGING_STRIKE: MoveIndex 6, 6 % 5 == 1.
+        ai, intent, warnings, buffs = to_ai(
+            enemy(
+                "CRUSHER",
+                [
+                    "THRASH_MOVE",
+                    "ENLARGING_STRIKE_MOVE",
+                    "BUG_STING_MOVE",
+                    "ADAPT_MOVE",
+                    "GUARDED_STRIKE_MOVE",
+                    "THRASH_MOVE",
+                    "ENLARGING_STRIKE_MOVE",
+                ],
+                "ENLARGING_STRIKE_MOVE",
+                intents=[attack_intent(4, 1, shown=4)],
+            ),
+            turn=6,
+        )
+        self.assertEqual(warnings, [])
+        self.assertEqual(ai, {**enemy_ai.ai_defaults(), "move_index": 6})
+        self.assertEqual(intent, emu_intent("Attack", 4))
         self.assertEqual(buffs, [])
 
     def test_a_buff_move_takes_its_amount_from_the_table(self) -> None:
@@ -1307,6 +1491,161 @@ class ToAiTests(unittest.TestCase):
         for name in ("ascension", "buffs"):
             self.assertIs(parameters[name].kind, inspect.Parameter.KEYWORD_ONLY, name)
             self.assertIs(parameters[name].default, inspect.Parameter.empty, name)
+
+
+class Act23ToAiTests(unittest.TestCase):
+    """What the Act 2-3 corpus cannot reach, and the rolls' own bookkeeping."""
+
+    def test_the_test_subjects_third_form_counts_from_its_park(self) -> None:
+        # Session 2026-09-26, round 6: two respawns in, Nemesis's Intangible up. The
+        # second respawn parks MoveIndex at 4 (CombatEngine.RespawnTestSubject).
+        log = ["BITE_MOVE", "SKULL_BASH_MOVE", *["MULTI_CLAW_MOVE"] * 3]
+        nemesis = [{"id": "NEMESIS_POWER", "amount": 1}]
+        ai, intent, warnings, _ = to_ai(
+            enemy(
+                "TEST_SUBJECT",
+                [*log, "PHASE3_LACERATE_MOVE"],
+                "PHASE3_LACERATE_MOVE",
+                intents=[attack_intent(10, 3)],
+                powers_=[*nemesis, {"id": "INTANGIBLE_POWER", "amount": 1}],
+            ),
+            5,
+        )
+        self.assertEqual(warnings, [])
+        self.assertEqual((ai["move_index"], ai["nemesis_intangible_on"]), (4, True))
+        self.assertEqual(intent, emu_intent("Attack", 10, 3))
+        # A round on, BIG_POUNCE with the Intangible down.
+        ai, intent, warnings, _ = to_ai(
+            enemy(
+                "TEST_SUBJECT",
+                [*log, "PHASE3_LACERATE_MOVE", "BIG_POUNCE"],
+                "BIG_POUNCE",
+                intents=[attack_intent(45)],
+                powers_=nemesis,
+            ),
+            6,
+        )
+        self.assertEqual(warnings, [])
+        self.assertEqual((ai["move_index"], ai["nemesis_intangible_on"]), (5, False))
+        self.assertEqual(intent, emu_intent("Attack", 45))
+
+    def test_the_second_forms_claws_climb_with_its_index(self) -> None:
+        # MULTI_CLAW hits 3 + MoveIndex - 2 (EnemyAI.cs:2694-2708): the second claw 4.
+        live = enemy(
+            "TEST_SUBJECT",
+            ["BITE_MOVE", "SKULL_BASH_MOVE", "MULTI_CLAW_MOVE", "MULTI_CLAW_MOVE"],
+            "MULTI_CLAW_MOVE",
+            intents=[attack_intent(None, None)],
+            powers_=[
+                {"id": "ADAPTABLE_POWER", "amount": 1},
+                {"id": "PAINFUL_STABS_POWER", "amount": 1},
+            ],
+        )
+        ai, intent, warnings, _ = to_ai(live, 3)
+        self.assertEqual(warnings, [])
+        self.assertEqual(ai["move_index"], 3)
+        self.assertEqual(intent, emu_intent("Attack", 10, 4))
+
+    def test_a_test_subject_cannot_go_back_to_biting(self) -> None:
+        _, _, warnings, _ = to_ai(
+            enemy(
+                "TEST_SUBJECT",
+                ["BITE_MOVE", "SKULL_BASH_MOVE", "MULTI_CLAW_MOVE", "BITE_MOVE"],
+                "BITE_MOVE",
+                intents=[attack_intent(20)],
+            ),
+            3,
+        )
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("not a walk", warnings[0])
+
+    def test_a_dizzy_rock_has_spent_its_off_balance(self) -> None:
+        # SelectIntent clears OffBalance as it announces DIZZY (EnemyAI.cs:1399-1408).
+        ai, intent, warnings, _ = to_ai(
+            enemy(
+                "BOWLBUG_ROCK",
+                ["HEADBUTT_MOVE", "DIZZY_MOVE"],
+                "DIZZY_MOVE",
+                intents=[other_intent("STUN")],
+            ),
+            1,
+        )
+        self.assertEqual(warnings, [])
+        self.assertEqual((ai["move_index"], ai["off_balance"]), (1, False))
+        self.assertEqual(intent, emu_intent("Unknown", 0))
+
+    def test_a_beetle_struck_awake_is_stunned_into_its_roll(self) -> None:
+        # Session 2026-09-26: the hit that ended its Slumber stunned it with ROLL_OUT to
+        # follow, which the emulator picks too once the stack is gone.
+        _, intent, warnings, buffs = to_ai(
+            enemy(
+                "SLUMBERING_BEETLE",
+                ["SNORE_MOVE"] * 3,
+                enemy_ai.STUNNED,
+                intents=[other_intent("STUN")],
+            ),
+            2,
+        )
+        self.assertEqual(warnings, [])
+        self.assertEqual(intent, emu_intent("Unknown", 0))
+        self.assertIn({"id": BUFF["Stunned"], "amount": 1}, buffs)
+
+    def test_a_beetle_never_goes_back_to_sleep(self) -> None:
+        _, _, warnings, _ = to_ai(
+            enemy(
+                "SLUMBERING_BEETLE",
+                ["SNORE_MOVE", "ROLL_OUT_MOVE", "SNORE_MOVE"],
+                "SNORE_MOVE",
+                intents=[other_intent("SLEEP")],
+            ),
+            2,
+        )
+        self.assertEqual(len(warnings), 1)
+
+    def test_the_rolls_keep_the_emulators_memory(self) -> None:
+        cases = [
+            # (monster, log, turn, fields the emulator holds with the last move shown)
+            (
+                "THE_OBSCURA",
+                ["ILLUSION_MOVE", "HARDENING_STRIKE_MOVE", "SAIL_MOVE"],
+                {"move_index": 2, "last_branch": 1, "repeat_streak": 1},
+            ),
+            # The opening RAM leaves RepeatStreak at 0, so a second counts one running.
+            (
+                "FLAIL_KNIGHT",
+                ["RAM_MOVE", "RAM_MOVE"],
+                {"move_index": 1, "last_branch": 2, "repeat_streak": 1},
+            ),
+            (
+                "SCROLL_OF_BITING",
+                ["MORE_TEETH", "CHEW", "CHOMP"],
+                {"starter_move": 2, "last_branch": 0, "repeat_streak": 1},
+            ),
+            (
+                "SPECTRAL_KNIGHT",
+                ["HEX", "SOUL_SLASH", "SOUL_SLASH"],
+                {"move_index": 2, "last_move": 1, "last_move_repeats": 2},
+            ),
+        ]
+        for entry, log, fields in cases:
+            with self.subTest(monster=entry):
+                ai, _, warnings, _ = to_ai(enemy(entry, log, log[-1]), len(log) - 1)
+                self.assertEqual(warnings, [])
+                self.assertEqual({name: ai[name] for name in fields}, fields)
+
+    def test_the_rolls_refuse_what_their_machines_cannot_do(self) -> None:
+        # A barred repeat reads as a move resumed after a stun (`Monster.replay`), so
+        # these are the other walks no machine makes.
+        for entry, log in (
+            ("THE_OBSCURA", ["ILLUSION_MOVE", "SAIL_MOVE", "ILLUSION_MOVE"]),
+            ("FLAIL_KNIGHT", ["WAR_CHANT", "RAM_MOVE"]),
+            ("SCROLL_OF_BITING", ["CHOMP", "CHEW"]),
+            ("SPECTRAL_KNIGHT", ["HEX", "SOUL_FLAME"]),
+        ):
+            with self.subTest(monster=entry):
+                _, _, warnings, _ = to_ai(enemy(entry, log, log[-1]), len(log) - 1)
+                self.assertEqual(len(warnings), 1)
+                self.assertIn("not a walk", warnings[0])
 
 
 class StunReviveSpawnTests(unittest.TestCase):

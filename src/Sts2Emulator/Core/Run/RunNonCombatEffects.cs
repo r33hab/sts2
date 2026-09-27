@@ -2919,8 +2919,56 @@ public static class RunNonCombatEffects
             RunConstants.AncientOrobas => OrobasOptions(state, rng),
             RunConstants.AncientPael => PaelOptions(state, rng),
             RunConstants.AncientTezcatara => TezcataraOptions(state, rng),
+            RunConstants.AncientNonupeipe => ShuffledPoolOptions(
+                RunConstants.NonupeipePool,
+                state.Deck.Count(card => Enchantments.CanEnchant(card, Enchantment.Swift)) >= 4
+                    ? RunConstants.RelicBeautifulBracelet
+                    : null,
+                rng
+            ),
+            RunConstants.AncientTanx => ShuffledPoolOptions(
+                RunConstants.TanxPool,
+                state.Deck.Count(card => Enchantments.CanEnchant(card, Enchantment.Instinct)) >= 3
+                    ? RunConstants.RelicTriBoomerang
+                    : null,
+                rng
+            ),
+            RunConstants.AncientVakuu => VakuuOptions(rng),
             _ => [],
         };
+    }
+
+    /// <summary>
+    /// Nonupeipe and Tanx: the pool in declaration order, the conditional blessing
+    /// appended when its deck condition holds, one <c>UnstableShuffle</c>, the first three.
+    /// </summary>
+    private static int[] ShuffledPoolOptions(ReadOnlySpan<int> pool, int? conditional, GameRng rng)
+    {
+        var offered = pool.ToArray().ToList();
+        if (conditional is int extra)
+        {
+            offered.Add(extra);
+        }
+
+        rng.Shuffle(offered);
+        return [.. offered.Take(3)];
+    }
+
+    /// <summary>Vakuu: each of its three pools shuffled in turn, and the first of each.</summary>
+    private static int[] VakuuOptions(GameRng rng)
+    {
+        var pools = new[]
+        {
+            RunConstants.VakuuPool1.ToArray().ToList(),
+            RunConstants.VakuuPool2.ToArray().ToList(),
+            RunConstants.VakuuPool3.ToArray().ToList(),
+        };
+        foreach (var pool in pools)
+        {
+            rng.Shuffle(pool);
+        }
+
+        return [pools[0][0], pools[1][0], pools[2][0]];
     }
 
     /// <summary>

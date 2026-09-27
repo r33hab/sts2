@@ -445,6 +445,34 @@ class BundleAndUnknownTests(unittest.TestCase):
         self.assertEqual(policy.stats.fallbacks["unknown"], 1)
 
 
+class ActTwoScreenTests(unittest.TestCase):
+    """Crystal Sphere and the Fake Merchant are decided by rules, not the fallback."""
+
+    def test_the_crystal_sphere_takes_the_big_tool_on_the_lowest_cell(self):
+        policy = rules.RulesPolicy()
+        decision = Decision(
+            "sphere",
+            tuple(Option("sphere.cell", a, scorable=False) for a in (130, 40, 12, 125)),
+        )
+        index = policy.choose(make_view(), decision, None)
+        self.assertEqual(decision.options[index].action, 12)
+        self.assertEqual(policy.stats.fallbacks.total(), 0)
+
+    def test_the_fake_merchant_is_left_without_buying_or_throwing(self):
+        policy = rules.RulesPolicy()
+        decision = Decision(
+            "shop",
+            (
+                Option("shop.relic", 0, relic=1, price=50),
+                Option("merchant.throw", 6, scorable=False),
+                Option("shop.leave", 7),
+            ),
+        )
+        index = policy.choose(make_view(), decision, None)
+        self.assertEqual(decision.options[index].kind, "shop.leave")
+        self.assertEqual(policy.stats.fallbacks.total(), 0)
+
+
 class WholeRunTests(unittest.TestCase):
     def test_rules_finish_three_seeds_at_five_sims_with_no_unknown_decision(self):
         for seed in ("RULES001", "RULES002", "RULES003"):

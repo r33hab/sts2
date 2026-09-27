@@ -170,6 +170,12 @@ class Fields:
     once_only_move_used: bool = False
     move_history: list[int] = field(default_factory=list)
     starts_on_branch: bool = False
+    # `PickBranch`'s memory (EnemyAI.cs:1074-1105) and a Scroll of Biting's opening.
+    last_branch: int = -1
+    repeat_streak: int = 0
+    starter_move: int = 0
+    # Nemesis's alternation (EnemyAI.ToggleNemesisIntangible).
+    nemesis_intangible_on: bool = False
     companions: dict[str, int] = field(default_factory=dict)
     seen: set[str] = field(default_factory=set)
 
@@ -1086,6 +1092,22 @@ class WaterfallGiant(Cycle):
         return super().announced(emu)
 
 
+class _Axebot(Cycle):
+    """BOOT_UP once, then HAMMER_UPPERCUT and ONE_TWO forever -- except BOOT_UP is only
+    ever index 0 for a respawn built with a stock override (Axebot.cs:
+    `GenerateMoveStateMachine` returns the machine on `moveState` when
+    `_stockOverrideAmount.HasValue`, and on `moveState3` -- HAMMER_UPPERCUT -- otherwise).
+    A fresh bot with no override skips the prefix entirely and opens on HAMMER_UPPERCUT
+    already at MoveIndex 1: EnemyAI.cs's `MoveIndex == 0` case is BOOT_UP's alone, so a
+    bot that never visits it cannot be sitting on that index.
+    """
+
+    def start(self, moves: Sequence[str], ctx: Context) -> Fields | None:
+        if moves[0] == self.loop[0]:
+            return Fields(move_index=len(self.prefix))
+        return super().start(moves, ctx)
+
+
 # ── The Act 1 monsters ───────────────────────────────────────────────────────
 #
 # Every monster an Act 1 encounter can field: the rosters (GenerateMonsters, plus what a
@@ -1095,6 +1117,317 @@ class WaterfallGiant(Cycle):
 # each intent is the value the monster's `SelectIntent` case returns, cited per model.
 
 _SPAWNED = "SPAWNED_MOVE"
+
+
+class TheObscura(Monster):
+    """ILLUSION once, then a roll over three CannotRepeat moves (EnemyAI.cs:1936-1965).
+
+    RAND follows every move and bars the one just made (decompiled TheObscura.cs). The
+    emulator opens on MoveIndex 0's ILLUSION and walks the roll with `PickBranch`
+    (EnemyAI.cs:1074-1105), which keeps it in `LastBranch` and `RepeatStreak`.
+    """
+
+    OPENER = "ILLUSION_MOVE"
+    BRANCHES = ("PIERCING_GAZE_MOVE", "SAIL_MOVE", "HARDENING_STRIKE_MOVE")
+
+    def __init__(self, entry: str, moves: Mapping[str, Move], **kwargs: Any) -> None:
+        super().__init__(entry, moves, rng=True, **kwargs)
+
+    def start(self, moves: Sequence[str], ctx: Context) -> Fields | None:
+        return Fields() if moves[0] == self.OPENER else None
+
+    def select(self, f: Fields, move: str, ctx: Context, *, check: bool = True) -> bool:
+        if move not in self.BRANCHES:
+            return not check
+        branch = self.BRANCHES.index(move)
+        if check and branch == f.last_branch:
+            return False
+        f.repeat_streak = f.repeat_streak + 1 if branch == f.last_branch else 1
+        f.last_branch = branch
+        return True
+
+    def announced(self, emu: Mapping[str, Any]) -> str:
+        if _stunned_buff(emu):
+            return STUNNED
+        ai = emu["ai"]
+        return (
+            self.OPENER if ai["move_index"] == 0 else self.BRANCHES[ai["last_branch"]]
+        )
+
+
+class FlailKnight(Monster):
+    """RAM, then a roll over WAR_CHANT (once running), FLAIL and RAM (twice) (EnemyAI.cs:1983-2020).
+
+    Every move returns to RAND (decompiled FlailKnight.cs), which the emulator walks with
+    `PickBranch` and per-branch caps of 1, 2 and 2. Its opening RAM, on MoveIndex 0, sets
+    `LastBranch` to RAM and leaves `RepeatStreak` at 0, so a second RAM counts one running.
+    """
+
+    BRANCHES = ("WAR_CHANT", "FLAIL_MOVE", "RAM_MOVE")
+    MAX_REPEATS = (1, 2, 2)
+
+    def __init__(self, entry: str, moves: Mapping[str, Move], **kwargs: Any) -> None:
+        super().__init__(entry, moves, rng=True, **kwargs)
+
+    def start(self, moves: Sequence[str], ctx: Context) -> Fields | None:
+        ram = self.BRANCHES.index("RAM_MOVE")
+        return Fields(last_branch=ram) if moves[0] == self.BRANCHES[ram] else None
+
+    def select(self, f: Fields, move: str, ctx: Context, *, check: bool = True) -> bool:
+        branch = self.BRANCHES.index(move)
+        eligible = [
+            index
+            for index, cap in enumerate(self.MAX_REPEATS)
+            if index != f.last_branch or f.repeat_streak < cap
+        ] or [0]
+        if check and branch not in eligible:
+            return False
+        f.repeat_streak = f.repeat_streak + 1 if branch == f.last_branch else 1
+        f.last_branch = branch
+        return True
+
+    def announced(self, emu: Mapping[str, Any]) -> str:
+        if _stunned_buff(emu):
+            return STUNNED
+        return self.BRANCHES[emu["ai"]["last_branch"]]
+
+
+class SpectralKnight(LastMoveRoll):
+    """HEX, SOUL_SLASH, then a roll of SOUL_SLASH (twice running) or SOUL_FLAME (EnemyAI.cs:2248-2300).
+
+    RAND offers SOUL_SLASH with a cap of two running and SOUL_FLAME as CannotRepeat
+    (decompiled SpectralKnight.cs); the emulator walks it on `LastMove`, in its own order
+    hex, soul slash, soul flame, and counts the run in `LastMoveRepeats`.
+    """
+
+    HEX, SLASH, FLAME = 0, 1, 2
+
+    def start(self, moves: Sequence[str], ctx: Context) -> Fields | None:
+        if moves[0] != self.order[self.HEX]:
+            return None
+        return Fields(last_move=self.HEX, last_move_repeats=1)
+
+    def select(self, f: Fields, move: str, ctx: Context, *, check: bool = True) -> bool:
+        number = self.order.index(move)
+        if f.last_move == self.HEX:
+            eligible = {self.SLASH}
+        else:
+            eligible = {self.FLAME} if f.last_move != self.FLAME else set()
+            if f.last_move != self.SLASH or f.last_move_repeats < 2:
+                eligible.add(self.SLASH)
+        if check and number not in eligible:
+            return False
+        f.last_move_repeats = f.last_move_repeats + 1 if number == f.last_move else 1
+        f.last_move = number
+        return True
+
+
+class ScrollOfBiting(Monster):
+    """CHOMP -> MORE_TEETH -> CHEW -> a roll of CHOMP or CHEW (EnemyAI.cs:5339-5410).
+
+    The machine opens on the move `StarterMoveIdx % 3` picks (decompiled
+    ScrollOfBiting.cs): 0 CHOMP, 1 CHEW, 2 MORE_TEETH. RAND, reached from CHEW only, offers
+    CHOMP and a CHEW capped at two running. The emulator keeps the starter in
+    `StarterMove` and walks the rest on `LastBranch` / `RepeatStreak`, numbering the moves
+    chomp, more teeth, chew; its opening sets a streak of one.
+    """
+
+    ORDER = ("CHOMP", "MORE_TEETH", "CHEW")
+    STARTER = {"CHOMP": 0, "CHEW": 1, "MORE_TEETH": 2}
+    CHOMP, MORE_TEETH, CHEW = 0, 1, 2
+
+    def __init__(self, entry: str, moves: Mapping[str, Move], **kwargs: Any) -> None:
+        super().__init__(entry, moves, rng=True, **kwargs)
+
+    def start(self, moves: Sequence[str], ctx: Context) -> Fields | None:
+        first = moves[0]
+        return Fields(
+            starter_move=self.STARTER[first],
+            last_branch=self.ORDER.index(first),
+            repeat_streak=1,
+        )
+
+    def select(self, f: Fields, move: str, ctx: Context, *, check: bool = True) -> bool:
+        chosen = self.ORDER.index(move)
+        if f.last_branch == self.CHOMP:
+            eligible = {self.MORE_TEETH}
+        elif f.last_branch == self.MORE_TEETH:
+            eligible = {self.CHEW}
+        else:
+            chew = {self.CHEW} if f.repeat_streak < 2 else set()
+            eligible = {self.CHOMP} | chew
+        if check and chosen not in eligible:
+            return False
+        f.repeat_streak = f.repeat_streak + 1 if chosen == f.last_branch else 1
+        f.last_branch = chosen
+        return True
+
+    def announced(self, emu: Mapping[str, Any]) -> str:
+        if _stunned_buff(emu):
+            return STUNNED
+        return self.ORDER[emu["ai"]["last_branch"]]
+
+
+class SlumberingBeetle(Monster):
+    """SNORE while its Slumber lasts, then ROLL_OUT for good (EnemyAI.cs:1526-1538).
+
+    SNORE's follow-up is a ConditionalBranchState on `HasPower<SlumberPower>()`, and
+    ROLL_OUT follows up to itself (decompiled SlumberingBeetle.cs). The emulator reads
+    only the `Slumber` stack, so `MoveIndex` just counts the moves. A hit that ends the
+    Slumber stuns the beetle with ROLL_OUT to follow (decompiled SlumberPower.cs
+    `CreatureCmd.Stun(..., "ROLL_OUT_MOVE")`), which is where the emulator goes too once
+    the stack is gone, so its stun costs nothing.
+    """
+
+    SNORE = "SNORE_MOVE"
+    ROLL_OUT = "ROLL_OUT_MOVE"
+
+    def start(self, moves: Sequence[str], ctx: Context) -> Fields | None:
+        return Fields() if moves[0] == self.SNORE else None
+
+    def select(self, f: Fields, move: str, ctx: Context, *, check: bool = True) -> bool:
+        return not check or move == self.ROLL_OUT or self.ROLL_OUT not in f.seen
+
+    def stunned(  # noqa: PLR6301 - Monster's hook, overridden
+        self,
+        f: Fields,
+        pending: str,
+        ctx: Context,
+    ) -> str | None:
+        return None
+
+    def announced(self, emu: Mapping[str, Any]) -> str:
+        if _stunned_buff(emu):
+            return STUNNED
+        return self.SNORE if _buff_amount(emu, "Slumber") > 0 else self.ROLL_OUT
+
+
+class BowlbugRock(Monster):
+    """HEADBUTT every turn, and a DIZZY turn after one the player fully blocked (EnemyAI.cs:1399-1414).
+
+    HEADBUTT's follow-up is a ConditionalBranchState on `IsOffBalance` (decompiled
+    BowlbugRock.cs). The emulator sets `OffBalance` when block swallows its attack whole
+    (EnemyAI.cs:4486-4496) and spends it the moment it announces DIZZY, so on display it is
+    always down; `MoveIndex` only counts the moves, and a stun resumes HEADBUTT as the
+    game does. What was blocked is not in the log, so any order of the two is accepted.
+    """
+
+    HEADBUTT = "HEADBUTT_MOVE"
+    DIZZY = "DIZZY_MOVE"
+
+    def start(self, moves: Sequence[str], ctx: Context) -> Fields | None:
+        return Fields() if moves[0] == self.HEADBUTT else None
+
+    def select(  # noqa: PLR6301 - Monster's hook, overridden
+        self,
+        f: Fields,
+        move: str,
+        ctx: Context,
+        *,
+        check: bool = True,
+    ) -> bool:
+        return True
+
+    def stunned(  # noqa: PLR6301 - Monster's hook, overridden
+        self,
+        f: Fields,
+        pending: str,
+        ctx: Context,
+    ) -> str | None:
+        return None
+
+    def announced(self, emu: Mapping[str, Any]) -> str:
+        if _stunned_buff(emu):
+            return STUNNED
+        unknown = _intent_value()["Unknown"]
+        return self.DIZZY if emu["intent"]["type"] == unknown else self.HEADBUTT
+
+
+class TestSubject(Monster):
+    """Three forms, one per life, told apart by the powers its respawns leave it.
+
+    Decompiled TestSubject.cs: BITE <-> SKULL_BASH until it dies; RESPAWN_MOVE (set on
+    death, never logged) then REVIVE_BRANCH: MULTI_CLAW on itself while `Respawns < 2`,
+    then PHASE3_LACERATE -> BIG_POUNCE -> BURNING_GROWL for good. The emulator picks the
+    form off PainfulStabs and Adaptable (EnemyAI.cs:2692-2745) and parks `MoveIndex` on
+    each respawn (CombatEngine.RespawnTestSubject): 2 for the second form, where
+    MULTI_CLAW's hits are `3 + MoveIndex - 2`, and 4 for the third, where the cycle is
+    `(MoveIndex - 4) % 3`. The respawn turn executes nothing, so the park stands.
+    """
+
+    FIRST = ("BITE_MOVE", "SKULL_BASH_MOVE")
+    CLAW = "MULTI_CLAW_MOVE"
+    THIRD = ("PHASE3_LACERATE_MOVE", "BIG_POUNCE", "BURNING_GROWL_MOVE")
+    RESPAWN = "RESPAWN_MOVE"
+    SECOND_FORM, THIRD_FORM = 2, 4
+
+    def __init__(self, entry: str, moves: Mapping[str, Move], **kwargs: Any) -> None:
+        super().__init__(entry, moves, forced=(self.RESPAWN,), **kwargs)
+
+    def start(self, moves: Sequence[str], ctx: Context) -> Fields | None:
+        return Fields() if moves[0] == self.FIRST[0] else None
+
+    def select(self, f: Fields, move: str, ctx: Context, *, check: bool = True) -> bool:
+        if not check:
+            return True
+        if move in self.FIRST:
+            first_form = self.CLAW not in f.seen
+            return first_form and self.FIRST[f.move_index % 2] == move
+        if move == self.CLAW:
+            if self.THIRD[0] in f.seen:
+                return False
+            if self.CLAW not in f.seen:
+                f.move_index = self.SECOND_FORM
+            return True
+        if self.THIRD[0] not in f.seen:
+            if move != self.THIRD[0] or self.CLAW not in f.seen:
+                return False
+            f.move_index = self.THIRD_FORM
+        return self.THIRD[(f.move_index - self.THIRD_FORM) % 3] == move
+
+    def intent(
+        self,
+        move: str,
+        f: Fields,
+        ascension: int,
+    ) -> tuple[str, int | None, int]:
+        kind, magnitude, hits = super().intent(move, f, ascension)
+        if move == self.CLAW:
+            hits = 3 + max(0, f.move_index - self.SECOND_FORM)
+        return kind, magnitude, hits
+
+    def force(  # noqa: PLR6301 - Monster's hook, overridden
+        self,
+        f: Fields,
+        move: str,
+        ctx: Context,
+    ) -> None:
+        # CombatEngine.TryRespawnTestSubject: Reviving 1 and a Buff readout.
+        f.companions["Reviving"] = 1
+
+    def settle(  # noqa: PLR6301 - Monster's hook, overridden
+        self,
+        f: Fields,
+        moves: Sequence[str],
+        ctx: Context,
+    ) -> None:
+        # Nemesis flips its Intangible on at the end of every other enemy turn, the one it
+        # was applied on first (EnemyAI.ToggleNemesisIntangible).
+        held = {power["id"] for power in ctx.enemy["powers"]}
+        f.nemesis_intangible_on = {"NEMESIS_POWER", "INTANGIBLE_POWER"} <= held
+
+    def announced(self, emu: Mapping[str, Any]) -> str:
+        if _reviving(emu):
+            return self.RESPAWN
+        if _stunned_buff(emu):
+            return STUNNED
+        move_index = emu["ai"]["move_index"]
+        if _buff_amount(emu, "PainfulStabs") > 0:
+            return self.CLAW
+        if _buff_amount(emu, "Adaptable") == 0:
+            return self.THIRD[(move_index - self.THIRD_FORM) % 3]
+        return self.FIRST[move_index % 2]
+
 
 _MODELS: tuple[Monster, ...] = (
     # EnemyAI.cs:1112-1119 -- MoveIndex 0 INCANTATION, then DARK_STRIKE for good.
@@ -1625,6 +1958,281 @@ _MODELS: tuple[Monster, ...] = (
             "PRESSURE_UP_MOVE",
         ),
     ),
+    # Act 2. EnemyAI.cs:2462-2496 is a bare 5-ring opening on THRASH, matching decompiled
+    # Monsters/Crusher.cs's GenerateMoveStateMachine exactly: no branches, no per-slot
+    # opener.
+    Cycle(
+        "CRUSHER",
+        {
+            "THRASH_MOVE": attack(deadly(14, 12)),
+            "ENLARGING_STRIKE_MOVE": attack(4),
+            "BUG_STING_MOVE": attack(deadly(7, 6), hits=2),
+            "ADAPT_MOVE": buff(deadly(3, 2)),
+            "GUARDED_STRIKE_MOVE": attack(deadly(14, 12)),
+        },
+        loop=(
+            "THRASH_MOVE",
+            "ENLARGING_STRIKE_MOVE",
+            "BUG_STING_MOVE",
+            "ADAPT_MOVE",
+            "GUARDED_STRIKE_MOVE",
+        ),
+    ),
+    # Act 2. EnemyAI.cs:4153-4178, decompiled Monsters/BowlbugSilk.cs: opens on
+    # TOXIC_SPIT (the machine's initial state, not THRASH), alternating forever.
+    Cycle(
+        "BOWLBUG_SILK",
+        {
+            "TOXIC_SPIT_MOVE": debuff(1),
+            "THRASH_MOVE": attack(deadly(5, 4), hits=2),
+        },
+        loop=("TOXIC_SPIT_MOVE", "THRASH_MOVE"),
+    ),
+    # Act 2. EnemyAI.cs:1449-1472, decompiled Monsters/Tunneler.cs: BITE, BURROW, then
+    # BELOW forever. DIZZY_MOVE (a StunIntent, BurrowedPower.AfterBlockBroken forces it)
+    # is declared but not modelled: breaking the burrow mid-fight is not yet verified
+    # against a live capture, so a log that reaches it falls back to generic rather than
+    # risk a wrong reset.
+    Cycle(
+        "TUNNELER",
+        {
+            "BITE_MOVE": attack(deadly(15, 13)),
+            "BURROW_MOVE": buff(0),
+            "BELOW_MOVE": attack(deadly(26, 23)),
+            "DIZZY_MOVE": unknown(live="STUN"),
+        },
+        prefix=("BITE_MOVE", "BURROW_MOVE"),
+        loop=("BELOW_MOVE",),
+    ),
+    # Act 2. EnemyAI.cs:1474-1503, decompiled Monsters/ThievingHopper.cs: THIEVERY,
+    # FLUTTER, HAT_TRICK, NAB, then ESCAPE forever.
+    Cycle(
+        "THIEVING_HOPPER",
+        {
+            "THIEVERY_MOVE": attack(deadly(19, 17)),
+            "FLUTTER_MOVE": buff(0),
+            "HAT_TRICK_MOVE": attack(deadly(23, 21)),
+            "NAB_MOVE": attack(deadly(16, 14)),
+            "ESCAPE_MOVE": unknown(live="ESCAPE"),
+        },
+        prefix=("THIEVERY_MOVE", "FLUTTER_MOVE", "HAT_TRICK_MOVE", "NAB_MOVE"),
+        loop=("ESCAPE_MOVE",),
+        # A stun while ESCAPE_MOVE is pending resumes it rather than advancing past it
+        # (Creature.StunInternal).
+        resumes_after_stun=True,
+    ),
+    # Act 3. EnemyAI.cs:1694-1703, decompiled Monsters/DevotedSculptor.cs: FORBIDDEN_
+    # INCANTATION once, then SAVAGE forever.
+    Cycle(
+        "DEVOTED_SCULPTOR",
+        {
+            "FORBIDDEN_INCANTATION_MOVE": buff(9),
+            "SAVAGE_MOVE": attack(deadly(15, 12)),
+        },
+        prefix=("FORBIDDEN_INCANTATION_MOVE",),
+        loop=("SAVAGE_MOVE",),
+    ),
+    # Act 3. EnemyAI.cs:1791-1814, decompiled Monsters/GlobeHead.cs: opens on
+    # SHOCKING_SLAP (the machine's initial state), cycling with THUNDER_STRIKE and
+    # GALVANIC_BURST.
+    Cycle(
+        "GLOBE_HEAD",
+        {
+            "SHOCKING_SLAP": attack(deadly(14, 13)),
+            "THUNDER_STRIKE": attack(deadly(7, 6), hits=3),
+            "GALVANIC_BURST": attack(deadly(17, 16)),
+        },
+        loop=("SHOCKING_SLAP", "THUNDER_STRIKE", "GALVANIC_BURST"),
+    ),
+    # Act 3. EnemyAI.cs:1850-1872, decompiled Monsters/OwlMagistrate.cs: MAGISTRATE_
+    # SCRUTINY, PECK_ASSAULT, JUDICIAL_FLIGHT, VERDICT, cycling.
+    Cycle(
+        "OWL_MAGISTRATE",
+        {
+            "MAGISTRATE_SCRUTINY": attack(deadly(17, 16)),
+            "PECK_ASSAULT": attack(4, hits=6),
+            "JUDICIAL_FLIGHT": buff(1),
+            "VERDICT": attack(deadly(36, 33)),
+        },
+        loop=("MAGISTRATE_SCRUTINY", "PECK_ASSAULT", "JUDICIAL_FLIGHT", "VERDICT"),
+    ),
+    # Act 3. EnemyAI.cs:1902-1914, decompiled Monsters/TheLost.cs: DEBILITATING_SMOG,
+    # EYE_LASERS, alternating forever.
+    Cycle(
+        "THE_LOST",
+        {
+            "DEBILITATING_SMOG": debuff(2),
+            "EYE_LASERS": attack(deadly(5, 4), hits=2),
+        },
+        loop=("DEBILITATING_SMOG", "EYE_LASERS"),
+    ),
+    # Act 3. EnemyAI.cs:1916-1934, decompiled Monsters/TheForgotten.cs: MIASMA, DREAD,
+    # alternating forever. DreadDamage is `GetValueIfAscension(Deadly, 15, 13) +` its own
+    # accumulated Dexterity, which climbs a turn at a time -- no table holds that, so it
+    # reads from the live display instead (Move.magnitude None).
+    Cycle(
+        "THE_FORGOTTEN",
+        {
+            "MIASMA": debuff(2),
+            "DREAD": attack(None),
+        },
+        loop=("MIASMA", "DREAD"),
+    ),
+    # Act 2. EnemyAI.cs:2498-2525, decompiled Monsters/Rocket.cs: TARGETING_RETICLE,
+    # PRECISION_BEAM, CHARGE_UP, LASER, RECHARGE, cycling. RECHARGE_MOVE is a SleepIntent.
+    Cycle(
+        "ROCKET",
+        {
+            "TARGETING_RETICLE_MOVE": attack(deadly(4, 3)),
+            "PRECISION_BEAM_MOVE": attack(deadly(20, 18)),
+            "CHARGE_UP_MOVE": buff(deadly(3, 2)),
+            "LASER_MOVE": attack(deadly(35, 31)),
+            "RECHARGE_MOVE": unknown(live="SLEEP"),
+        },
+        loop=(
+            "TARGETING_RETICLE_MOVE",
+            "PRECISION_BEAM_MOVE",
+            "CHARGE_UP_MOVE",
+            "LASER_MOVE",
+            "RECHARGE_MOVE",
+        ),
+    ),
+    # Act 3. EnemyAI.cs:2345-2374, decompiled Monsters/MechaKnight.cs: CHARGE once, then
+    # FLAMETHROWER, WINDUP, HEAVY_CLEAVE forever (HEAVY_CLEAVE's follow-up is the
+    # flamethrower, not the opening, so the charge never repeats).
+    Cycle(
+        "MECHA_KNIGHT",
+        {
+            "CHARGE_MOVE": attack(deadly(30, 25)),
+            # StatusIntent reads live as STATUS_CARD, which ids.INTENT_TYPES maps to the
+            # emulator's Debuff -- matching EnemyAI.cs's own `IntentType.Debuff` -- but the
+            # live spelling still needs naming, or a resample under this table disagrees
+            # with the game's own DEBUFF and is flagged not comparable rather than read.
+            "FLAMETHROWER_MOVE": debuff(4, live="STATUS_CARD"),
+            "WINDUP_MOVE": defend(15),
+            "HEAVY_CLEAVE_MOVE": attack(deadly(40, 35)),
+        },
+        prefix=("CHARGE_MOVE",),
+        loop=("FLAMETHROWER_MOVE", "WINDUP_MOVE", "HEAVY_CLEAVE_MOVE"),
+    ),
+    # Act 3. EnemyAI.cs:2306-2343, decompiled Monsters/MagiKnight.cs: POWER_SHIELD then
+    # DAMPEN once each, then RAM, PREP, MAGIC_BOMB forever (MAGIC_BOMB's follow-up is
+    # RAM, not the opening).
+    Cycle(
+        "MAGI_KNIGHT",
+        {
+            "POWER_SHIELD_MOVE": attack(deadly(7, 6)),
+            "DAMPEN_MOVE": debuff(1),
+            "RAM_MOVE": attack(deadly(11, 10)),
+            "PREP_MOVE": defend(tough(9, 5)),
+            "MAGIC_BOMB": attack(deadly(40, 35)),
+        },
+        prefix=("POWER_SHIELD_MOVE", "DAMPEN_MOVE"),
+        loop=("RAM_MOVE", "PREP_MOVE", "MAGIC_BOMB"),
+    ),
+    # Act 3. EnemyAI.cs:1664-1692, decompiled Monsters/Axebot.cs: see `_Axebot`.
+    _Axebot(
+        "AXEBOT",
+        {
+            "BOOT_UP_MOVE": defend(deadly(15, 10)),
+            "HAMMER_UPPERCUT_MOVE": attack(deadly(14, 12)),
+            "ONE_TWO_MOVE": attack(deadly(10, 9), hits=2),
+        },
+        prefix=("BOOT_UP_MOVE",),
+        loop=("HAMMER_UPPERCUT_MOVE", "ONE_TWO_MOVE"),
+        # `StockPower` (EnemyAI.cs's HoldsTheFightOpen list): its death builds a new one
+        # in its slot while stock is left, so the roster's later Axebots join mid-fight.
+        summoned=True,
+    ),
+    # Act 3. EnemyAI.cs:1965-1970, decompiled Monsters/Parafright.cs: SLAM forever, the
+    # whole creature. Summoned mid-fight by The Obscura's ILLUSION_MOVE
+    # (SummonParafright), not stunned, and carrying Illusion -- REVIVE_MOVE is the
+    # power's own generic display, not one of Parafright's own moves.
+    Cycle(
+        "PARAFRIGHT",
+        {"SLAM_MOVE": attack(deadly(17, 16))},
+        loop=("SLAM_MOVE",),
+        summoned=True,
+        revives=True,
+    ),
+    # Act 3. See `TheObscura`. ILLUSION is a SummonIntent the emulator announces as a bare
+    # Buff (EnemyAI.cs:1943-1946); WAIL's move id is SAIL_MOVE, a BuffIntent whose
+    # magnitude is the Strength it gives.
+    TheObscura(
+        "THE_OBSCURA",
+        {
+            "ILLUSION_MOVE": Move("SUMMON", "Buff", 0),
+            "PIERCING_GAZE_MOVE": attack(deadly(11, 10)),
+            "SAIL_MOVE": buff(3),
+            "HARDENING_STRIKE_MOVE": attack(deadly(7, 6)),
+        },
+        branches=("RAND",),
+    ),
+    # Act 3. See `FlailKnight`.
+    FlailKnight(
+        "FLAIL_KNIGHT",
+        {
+            "WAR_CHANT": buff(3),
+            "FLAIL_MOVE": attack(deadly(10, 9), hits=2),
+            "RAM_MOVE": attack(deadly(17, 15)),
+        },
+        branches=("RAND",),
+    ),
+    # Act 3. See `SpectralKnight`. HEX is HexPower(2) on the player.
+    SpectralKnight(
+        "SPECTRAL_KNIGHT",
+        {
+            "HEX": debuff(2),
+            "SOUL_SLASH": attack(deadly(17, 15)),
+            "SOUL_FLAME": attack(deadly(4, 3), hits=3),
+        },
+        branches=("RAND",),
+    ),
+    # Act 3. See `ScrollOfBiting`.
+    ScrollOfBiting(
+        "SCROLL_OF_BITING",
+        {
+            "CHOMP": attack(deadly(16, 14)),
+            "CHEW": attack(deadly(6, 5), hits=2),
+            "MORE_TEETH": buff(2),
+        },
+        branches=("rand",),
+    ),
+    # Act 2. See `SlumberingBeetle`. SNORE is a SleepIntent the emulator announces as
+    # Unknown; ROLL_OUT's Strength rides beside the attack (EnemyAI.cs:666-677).
+    SlumberingBeetle(
+        "SLUMBERING_BEETLE",
+        {
+            "SNORE_MOVE": unknown(live="SLEEP"),
+            "ROLL_OUT_MOVE": attack(deadly(18, 16)),
+        },
+        branches=("SNORE_NEXT",),
+    ),
+    # Act 2. See `BowlbugRock`. DIZZY is a StunIntent the emulator announces as Unknown.
+    BowlbugRock(
+        "BOWLBUG_ROCK",
+        {
+            "HEADBUTT_MOVE": attack(deadly(16, 15)),
+            "DIZZY_MOVE": unknown(live="STUN"),
+        },
+        branches=("POST_HEADBUTT",),
+    ),
+    # Act 3. See `TestSubject`. SKULL_BASH carries Vulnerable 1 beside its attack;
+    # BURNING_GROWL is a StatusIntent (its Burns) the emulator announces as a Debuff;
+    # RESPAWN_MOVE is a HealIntent the emulator announces as a bare Buff.
+    TestSubject(
+        "TEST_SUBJECT",
+        {
+            "BITE_MOVE": attack(deadly(22, 20)),
+            "SKULL_BASH_MOVE": attack(deadly(16, 14)),
+            "MULTI_CLAW_MOVE": attack(deadly(11, 10), hits=3),
+            "PHASE3_LACERATE_MOVE": attack(deadly(11, 10), hits=3),
+            "BIG_POUNCE": attack(45),
+            "BURNING_GROWL_MOVE": debuff(deadly(5, 3), live="STATUS_CARD"),
+            "RESPAWN_MOVE": Move("HEAL", "Buff", 0),
+        },
+        branches=("REVIVE_BRANCH",),
+    ),
 )
 
 
@@ -1752,6 +2360,10 @@ def _fields_ai(f: Fields) -> dict[str, Any]:
         once_only_move_used=f.once_only_move_used,
         move_history=list(f.move_history),
         starts_on_branch=f.starts_on_branch,
+        last_branch=f.last_branch,
+        repeat_streak=f.repeat_streak,
+        starter_move=f.starter_move,
+        nemesis_intangible_on=f.nemesis_intangible_on,
     )
     return ai
 

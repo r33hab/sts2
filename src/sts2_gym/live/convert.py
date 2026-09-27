@@ -223,10 +223,16 @@ def _cards(value: object, path: str) -> list[dict[str, Any]]:
 
 
 def _powers(value: object, path: str) -> list[dict[str, Any]]:
-    return [
-        _object(power, f"{path}[{i}]", ("id", "amount"))
-        for i, power in enumerate(_list(value, path))
-    ]
+    out = []
+    for i, power in enumerate(_list(value, path)):
+        where = f"{path}[{i}]"
+        # `fields` (schema section 1, amended 2026-09-27): what a power keeps beside its
+        # amount, which `powers.to_buffs` and `powers.to_ai_fields` read by name.
+        checked = _object(power, where, ("id", "amount"), ("fields",))
+        if "fields" in checked:
+            _primitives(checked["fields"], f"{where}.fields")
+        out.append(checked)
+    return out
 
 
 # ── Areas ────────────────────────────────────────────────────────────────────
@@ -370,18 +376,24 @@ def _draw(
     ],
     warnings: list[str],
     corruption: bool,
+    free_card_types: frozenset[str],
 ) -> dict[str, Any]:
     """Translate the draw pile's three regions (`_draw_regions`) into `piles.draw`."""
     top, middle, bottom = regions
     return {
-        "known_top": _translated(top, "known_draw_top", warnings, corruption),
-        "known_bottom": _translated(bottom, "known_draw_bottom", warnings, corruption),
+        "known_top": _translated(
+            top, "known_draw_top", warnings, corruption, free_card_types
+        ),
+        "known_bottom": _translated(
+            bottom, "known_draw_bottom", warnings, corruption, free_card_types
+        ),
         "unordered": [
             cards.to_emu_card(
                 card,
                 path=f"draw_pile[{i}]",
                 warnings=warnings,
                 corruption=corruption,
+                free_card_types=free_card_types,
             )
             for i, card in middle
         ],
@@ -393,6 +405,7 @@ def _translated(
     key: str,
     warnings: list[str],
     corruption: bool,
+    free_card_types: frozenset[str],
 ) -> list[dict[str, Any]]:
     """Translate a validated live pile, keeping its order."""
     return [
@@ -401,6 +414,7 @@ def _translated(
             path=f"{key}[{i}]",
             warnings=warnings,
             corruption=corruption,
+            free_card_types=free_card_types,
         )
         for i, card in enumerate(live_cards)
     ]
@@ -458,6 +472,8 @@ def _enemies(
     turn: int,
     ascension: int,
     warnings: list[str],
+    *,
+    no_card_played: bool,
 ) -> list[dict[str, Any]]:
     listed = _list(live["enemies"], "enemies")
     if len(listed) > MAX_ENEMIES:
@@ -475,6 +491,7 @@ def _enemies(
             owner="enemy",
             path=f"{where}.powers",
             warnings=warnings,
+            no_card_played=no_card_played,
         )
         # The per-monster tables rebuild the AI block and the intent, and set the
         # emulator-only BuffIds that carry AI state on `buffs`.
@@ -486,7 +503,7 @@ def _enemies(
             buffs=buffs,
         )
         warnings.extend(ai_warnings)
-        ai.update(powers.to_ai_fields(enemy["powers"]))
+        ai.update(powers.to_ai_fields(enemy["powers"], path=f"{where}.powers"))
         out.append(
             {
                 "def_id": def_id,
@@ -775,11 +792,30 @@ def convert(live: dict[str, Any]) -> ConversionResult:
 
     osty_hp, osty_max_hp = _osty(player["osty"])
     corruption = any(buff["id"] == powers.buff_id("CORRUPTION_POWER") for buff in buffs)
+    # FreeAttackPower/FreeSkillPower/FreePowerPower each spend on the next card of their
+    # type PLAYED -- unlike Corruption's permanent, pile-agnostic recoloring, so unlike
+    # `corruption` this only explains a cost shown in HAND, where a card the game charges
+    # 0 because it would spend the buff can actually be played next. None of the three
+    # has a `BuffId` the live snapshot's own powers carry through as a buff
+    # (`BUFF_ID_TO_LIVE`), so this reads the live power list `powers.to_buffs` has not
+    # yet turned into buffs, by the same live ids `cards.FREE_CARD_TYPES` names.
+    free_card_types = frozenset(
+        card_type
+        for live_id, card_type in cards.FREE_CARD_TYPES.items()
+        if any(
+            power["id"] == live_id and power["amount"] > 0 for power in player_powers
+        )
+    )
+    no_free_types: frozenset[str] = frozenset()
     piles: dict[str, Any] = {
-        "hand": _translated(hand, "hand", warnings, corruption),
-        "discard": _translated(discard, "discard_pile", warnings, corruption),
-        "exhaust": _translated(exhaust, "exhaust_pile", warnings, corruption),
-        "draw": _draw(draw, warnings, corruption),
+        "hand": _translated(hand, "hand", warnings, corruption, free_card_types),
+        "discard": _translated(
+            discard, "discard_pile", warnings, corruption, no_free_types
+        ),
+        "exhaust": _translated(
+            exhaust, "exhaust_pile", warnings, corruption, no_free_types
+        ),
+        "draw": _draw(draw, warnings, corruption, no_free_types),
     }
 
     doc = {
@@ -811,7 +847,15 @@ def convert(live: dict[str, Any]) -> ConversionResult:
         "potions": _potions(player, warnings),
         "piles": piles,
         "incoming": {"return_to_hand": [], "copies_to_hand": []},
-        "enemies": _enemies(top, turn, ascension, warnings),
+        "enemies": _enemies(
+            top,
+            turn,
+            ascension,
+            warnings,
+            # No card has finished this turn and none is waiting on a selection.
+            no_card_played=live_pending is None
+            and history.get("cards_played_this_turn") == 0,
+        ),
         "counters": {**history, **power_counters, **relic_state.counters, **_ALWAYS},
         "pending_selection": pending,
     }

@@ -173,4 +173,71 @@ public class ActTransitionTests
         Assert.False(engine.EnterNextAct());
         Assert.Equal(engine.State.Acts.Count - 1, engine.State.CurrentActIndex);
     }
+
+    /// <summary>
+    /// Leaving act 2's first room goes back to the map. The floor carries across acts, so
+    /// act 2's rooms are floors 19-34; a backstop that compared the floor with one act's
+    /// boss row ended every act-2 run on floor 19 as if it had walked off the map.
+    /// </summary>
+    [Fact]
+    public void LeavingActTwosFirstRoomGoesBackToTheMap()
+    {
+        var engine = Started("ACT2TEST01");
+        engine.State.Floor = 17; // the act-1 boss's floor
+        engine.EnterNextAct();
+        engine.Step(0, -1, out _, out _, out _); // onto the ancient: floor 18
+        var firstRoom = engine.State.MapNodes.Keys.First(coord => coord.Row == 1);
+        engine.State.CurrentMapCoord = firstRoom;
+        engine.State.CurrentNodeType = RunConstants.NodeRelic;
+        engine.State.Floor = 19;
+        RunRewardGenerator.EnterTreasureRoom(engine.State);
+
+        engine.Step(RunConstants.RewardSkipAction, -1, out _, out bool terminal, out _);
+
+        Assert.False(terminal);
+        Assert.Equal(RunPhase.Map, engine.State.Phase);
+    }
+
+    /// <summary>
+    /// Act 3's ancients offer three blessings like the others: Nonupeipe and Tanx shuffle
+    /// one pool and take three, Vakuu takes one from each of three pools (decompiled
+    /// <c>GenerateInitialOptions</c>). With none, the screen had no legal action.
+    /// </summary>
+    [Theory]
+    [InlineData("ACT3TEST01")]
+    [InlineData("ACT3TEST02")]
+    [InlineData("ACT3TEST03")]
+    [InlineData("ACT3TEST04")]
+    public void ActThreesAncientOffersThreeBlessings(string seed)
+    {
+        var engine = Started(seed);
+        engine.EnterNextAct();
+        engine.EnterNextAct();
+
+        engine.Step(0, -1, out _, out _, out _);
+
+        Assert.Equal(RunPhase.Ancient, engine.State.Phase);
+        int[] offered = engine.State.NeowOptions;
+        Assert.All(offered, relic => Assert.NotEqual(0, relic));
+        Assert.Equal(3, offered.Distinct().Count());
+        var pool = RunConstants.ActThreeAncientPool(engine.State.Ancient);
+        Assert.All(offered, relic => Assert.Contains(relic, pool));
+    }
+
+    /// <summary>
+    /// The encounter counters belong to the act (<c>RoomSet.normalEncountersVisited</c>),
+    /// so a new act starts on its own weak fights instead of wherever act 1 stopped.
+    /// </summary>
+    [Fact]
+    public void EachActCountsItsOwnEncounters()
+    {
+        var engine = Started("3PFLW9XC5D");
+        engine.State.NormalEncountersVisited = 6;
+        engine.State.EliteEncountersVisited = 2;
+
+        engine.EnterNextAct();
+
+        Assert.Equal(0, engine.State.NormalEncountersVisited);
+        Assert.Equal(0, engine.State.EliteEncountersVisited);
+    }
 }

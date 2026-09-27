@@ -2,8 +2,14 @@
 
 `score_options(decision, view)` values every option on a screen. Each scorable option's
 afterstate is encoded (`features.encode_afterstate`), FightNet fills its fight block H, and
-V's floor distribution is read as `V_W` (expected floors, a boss kill worth W) and `p_18`
-(the chance the Act 1 boss dies). The same call serves self-play, evaluation and the coach.
+V's floor distribution is read as `V_W` (expected floors, a won run worth W) and the win
+chance (its last class). The same call serves self-play, evaluation and the coach.
+
+**Both export formats score.** A full-run model has 53 floor classes and reads the whole
+version-2 vector; the Act 1 export (feature version 1, 18 classes, its last class the
+Act 1 boss kill, W = 26) reads the vector's first 1843 numbers (`NumpyNets.base_size`), so
+the coach keeps scoring with it until a full-run champion replaces it. `model.json`
+records `floor_classes`; an export without it is the 18-class Act 1 format.
 
 **The engine service's seam.** The service imports `run_train.features` and
 `run_train.policy` lazily, with `rl/` on the path, and calls
@@ -15,7 +21,7 @@ torch.
 `LookaheadPolicy` is the learned self-play policy: it picks by the same values, with the
 softmax-and-epsilon exploration of 5.5, and hands every unscorable option to the rules.
 
-**W has one source.** A job's config names the value of a boss kill; the runner writes it
+**W has one source.** A job's config names the value of a won run; the runner writes it
 into every lookahead spec (`runner.playing_spec`), the policy records it in the run's
 policy block, and `EvalMeta` records the same number. An exported model carries its own in
 `model.json`. Nothing here falls back on a default.
@@ -54,7 +60,8 @@ __all__ = [
 ]
 
 # Erratum E7 (spec 8.1): the win chance is shown once self-play wins at least 5% of runs,
-# read from the recorded self-play boss-kill rate, never the eval rate.
+# read from the recorded self-play win rate (the boss-kill rate of an Act 1 export), never
+# the eval rate.
 WIN_CHANCE_SELFPLAY_RATE = 0.05
 # Where Task 4's `export` writes the champion; the engine service reads the same folder.
 STRATEGY_MODEL_DIR = (
@@ -67,9 +74,10 @@ MODEL_JSON = "model.json"
 class OptionScore:
     """One option's value (DESIGN.md 7).
 
-    `value` is `V_W` in expected floors and `p_boss` the boss-kill chance `p_18`; both are
-    None for an unscorable option, which the rules decide. `p_boss` is also None while the
-    model's recorded self-play boss-kill rate is under 5% (erratum E7).
+    `value` is `V_W` in expected floors and `p_boss` the win chance (the last floor class:
+    a won run, or the Act 1 boss kill for the Act 1 export); both are None for an
+    unscorable option, which the rules decide. `p_boss` is also None while the model's
+    recorded self-play win rate is under 5% (erratum E7).
     """
 
     option: Option
@@ -82,7 +90,7 @@ class OptionScore:
 class Model:
     """A strategy model loaded for scoring: its nets, W, and whether its win chance shows.
 
-    `W` is None for a bare checkpoint, which does not say what a boss kill is worth.
+    `W` is None for a bare checkpoint, which does not say what a won run is worth.
     """
 
     nets: models.NumpyNets
@@ -95,14 +103,17 @@ def load(source: str | Path) -> Model:
     """Load a strategy model: an exported champion's folder, or a checkpoint's `.npz`.
 
     A folder holds `model.json` and its weights: the `.npz` that model.json names under
-    `npz`, or else the folder's only `.npz`. model.json gives W and
-    `selfplay_boss_kill_rate`, the recorded self-play boss-kill rate that opens the win
-    chance at 5% (erratum E7). A bare `.npz` has no W and shows no win chance. A folder
+    `npz`, or else the folder's only `.npz`. model.json gives W and `selfplay_win_rate`
+    (`selfplay_boss_kill_rate` in the Act 1 format), the recorded self-play rate that opens
+    the win chance at 5% (erratum E7), and `floor_classes`, which the weights must match
+    (the Act 1 export predates it; `models.load_numpy` holds each feature version to its
+    class count either way). A bare `.npz` has no W and shows no win chance. A folder
     without model.json raises `FileNotFoundError`.
 
     Raises:
-        ValueError: If model.json names no W: an export always says what a boss kill is
-            worth (DESIGN.md 5.2), and no default stands in for it.
+        ValueError: If model.json names no W: an export always says what a won run is
+            worth (DESIGN.md 5.2), and no default stands in for it. Also if its
+            `floor_classes` disagrees with the weights.
 
     """
     path = Path(source).expanduser()
@@ -114,7 +125,7 @@ def load(source: str | Path) -> Model:
         npz = _weights(path, info)
         if not isinstance(info.get("W"), int | float):
             raise ValueError(
-                f"{path / MODEL_JSON} names no W, the value of a boss kill (DESIGN.md 5.2)",
+                f"{path / MODEL_JSON} names no W, the value of a won run (DESIGN.md 5.2)",
             )
         w = float(info["W"])
     stat = npz.stat()
@@ -124,7 +135,14 @@ def load(source: str | Path) -> Model:
         stat.st_size,
         info.get("generation"),
     )
-    rate = info.get("selfplay_boss_kill_rate")
+    if path.is_dir() and "floor_classes" in info:
+        recorded = info["floor_classes"]
+        if recorded != nets.value.floor_classes:
+            raise ValueError(
+                f"{path / MODEL_JSON} records {recorded} floor classes and its weights "
+                f"have {nets.value.floor_classes}",
+            )
+    rate = info.get("selfplay_win_rate", info.get("selfplay_boss_kill_rate"))
     return Model(
         nets,
         W=w,
@@ -169,14 +187,16 @@ def floor_probs(
     view: RunView,
     options: Sequence[Option],
 ) -> np.ndarray:
-    """Return V's floor distribution for each option's afterstate, (options, 18).
+    """Return V's floor distribution for each option's afterstate, (options, classes).
 
     Every option must be scorable. H is FightNet over the region's pools and the boss
-    (`features.fight_queries`), which an afterstate never changes.
+    (`features.fight_queries`), which an afterstate never changes. A version-1 model reads
+    the first 1843 numbers of each vector (`NumpyNets.base_size`).
     """
     if not options:
-        return np.zeros((0, models.FLOOR_CLASSES), dtype=np.float32)
+        return np.zeros((0, nets.value.floor_classes), dtype=np.float32)
     bases = np.stack([features.encode_afterstate(view, option) for option in options])
+    bases = bases[:, : nets.base_size]
     block = nets.fight.summary(bases, features.fight_queries(view))
     return nets.value.floor_probs(np.concatenate([bases, block], axis=1))
 
@@ -194,7 +214,7 @@ def score_options(
     for the champion exported to `STRATEGY_MODEL_DIR`.
 
     Raises:
-        ValueError: If the model does not say what a boss kill is worth: a bare `.npz`
+        ValueError: If the model does not say what a won run is worth: a bare `.npz`
             is scored through a `Model` given its W.
 
     """
@@ -202,14 +222,14 @@ def score_options(
     scorer = _model(model)
     if scorer.W is None:
         raise ValueError(
-            "this model does not say what a boss kill is worth: score an export (its "
+            "this model does not say what a won run is worth: score an export (its "
             "model.json carries W) or a Model given W (DESIGN.md 5.2)",
         )
     scorable = [option for option in decision.options if option.scorable]
     probs = floor_probs(scorer.nets, view, scorable)
     valued = zip(
         models.expected_floors(probs, scorer.W).tolist(),
-        models.boss_chance(probs).tolist(),
+        models.win_chance(probs).tolist(),
         strict=True,
     )
     scores = []
@@ -267,7 +287,7 @@ class LookaheadPolicy:
         worth = W if W is not None else model.W
         if worth is None:
             raise ValueError(
-                f"{checkpoint} does not say what a boss kill is worth: pass W, the job "
+                f"{checkpoint} does not say what a won run is worth: pass W, the job "
                 "config's (DESIGN.md 5.2)",
             )
         self.checkpoint = str(checkpoint)

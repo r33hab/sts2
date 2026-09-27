@@ -50,7 +50,7 @@ from multiprocessing import connection
 from pathlib import Path
 from typing import Any, Self
 
-from . import selfplay, shards
+from . import seeding, selfplay, shards, vocab
 from .engine import CombatBudget
 
 __all__ = [
@@ -105,12 +105,13 @@ class JobConfig:
     combat_budget: CombatBudget = DEFAULT_BUDGET
     ascension: int = 10
     ascension_stands_in_for: int | None = None
-    W: float = 26.0  # the value of a boss kill (5.2)
+    # The value of a won run: the last floor + 1 (FULL_RUNS.md), not a guess.
+    W: float = float(vocab.WON_FLOOR)
     c: float = selfplay.DEFAULT_C
     crn_fraction: float = selfplay.DEFAULT_CRN_FRACTION
-    seed_timeout: float = 600.0  # erratum O5
+    seed_timeout: float = 3_600.0  # erratum O5; a full run is several Act 1 runs long
     shard_size: int = 25
-    run_step_cap: int = 6_000
+    run_step_cap: int = seeding.RUN_STEP_CAP
 
     def __post_init__(self) -> None:
         if self.workers < 1:
@@ -335,7 +336,7 @@ class _SigtermFlag:
 def playing_spec(policy_spec: dict[str, Any], config: JobConfig) -> dict[str, Any]:
     """Return the spec a job's workers play: a lookahead spec carries the job's W.
 
-    W, the value of a boss kill (5.2), has one source: the job's config, which `EvalMeta`
+    W, the value of a won run (5.2), has one source: the job's config, which `EvalMeta`
     also records. A lookahead spec gets it here; the rules policy values nothing and gets
     none.
 

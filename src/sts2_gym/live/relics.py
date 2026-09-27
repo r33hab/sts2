@@ -12,6 +12,11 @@ instead, and that state comes back here as counters.
 starter, the Ironclad pool and Neow's Act 1 offers. A relic outside it, or one whose
 fields do not say what the emulator needs, gets the value a combat starts from and a
 warning naming it; nothing is guessed silently.
+
+The mod reports a relic's int and bool fields and leaves out those at 0 / false, so a
+missing key reads as 0 / false (STS2MCP docs/raw-full.md, relic `fields`). A field of any
+other type never arrives, so its absence says nothing: `UNREPORTED_FIELDS` names the ones a
+rule reads, which keep their warning.
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from functools import cache
+from functools import cache, partial
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -88,6 +93,23 @@ def _missing(live: _Live, what: str) -> str:
     )
 
 
+# Fields a rule reads that the mod never reports, because it reflects int and bool fields
+# only: `BeatingRemnant._damageReceivedThisTurn` is a decimal (decompiled
+# BeatingRemnant.cs). Checked against the decompiled classes by test_live_convert.py.
+UNREPORTED_FIELDS = frozenset({("BEATING_REMNANT", "_damageReceivedThisTurn")})
+
+
+def _absent(live: _Live, field: str) -> str | None:
+    """Warn about a field missing from the snapshot, or give None when it is at 0 / false.
+
+    The mod leaves an int or bool field at 0 / false out (raw-full.md, relic `fields`), so
+    only a field it never reports is unknown when it is missing.
+    """
+    if (live.entry, field) in UNREPORTED_FIELDS:
+        return _missing(live, f"fields['{field}'] is")
+    return None
+
+
 # A counter rule turns (counter, fields, turn) into the emulator's Counter, plus a warning
 # when the live side could not supply it.
 CounterRule = Callable[[_Live], tuple[int, str | None]]
@@ -97,32 +119,49 @@ def _zero(live: _Live) -> tuple[int, str | None]:
     return 0, None
 
 
+# Each rule that reads a relic field is a `partial` whose first argument names the field,
+# which `fields_read` reports.
+
+
+def _residue_rule(field: str, period: int, live: _Live) -> tuple[int, str | None]:
+    if field in live.fields:
+        return _integer(live, field) % period, None
+    if live.counter is not None:
+        return live.counter % period, None
+    return 0, _absent(live, field)
+
+
 def _residue(field: str, period: int) -> CounterRule:
     """Read a count the emulator keeps as `(Counter + 1) % period` (RelicEffects.cs:1613-1623).
 
     The game shows the same residue -- or the whole period while the relic's activation
     animation plays, which is the moment the count wrapped, so residue 0 as well.
     """
+    return partial(_residue_rule, field, period)
 
-    def rule(live: _Live) -> tuple[int, str | None]:
-        if field in live.fields:
-            return _integer(live, field) % period, None
-        if live.counter is not None:
-            return live.counter % period, None
-        return 0, _missing(live, f"fields['{field}'] is")
 
-    return rule
+def _flag_rule(field: str, live: _Live) -> tuple[int, str | None]:
+    if field in live.fields:
+        return int(_boolean(live, field)), None
+    return 0, _absent(live, field)
 
 
 def _flag(field: str) -> CounterRule:
     """Read a yes/no the emulator keeps as Counter 1/0."""
+    return partial(_flag_rule, field)
 
-    def rule(live: _Live) -> tuple[int, str | None]:
-        if field in live.fields:
-            return int(_boolean(live, field)), None
-        return 0, _missing(live, f"fields['{field}'] is")
 
-    return rule
+def _count_rule(
+    field: str,
+    from_field: Callable[[int], int],
+    from_display: Callable[[int], int] | None,
+    live: _Live,
+) -> tuple[int, str | None]:
+    if field in live.fields:
+        return from_field(_integer(live, field)), None
+    if live.counter is not None and from_display is not None:
+        return from_display(live.counter), None
+    return from_field(0), _absent(live, field)
 
 
 def _count(
@@ -132,22 +171,14 @@ def _count(
     from_display: Callable[[int], int] | None = None,
 ) -> CounterRule:
     """Read a count the emulator keeps whole; `from_display` recovers it from the display."""
-
-    def rule(live: _Live) -> tuple[int, str | None]:
-        if field in live.fields:
-            return from_field(_integer(live, field)), None
-        if live.counter is not None and from_display is not None:
-            return from_display(live.counter), None
-        return 0, _missing(live, f"fields['{field}'] is")
-
-    return rule
+    return partial(_count_rule, field, from_field, from_display)
 
 
 # `Pocketwatch`'s CardThreshold (RelicEffects.cs:1187).
 _POCKETWATCH_THRESHOLD = 3
 
 
-def _pocketwatch(live: _Live) -> tuple[int, str | None]:
+def _pocketwatch_rule(field: str, live: _Live) -> tuple[int, str | None]:
     """Rebuild the turn-start verdict `turnNumber > 1 && CardPlaysThisTurn <= 3`.
 
     RelicEffects.cs:1179-1183 takes it from LAST turn's plays and parks it on the Counter
@@ -155,10 +186,12 @@ def _pocketwatch(live: _Live) -> tuple[int, str | None]:
     `_cardsPlayedLastTurn` -- which the game zeroes going into turn one, where the
     emulator's verdict is always 0.
     """
-    field = "_cardsPlayedLastTurn"
-    if field not in live.fields:
-        return 0, _missing(live, f"fields['{field}'] is")
-    return int(live.turn > 0 and _integer(live, field) <= _POCKETWATCH_THRESHOLD), None
+    played = _integer(live, field) if field in live.fields else 0
+    verdict = int(live.turn > 0 and played <= _POCKETWATCH_THRESHOLD)
+    return verdict, None if field in live.fields else _absent(live, field)
+
+
+_pocketwatch: CounterRule = partial(_pocketwatch_rule, "_cardsPlayedLastTurn")
 
 
 # How a CombatState field is read off a relic field: (game field, counter, reader, default).
@@ -325,6 +358,11 @@ RELICS: dict[str, Relic] = {
         ),
         _STATELESS,
     ),
+    # Act 2's Ancient pool. `RelicEffects.cs` has no case for it at all -- its whole effect
+    # (sacrifice card rewards to Pael, an Ancient every 2) is a card-reward-screen alternative
+    # (PaelsWing.cs: TryModifyCardRewardAlternatives/OnSacrifice), which the emulator never
+    # touches -- so its Counter (RewardsSacrificed % 2, PaelsWing.cs:36) cannot affect combat.
+    "PAELS_WING": _STATELESS,
     # ── Per-turn counts: PerTurnCounters, cleared at turn start (RelicEffects.cs:990-993,
     # :1364-1371). The game resets `AttacksPlayedThisTurn` in BeforeSideTurnStart too.
     "KUNAI": Relic(counter=_residue("_attacksPlayedThisTurn", 3)),  # :1430
@@ -352,6 +390,9 @@ RELICS: dict[str, Relic] = {
     "CENTENNIAL_PUZZLE": Relic(counter=_flag("_usedThisCombat")),  # :1506
     "PERMAFROST": Relic(counter=_flag("_activatedThisCombat")),  # :1477
     "RUINED_HELMET": Relic(counter=_flag("_usedThisCombat")),  # :2367
+    # Counter 1 once its extra play is spent (ConsumeThrowingAxePlay, :1276-1283); the
+    # emulator's own combat-start reset agrees with the game's AfterRoomEntered (:706, :33).
+    "THROWING_AXE": Relic(counter=_flag("_usedThisCombat")),
     # Once per RUN: the run carries it in UsedUpRelics (:529, :1670).
     "LIZARD_TAIL": Relic(counter=_flag("_wasUsed")),
     # Once per turn, cleared in BeforeSideTurnStart (:1133, :1526-1533).
@@ -523,7 +564,8 @@ def translate(
                 counters[name] = read(live, game_field)
             else:
                 counters[name] = default
-                missing.append(f"fields['{game_field}']")
+                if _absent(live, game_field) is not None:
+                    missing.append(f"fields['{game_field}']")
         if missing:
             warnings.append(
                 _missing(
@@ -533,6 +575,13 @@ def translate(
             )
         out.append({"id": relic_id, "counter": counter})
     return RelicTranslation(out, counters, warnings)
+
+
+def fields_read(rule: Relic) -> tuple[str, ...]:
+    """Name the relic fields a rule reads: its counter's, then its CombatState ones."""
+    counter = rule.counter
+    own = (counter.args[0],) if isinstance(counter, partial) else ()
+    return own + tuple(game_field for game_field, _, _, _ in rule.combat)
 
 
 def to_relics(

@@ -1,13 +1,13 @@
 """The run session: stage-2 self-play's handle on the native run engine (DESIGN.md 1).
 
-`RunSession` plays one Act 1 run. It steps the screens that have a single meaningful
+`RunSession` plays one full run, Acts 1-3. It steps the screens that have a single meaningful
 action itself (the "auto" rows of DESIGN.md 1.2), hands every other non-combat screen out
 as a `Decision`, and hands a fight out as a `RunCombat` for `combat_mcts` to search.
 `decision_of(env, ascension)` is the same screen reader without the stepping: the engine
 side of the decision checks in DESIGN.md 3.6.
 
-The run ends for stage 2 at the Act 1 boss kill or at death: `decision()` returns None
-from then on.
+The run ends at death or victory (the last act's boss dead): `decision()` returns None
+from then on. Act transitions are the engine's own (`RunEngine.EnterNextAct`).
 """
 
 from __future__ import annotations
@@ -57,8 +57,10 @@ SHOP_REMOVE_ACTION = rc.SHOP_REMOVE_ACTION  # 13
 SHOP_SKIP_ACTION = rc.SHOP_SKIP_ACTION  # 14
 EVENT_SKIP_ACTION = rc.EVENT_SKIP_ACTION  # 3
 BUNDLE_CONFIRM_ACTION = rc.BUNDLE_CONFIRM_ACTION  # 2
-FAKE_MERCHANT_THROW_ACTION = 6  # RunConstants.cs:338
-FAKE_MERCHANT_LEAVE_ACTION = 7  # RunConstants.cs:341
+FAKE_MERCHANT_THROW_ACTION = 6  # RunConstants.cs:345
+FAKE_MERCHANT_LEAVE_ACTION = 7  # RunConstants.cs:348
+FAKE_MERCHANT_RELIC_COST = 50  # RunConstants.FakeMerchantRelicCost
+FAKE_MERCHANT_SLOTS = 6  # the stall's relics are actions 0-5
 EVENT_RESULT_PENDING = -1  # RunConstants.cs:269
 # The treasure room's chest relic (erratum RF1): offered while it is still in the chest,
 # with the proceed (3) always beside it (`RunEngine.WriteActionMask`, `StepTreasure`).
@@ -352,11 +354,12 @@ def _read_screen(
         rc.PHASE_EVENT: _event,
         rc.PHASE_TRANSFORM_SELECT: _card_select,
         rc.PHASE_TREASURE: _treasure,
+        rc.PHASE_CRYSTAL_SPHERE: _crystal_sphere,
         rc.PHASE_BUNDLE_SELECT: _bundle,
+        PHASE_FAKE_MERCHANT: _fake_merchant,
     }.get(phase)
     if reader is None:
-        # Crystal Sphere and the Fake Merchant are Act 2+ events (DESIGN.md 1.2), and
-        # anything newer is unknown too: the rules fallback decides, and it is counted.
+        # Anything newer is unknown: the rules fallback decides, and it is counted.
         return _unknown_screen(legal, "unhandled_phase")
     view = features.view_from_engine(env, ascension)
     context = _Context(env, handle, legal, view, event_step, rest_option_taken)
@@ -770,6 +773,74 @@ def _transformed_to(card: CardRef, target: int, *, carrying: bool) -> CardRef:
     return made
 
 
+def _crystal_sphere(ctx: _Context) -> _Screen:
+    """Read the Crystal Sphere's grid (an Act 2 event, `RunEngine.StepCrystalSphere`).
+
+    One `sphere.cell` per legal divination: cells 0-120 with the big tool, 121-241 with
+    the small one, each only where it would uncover something. What a cell hides is
+    hidden, so no option is scorable and the rules choose.
+    """
+    return _Screen(
+        Decision(
+            "sphere",
+            tuple(Option("sphere.cell", a, scorable=False) for a in ctx.legal),
+        ),
+    )
+
+
+def _fake_merchant(ctx: _Context) -> _Screen:
+    """Read the Fake Merchant's stall (an Act 2 event, `RunPhase.FakeMerchant`).
+
+    Its relics are actions 0-5 at 50 gold each (`shop.relic`, scorable), the throw of a
+    Foul Potion is 6 (`merchant.throw`: it starts a fight, so the rules decide it), and
+    leaving is 7 (`shop.leave`). The stall is not exported, so each relic is read off a
+    faithful clone that buys it; the stall is on the player's screen anyway.
+    """
+    options = []
+    for action in ctx.legal:
+        if action < FAKE_MERCHANT_SLOTS:
+            relic = _bought_relic(ctx.handle, action)
+            if relic is None:
+                options.append(Option("unknown", action, scorable=False))
+            else:
+                options.append(
+                    Option(
+                        "shop.relic",
+                        action,
+                        relic=relic,
+                        price=FAKE_MERCHANT_RELIC_COST,
+                    ),
+                )
+        elif action == FAKE_MERCHANT_THROW_ACTION:
+            options.append(Option("merchant.throw", action, scorable=False))
+        elif action == FAKE_MERCHANT_LEAVE_ACTION:
+            options.append(Option("shop.leave", action))
+        else:
+            options.append(Option("unknown", action, scorable=False))
+    return _Screen(Decision("shop", tuple(options)))
+
+
+def _bought_relic(handle: int, action: int) -> int | None:
+    """Return the relic buying `action` adds, read off a faithful clone, or None."""
+    obs = (ctypes.c_int * native.RUN_OBS_SIZE)()
+    reward, terminal, truncated = (
+        (ctypes.c_float * 1)(),
+        (ctypes.c_int * 1)(),
+        (ctypes.c_int * 1)(),
+    )
+    before = Counter(r for r in native.run_state_list(handle, 1, 64) if r)
+    clone = native.run_clone(handle, False, 0, obs)
+    try:
+        status = native.run_step(clone, action, -1, obs, reward, terminal, truncated)
+        if status != 0:
+            return None
+        after = Counter(r for r in native.run_state_list(clone, 1, 64) if r)
+        added = list((after - before).elements())
+        return added[0] if len(added) == 1 else None
+    finally:
+        native.run_destroy(clone)
+
+
 def _treasure(ctx: _Context) -> _Screen:
     """Not a decision on either side (DESIGN.md 1.5.2): the game's chest holds one relic."""
     return _Screen(None, auto=treasure_action(ctx.legal))
@@ -864,10 +935,10 @@ _INFO_KEYS = (
 
 
 class RunSession:
-    """One Act 1 run on the native run engine (DESIGN.md 1.4, 7).
+    """One full run on the native run engine (DESIGN.md 1.4, 7; FULL_RUNS.md).
 
     `decision()` steps auto screens and returns the next non-combat decision, or None in
-    Combat, at the end of the run and once Act 1 is cleared. `apply(option)` takes one
+    Combat and at the end of the run (death or victory). `apply(option)` takes one
     option (a flattened removal or smith is the screen action and then the card).
     `combat()` hands the current fight out for search.
     """
@@ -916,18 +987,30 @@ class RunSession:
         return self.info["floor"]
 
     @property
-    def act1_cleared(self) -> bool:
-        """Whether the Act 1 boss died: a fight won on the boss node (DESIGN.md 1.3).
+    def act_index(self) -> int:
+        """The 0-based act the run is in, named by its region (`ActCandidatesByIndex`)."""
+        return vocab.act_index_of_region()[self.info["act"]]
 
-        The node type is set when the node is chosen (`ChooseMapNode`), and the rewards
-        screen follows the kill.
+    @property
+    def won(self) -> bool:
+        """Whether the run is won: complete, alive, on the last act's boss node.
+
+        `AdvanceAfterRelicReward` completes the run after the last act's boss reward; a
+        boss in any earlier act leads onto the next act's map instead.
         """
         info = self.info
         return (
-            info["phase"] not in {rc.PHASE_COMBAT, rc.PHASE_COMPLETE}
+            info["phase"] == rc.PHASE_COMPLETE
+            and info["hp"] > 0
             and info["node_type"] == vocab.NODE_BOSS
+            and self.act_index == vocab.ACTS - 1
             and native.run_player_won(self.handle)
         )
+
+    @property
+    def acts_cleared(self) -> int:
+        """How many act bosses have died: the act index, plus one for a won run."""
+        return self.act_index + int(self.won)
 
     @property
     def died(self) -> bool:
@@ -939,7 +1022,7 @@ class RunSession:
 
     def decision(self) -> Decision | None:
         for _ in range(AUTO_STEP_CAP):
-            if self.act1_cleared or self.phase in {rc.PHASE_COMBAT, rc.PHASE_COMPLETE}:
+            if self.phase in {rc.PHASE_COMBAT, rc.PHASE_COMPLETE}:
                 return None
             screen = self._screen()
             if screen.auto is not None:

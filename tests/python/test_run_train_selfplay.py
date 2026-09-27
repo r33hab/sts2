@@ -82,7 +82,7 @@ class PlayRunTests(unittest.TestCase):
             with self.subTest(seed=seed):
                 VALIDATOR.validate(record)
                 outcome = record["outcome"]
-                self.assertTrue(outcome["died"] != outcome["boss_killed"])
+                self.assertTrue(outcome["died"] != outcome["won"])
                 self.assertFalse(outcome["truncated"])
                 self.assertEqual(
                     (record["seed"], record["generation"], record["ascension"]),
@@ -160,24 +160,49 @@ class PlayRunTests(unittest.TestCase):
 
 
 class OutcomeTests(unittest.TestCase):
-    def test_a_boss_kill_counts_as_floor_18(self):
-        # Erratum E10: one floor convention everywhere. 999 HP walks the rules policy to
-        # the boss and through it (the probe's --boost-hp; it judges nothing).
+    def test_a_won_run_plays_all_three_acts_and_counts_as_floor_53(self):
+        # One floor convention everywhere: a won run is the last floor + 1. 9999 HP walks
+        # the rules policy through every act and boss (the probe's --boost-hp; it judges
+        # nothing). This run crosses both act transitions and Act 3's ancient, which
+        # once ended every run on floor 19 and then stuck on a screen with no action.
         class Boosted(engine.RunSession):
             def __init__(self, *args: Any, **kwargs: Any):
                 super().__init__(*args, **kwargs)
-                native.run_debug_set_hp(self.handle, 999, 999, self.env._run_obs_buf)
+                native.run_debug_set_hp(self.handle, 9999, 9999, self.env._run_obs_buf)
 
         with mock.patch.object(selfplay, "RunSession", Boosted):
             record = selfplay.play_run("BOSSKILL", selfplay.RulesPlayer(), SIMS, A9)
         VALIDATOR.validate(record)
         outcome = record["outcome"]
-        self.assertTrue(outcome["boss_killed"])
+        self.assertTrue(outcome["won"])
         self.assertFalse(outcome["died"])
-        self.assertEqual(outcome["final_floor"], 18)
-        boss = record["fights"][-1]
-        self.assertEqual((boss["node_type"], boss["won"]), (vocab.NODE_BOSS, True))
-        self.assertEqual(boss["sims"], SIMS)
+        self.assertEqual(outcome["final_floor"], vocab.WON_FLOOR)
+        self.assertEqual(outcome["acts_cleared"], vocab.ACTS)
+        bosses = [f for f in record["fights"] if f["node_type"] == vocab.NODE_BOSS]
+        self.assertEqual([f["won"] for f in bosses], [True] * vocab.ACTS)
+        self.assertEqual(bosses[-1], record["fights"][-1])
+        self.assertEqual(bosses[-1]["sims"], SIMS)
+        # The boss floors: 17 (Act 1), 34 (Act 2) and 51 (Act 3).
+        self.assertEqual(
+            [f["floor"] for f in bosses],
+            [vocab.FLOORS_PER_ACT * act for act in range(1, vocab.ACTS + 1)],
+        )
+        acts = {d["state"]["act_index"] for d in record["decisions"]}
+        self.assertEqual(acts, set(range(vocab.ACTS)))
+        # Each act's first normal fights are its weak ones: 3 in act 1, 2 in Hive, Glory.
+        for act in range(vocab.ACTS):
+            normals = [
+                f
+                for f in record["fights"]
+                if f["node_type"] == vocab.NODE_MONSTER
+                and f["state"]["act_index"] == act
+            ]
+            self.assertTrue(normals, act)
+            weak = vocab.weak_fights(normals[0]["state"]["act_region"])
+            self.assertEqual(
+                [f["weak"] for f in normals],
+                [i < weak for i in range(len(normals))],
+            )
 
     def test_the_step_cap_truncates(self):
         record = selfplay.play_run(
@@ -190,7 +215,7 @@ class OutcomeTests(unittest.TestCase):
         VALIDATOR.validate(record)
         outcome = record["outcome"]
         self.assertTrue(outcome["truncated"])
-        self.assertFalse(outcome["died"] or outcome["boss_killed"])
+        self.assertFalse(outcome["died"] or outcome["won"])
         self.assertGreaterEqual(record["stats"]["steps"], 12)
 
     def test_a_budget_int_is_flat_and_hard_fights_get_the_hard_budget(self):

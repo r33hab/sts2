@@ -24,7 +24,8 @@ whose output is missing:
   `promotion.json`; a crash after the switch is finished from those files.
 - **status.json** is rewritten at every phase and after every self-play run.
 
-`selfplay.json` sums a finished generation's records (boss kills, unknown decisions,
+`selfplay.json` sums a finished generation's records (wins, acts reached, deaths per act,
+unknown decisions,
 quarantines) once, so status.json never re-reads old shards; `played_by` names the
 learner generation that played it, which gives a model its self-play boss-kill rate.
 """
@@ -46,7 +47,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
-from . import FEATURE_VERSION, evaluate, runner, shards, train, vocab
+from . import FEATURE_VERSION, evaluate, models, runner, shards, train, vocab
 from .evaluate import EvalResult
 
 __all__ = [
@@ -98,6 +99,8 @@ class LoopConfig:
     `job` is the runner's (workers, budget, ascension, W, ...), `training` the fit's, and
     the rest self-play's: runs per generation and the exploration of 5.5, where the
     temperature of a learner from generation g is max(tau_min, tau_start * tau_decay^g).
+    `export_dest` is where each new champion is exported; "" is the coach's model folder
+    (`policy.STRATEGY_MODEL_DIR`), which only the job the coach follows should use.
     """
 
     job: runner.JobConfig = field(default_factory=runner.JobConfig)
@@ -108,6 +111,7 @@ class LoopConfig:
     tau_start: float = 0.60
     tau_decay: float = 0.85
     tau_min: float = 0.10
+    export_dest: str = ""
 
     def __post_init__(self) -> None:
         if self.runs_per_generation < 1:
@@ -130,6 +134,7 @@ class LoopConfig:
                 "tau_start": self.tau_start,
                 "tau_decay": self.tau_decay,
                 "tau_min": self.tau_min,
+                "export_dest": self.export_dest,
             },
         }
 
@@ -186,9 +191,12 @@ class _Tally:
     """What a generation's records add up to."""
 
     runs: int = 0
-    boss_kills: int = 0
+    wins: int = 0
     floors: int = 0
     truncated: int = 0
+    # Runs that reached act k (k >= 2), and runs that died in act k, by "k".
+    reached: Counter[str] = field(default_factory=Counter)
+    deaths: Counter[str] = field(default_factory=Counter)
     unknown_decisions: Counter[str] = field(default_factory=Counter)
     forced_skips: Counter[str] = field(default_factory=Counter)
     potion_left_full_belt: int = 0
@@ -196,7 +204,12 @@ class _Tally:
     def add(self, record: shards.RunRecord) -> None:
         outcome, stats = record["outcome"], record["stats"]
         self.runs += 1
-        self.boss_kills += bool(outcome["boss_killed"])
+        self.wins += bool(outcome["won"])
+        cleared = int(outcome["acts_cleared"])
+        for act in range(2, min(cleared + 1, vocab.ACTS) + 1):
+            self.reached[str(act)] += 1
+        if outcome["died"]:
+            self.deaths[str(cleared + 1)] += 1
         self.floors += int(outcome["final_floor"])
         self.truncated += bool(outcome["truncated"])
         self.unknown_decisions.update(stats["unknown_decisions"])
@@ -206,9 +219,15 @@ class _Tally:
     def to_json(self) -> dict[str, Any]:
         return {
             "runs": self.runs,
-            "boss_kills": self.boss_kills,
-            "boss_kill_rate": self.boss_kills / self.runs if self.runs else None,
+            "wins": self.wins,
+            "win_rate": self.wins / self.runs if self.runs else None,
             "mean_floor": self.floors / self.runs if self.runs else None,
+            "reached_act": {
+                str(act): self.reached[str(act)] for act in range(2, vocab.ACTS + 1)
+            },
+            "died_in_act": {
+                str(act): self.deaths[str(act)] for act in range(1, vocab.ACTS + 1)
+            },
             "truncated": self.truncated,
             "unknown_decisions": dict(self.unknown_decisions),
             "forced_skips": dict(self.forced_skips),
@@ -409,10 +428,13 @@ class Loop:
             self._live = None
         summary = self.selfplay_summary(n)
         log.info(
-            "gen %d: %d runs, boss kills %s, mean floor %s, %.0f runs/h, %d quarantined",
+            "gen %d: %d runs, wins %s, reached acts %s, died in acts %s, mean floor %s, "
+            "%.0f runs/h, %d quarantined",
             n,
             summary["runs"],
-            _fmt(summary["boss_kill_rate"]),
+            _fmt(summary["win_rate"]),
+            summary["reached_act"],
+            summary["died_in_act"],
             _fmt(summary["mean_floor"]),
             summary["runs_per_hour"],
             summary["quarantined"],
@@ -450,10 +472,10 @@ class Loop:
         result.save(self.gen_dir(n) / EVAL)
         summary = result.summary()
         log.info(
-            "gen %d: the learner scores mean floor %s, boss kills %s on %d seeds",
+            "gen %d: the learner scores mean floor %s, wins %s on %d seeds",
             n,
             _fmt(summary.mean_floor),
-            _fmt(summary.boss_kill_rate),
+            _fmt(summary.win_rate),
             summary.n,
         )
 
@@ -542,7 +564,7 @@ class Loop:
         low, high = mine.ci95 or (None, None)
         log.info(
             "gen %d: %s. Mean floor %s (95%% CI %s-%s) against the champion's %s on %d "
-            "seeds; boss kills lost %d, gained %d",
+            "seeds; wins lost %d, gained %d",
             n,
             (
                 "promoted"
@@ -716,7 +738,7 @@ class Loop:
         summaries = self._load_summaries()
         for n in sorted(summaries, reverse=True):
             if summaries[n]["played_by"] == generation:
-                return summaries[n]["boss_kill_rate"]
+                return summaries[n]["win_rate"]
         return None
 
     # ---- status.json (5.7) ------------------------------------------------------------
@@ -731,7 +753,7 @@ class Loop:
             "generation": generation,
             "checkpoint": None if checkpoint is None else str(self.root / checkpoint),
             "eval": None if result is None else result.summary().to_json(),
-            "selfplay_boss_kill_rate": self.selfplay_rate(generation),
+            "selfplay_win_rate": self.selfplay_rate(generation),
             "W": self.config.job.W,
             "eval_meta": None if result is None else result.meta.to_json(),
         }
@@ -852,7 +874,10 @@ class Loop:
             "generation": champion["generation"],
             "W": self.config.job.W,
             # Erratum E7: the coach's win-chance gate reads this, never the eval rate.
-            "selfplay_boss_kill_rate": self.selfplay_rate(champion["generation"]),
+            "selfplay_win_rate": self.selfplay_rate(champion["generation"]),
+            # Both export formats load (`policy.load`): the Act 1 export has 18 classes
+            # and no `floor_classes`.
+            "floor_classes": models.FLOOR_CLASSES,
             "eval": held.summary().to_json(),
             "combat_budget": meta.combat_budget,
             "ascension": meta.ascension,
@@ -912,7 +937,7 @@ class Loop:
                 for seed, sides in comparison.excluded_eval_seeds.items()
             },
             "floor_difference": difference(lambda r: float(r.floor or 0)),
-            "boss_kill_difference": difference(lambda r: float(r.boss_killed)),
+            "win_difference": difference(lambda r: float(r.won)),
             "meta": mine.meta.to_json(),
             "written": _now(),
         }

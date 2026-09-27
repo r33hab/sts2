@@ -55,13 +55,16 @@ NODE_TYPE_NAMES = {
 }
 NODE_TYPE_BY_NAME = {name: node for node, name in NODE_TYPE_NAMES.items()}
 
-# The emulator's act ids are regions (`RunConstants.cs:266-267`).
+# The emulator's act ids are regions (`RunConstants.cs:266-267`, `ActHive`, `ActGlory`).
 REGION_OVERGROWTH = 1
 REGION_UNDERDOCKS = 2
+REGION_HIVE = 3
+REGION_GLORY = 4
 
-# DESIGN.md 3.5: the act-1 bosses by the game's encounter slug (the decompiled class names,
-# `MegaCrit.Sts2.Core.Models.Encounters/*Boss.cs`), emulator id, and region
-# (`RunConstants.cs:395-399`). The map screen names the boss from the moment the act opens.
+# DESIGN.md 3.5: every act's bosses by the game's encounter slug (the decompiled class
+# names, `MegaCrit.Sts2.Core.Models.Encounters/*Boss.cs`), emulator id, and region
+# (`RunConstants.cs` `*BossEncounters`, `EncounterTags.g.cs` for Glory). The map screen
+# names the boss from the moment the act opens.
 BOSSES = {
     "CEREMONIAL_BEAST_BOSS": (74, REGION_OVERGROWTH),
     "THE_KIN_BOSS": (82, REGION_OVERGROWTH),
@@ -69,6 +72,12 @@ BOSSES = {
     "LAGAVULIN_MATRIARCH_BOSS": (77, REGION_UNDERDOCKS),
     "SOUL_FYSH_BOSS": (79, REGION_UNDERDOCKS),
     "WATERFALL_GIANT_BOSS": (84, REGION_UNDERDOCKS),
+    "KAISER_CRAB_BOSS": (75, REGION_HIVE),
+    "KNOWLEDGE_DEMON_BOSS": (76, REGION_HIVE),
+    "THE_INSATIABLE_BOSS": (81, REGION_HIVE),
+    "AEONGLASS_BOSS": (73, REGION_GLORY),
+    "QUEEN_BOSS": (78, REGION_GLORY),
+    "TEST_SUBJECT_BOSS": (80, REGION_GLORY),
 }
 BOSS_SLUGS = {boss_id: slug for slug, (boss_id, _) in BOSSES.items()}
 
@@ -454,27 +463,85 @@ def transform_pool(card_id: int) -> tuple[int, ...]:
 
 @cache
 def encounter_pools() -> dict[int, dict[str, tuple[int, ...]]]:
-    """Region -> {"weak", "normal", "elite", "boss"} encounter ids (`RunConstants.cs`).
+    """Region -> {"weak", "normal", "elite", "boss"} encounter ids, for every region.
 
-    Static game data every run of the region draws from -- not the run's generated
-    encounter sequence (state lists 11-12), which is hidden (DESIGN.md 3.3).
+    Read from `EncounterTags.Pool` (`Generated/EncounterTags.g.cs`), which reproduces the
+    act-1 and Hive constants of `RunConstants.cs` exactly and is the only source of
+    Glory's. Static game data every run of the region draws from -- not the run's
+    generated encounter sequence (state lists 11-12), which is hidden (DESIGN.md 3.3).
     """
-    text = _RUN_CONSTANTS.read_text(encoding="utf-8")
-    spans = {
-        name: tuple(int(value) for value in body.split(",") if value.strip())
-        for name, body in re.findall(
-            r"public static ReadOnlySpan<int> ((?:Overgrowth|Underdocks)\w+)Encounters"
-            r"\s*=>\s*\[([^\]]*)\]",
-            text,
+    text = (_GENERATED / "EncounterTags.g.cs").read_text(encoding="utf-8")
+    pools: dict[int, dict[str, tuple[int, ...]]] = {}
+    for region, kind, body in re.findall(
+        r'\((\d+), "(Weak|Normal|Elite|Boss)"\)\s*=>\s*\[([^\]]*)\]',
+        text,
+    ):
+        pools.setdefault(int(region), {})[kind.lower()] = tuple(
+            int(value) for value in body.split(",") if value.strip()
         )
+    return pools
+
+
+# --------------------------------------------------------------------------------------
+# Acts and floors (RunConstants.cs)
+# --------------------------------------------------------------------------------------
+
+
+@cache
+def act_index_of_region() -> dict[int, int]:
+    """Region -> 0-based act index, from `ActCandidatesByIndex` (one row per act)."""
+    text = _RUN_CONSTANTS.read_text(encoding="utf-8")
+    body = re.search(r"ActCandidatesByIndex\s*=\s*\[(.*?)\];", text, re.S)
+    if body is None:
+        raise ValueError("RunConstants.cs declares no ActCandidatesByIndex")
+    names = {
+        name: int(value)
+        for name, value in re.findall(r"public const int (Act\w+) = (\d+);", text)
     }
     return {
-        region: {
-            pool: spans[f"{prefix}{pool.capitalize()}"]
-            for pool in ("weak", "normal", "elite", "boss")
-        }
-        for region, prefix in (
-            (REGION_OVERGROWTH, "Overgrowth"),
-            (REGION_UNDERDOCKS, "Underdocks"),
-        )
+        names[name]: index
+        for index, row in enumerate(re.findall(r"\[([^\[\]]*)\]", body.group(1)))
+        for name in re.findall(r"Act\w+", row)
     }
+
+
+@cache
+def weak_fights(region: int) -> int:
+    """How many of an act's first normal fights are its weak ones (`ActRoomCounts`)."""
+    text = _RUN_CONSTANTS.read_text(encoding="utf-8")
+    body = re.search(r"ActRoomCounts\(int act\)\s*=>(.*?);", text, re.S)
+    if body is None:
+        raise ValueError("RunConstants.cs declares no ActRoomCounts")
+    names = {
+        name: int(value)
+        for name, value in re.findall(r"public const int (Act\w+) = (\d+);", text)
+    }
+    counts = {"_": 0}
+    for key, weak in re.findall(r"(Act\w+|_) => \((\d+), \d+\)", body.group(1)):
+        counts[key] = int(weak)
+    by_region = {names[key]: weak for key, weak in counts.items() if key != "_"}
+    return by_region.get(region, counts["_"])
+
+
+def _run_constant(name: str) -> int:
+    match = re.search(
+        rf"public const int {name} = (\d+);",
+        _RUN_CONSTANTS.read_text(encoding="utf-8"),
+    )
+    if match is None:
+        raise ValueError(f"RunConstants.cs declares no {name}")
+    return int(match.group(1))
+
+
+# Every act's map: the ancient on row 0, rooms on rows 1-15, the boss on `MapBossRow`,
+# one floor per row, and the floor carries across acts (DESIGN.md 5.2).
+MAP_BOSS_ROW = _run_constant("MapBossRow")
+ACTS = len(set(act_index_of_region().values()))
+FLOORS_PER_ACT = MAP_BOSS_ROW + 1
+# A10's DoubleBoss puts a second boss on the last act's map, one row above the first
+# (decompiled `StandardActMap`: `SecondBossMapPoint` at row count + 1), so it is a floor.
+DOUBLE_BOSS_FLOORS = 1
+LAST_FLOOR = ACTS * FLOORS_PER_ACT + DOUBLE_BOSS_FLOORS
+# A won run counts as the last floor + 1: the value's W, and its own floor class.
+WON_FLOOR = LAST_FLOOR + 1
+FLOOR_CLASSES = WON_FLOOR  # floors 1..LAST_FLOOR, then "won"

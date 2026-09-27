@@ -43,6 +43,7 @@ moves = importlib.import_module("sts2_gym.live.moves")
 fidelity = importlib.import_module("sts2_gym.live.fidelity")
 service = importlib.import_module("sts2_gym.live.service")
 strategy = importlib.import_module("sts2_gym.live.strategy")
+names = importlib.import_module("sts2_gym.names")
 live_search = importlib.import_module("live_search")
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "live"
@@ -1710,6 +1711,83 @@ def score_options(decision, view):
 BROKEN_POLICY = 'raise RuntimeError("the champion was trained on feature version 0")\n'
 
 
+class StrategyLabelTests(unittest.TestCase):
+    """Every option the strategy path returns carries a readable label, shown verbatim."""
+
+    @staticmethod
+    def card(name: str, upgraded: bool = False) -> dict[str, Any]:
+        card_id = next(i for i, info in names.cards().items() if info.name == name)
+        return {"card_id": card_id, "upgraded": upgraded, "enchantment": 0}
+
+    @staticmethod
+    def relic(name: str) -> int:
+        return next(i for i, relic in names.relics().items() if relic == name)
+
+    @staticmethod
+    def potion(name: str) -> int:
+        return next(i for i, potion in names.potions().items() if potion == name)
+
+    def test_names_instead_of_ids(self) -> None:
+        label = strategy.label
+        self.assertEqual(
+            label({"kind": "card.take", "card": self.card("Bash", True)}),
+            "Take Bash+",
+        )
+        self.assertEqual(
+            label({"kind": "card.take", "card": self.card("StrikeIronclad")}),
+            "Take Strike",
+        )
+        self.assertEqual(
+            label({"kind": "shop.relic", "relic": self.relic("Anchor"), "price": 150}),
+            "Buy Anchor (150g)",
+        )
+        self.assertEqual(
+            label({"kind": "reward.potion", "potion": self.potion("FirePotion")}),
+            "Take Fire Potion",
+        )
+        self.assertEqual(
+            label({"kind": "neow.relic", "relic": self.relic("PotionBelt")}),
+            "Potion Belt",
+        )
+        self.assertEqual(
+            label({"kind": "bundle.pick", "cards": [self.card("Bash")] * 2}),
+            "Bundle: Bash, Bash",
+        )
+
+    def test_map_picks_name_the_node_type(self) -> None:
+        self.assertEqual(
+            strategy.label({"kind": "map.node", "action": 0, "node": (3, 7, 2)}),
+            "Elite (col 3)",
+        )
+        self.assertEqual(
+            strategy.label({"kind": "map.node", "action": 1, "node": [0, 8, 3]}),
+            "Rest Site (col 0)",
+        )
+
+    def test_rest_shop_and_deck_options(self) -> None:
+        deck = [self.card("StrikeIronclad"), self.card("Bash")]
+        label = strategy.label
+        self.assertEqual(label({"kind": "rest.heal"}), "Rest")
+        self.assertEqual(label({"kind": "rest.smith", "deck_index": 1}, deck), "Smith Bash")
+        self.assertEqual(
+            label({"kind": "shop.remove", "deck_index": 0, "price": 75}, deck),
+            "Remove Strike (75g)",
+        )
+        self.assertEqual(label({"kind": "shop.leave"}), "Leave shop")
+        self.assertEqual(label({"kind": "rest.leave"}), "Leave")
+        self.assertEqual(label({"kind": "card.skip"}), "Skip")
+
+    def test_event_options_take_the_screens_title(self) -> None:
+        screen = {
+            "state_type": "event",
+            "event": {"options": [{"index": 0, "title": "Linger"}, {"index": 1}]},
+        }
+        linger = {"kind": "event.option", "action": 0, "event": (1, 0, 0)}
+        self.assertEqual(strategy.label(linger, [], screen), "Linger")
+        untitled = {"kind": "event.option", "action": 1, "event": (1, 1, 0)}
+        self.assertEqual(strategy.label(untitled, [], screen), "Unrest Site: option 2")
+
+
 class StrategyTests(unittest.TestCase):
     """`strategy`: the exported champion's option values, or `no_model` without one."""
 
@@ -1766,6 +1844,23 @@ class StrategyTests(unittest.TestCase):
             model_dir(self.root, generation=4)
             self.assertEqual(values(), [13.0, 12.0])
             self.assertEqual(policy.LOADS, 2)
+
+    def test_an_act_1_model_does_not_advise_outside_act_1(self) -> None:
+        class ActTwoView:
+            act_index = 1
+            deck = ()
+
+        class ActTwoFeatures(FakeFeatures):
+            def view_from_live(self, live_run: dict[str, Any]) -> Any:
+                self.calls.append(("view_from_live", live_run))
+                return ActTwoView()
+
+        champion = model_dir(self.root)  # no floor_classes: the 18-class Act 1 export
+        answer = self.ask(
+            strategy.StrategyModel(champion, load=FakeTraining(ActTwoFeatures())),
+        )
+        self.assertEqual(answer["error"]["type"], "strategy", answer)
+        self.assertIn("outside Act 1", answer["error"]["message"])
 
     def test_a_training_package_that_fails_to_load_is_a_strategy_error(self) -> None:
         def raising(model_dir: Path, info: Mapping[str, Any]) -> tuple[Any, Any]:
@@ -1860,10 +1955,16 @@ class StrategyTests(unittest.TestCase):
                     "action": 0,
                     "card": {"card_id": 30, "upgraded": False},
                     "cards": [],
+                    "label": "Take Bash",
                 },
+                "label": "Take Bash",
                 "value": 17.25,
                 "p_boss": 0.08,
             },
+        )
+        self.assertEqual(
+            [o["label"] for o in result["options"]],
+            ["Take Bash", "Take All For One+", "Skip", "Reroll"],  # card 12
         )
 
     def test_the_decision_is_built_and_scored_the_training_designs_way(self) -> None:

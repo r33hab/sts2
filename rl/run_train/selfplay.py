@@ -1,9 +1,9 @@
 """One self-play run (DESIGN.md 1.4), the policies that play it, and its record (5.7).
 
-`play_run` plays one Act 1 Ironclad run on the native run engine: every fight under the
-combat searcher on run clones (`combat_mcts.run_search`, c = 0.1, tempo rollout, common
-random numbers over the first 20%), every other decision by the policy, until the Act 1
-boss dies or the player does. It returns the RunRecord of 5.7.
+`play_run` plays one full Ironclad run (Acts 1-3) on the native run engine: every fight
+under the combat searcher on run clones (`combat_mcts.run_search`, c = 0.1, tempo rollout,
+common random numbers over the first 20%), every other decision by the policy, until the
+run is won (the last act's boss dies) or the player dies. It returns the RunRecord of 5.7.
 
 A run is a function of its seed and its settings. Search draws from the run's MCTS stream
 and a determinization base, the policy from its exploration stream (5.10), so a retried
@@ -27,7 +27,7 @@ import combat_mcts  # rl/ is on sys.path (the package's __init__)
 from sts2_gym import run_constants as rc
 
 from . import FEATURE_VERSION, seeding, shards, vocab
-from .engine import WEAK_ENCOUNTERS_PER_ACT, CombatBudget, RunSession, new_run_env
+from .engine import CombatBudget, RunSession, new_run_env
 from .rules import RulesPolicy
 
 if TYPE_CHECKING:
@@ -49,8 +49,8 @@ __all__ = [
 # `combat_mcts` settings (FINDINGS; DESIGN.md 5.9).
 DEFAULT_C = 0.1
 DEFAULT_CRN_FRACTION = 0.2
-# The floor a boss kill counts as: one convention everywhere (5.6, erratum E10).
-BOSS_KILL_FLOOR = 18
+# The floor a won run counts as, the last floor + 1: one convention everywhere (5.6).
+WON_FLOOR = vocab.WON_FLOOR
 
 
 @dataclass(frozen=True)
@@ -133,7 +133,7 @@ def make_policy(spec: dict[str, Any]) -> Policy:
     if kind == "lookahead":
         if "W" not in spec:
             raise ValueError(
-                "a lookahead spec names W, the value of a boss kill; the runner writes "
+                "a lookahead spec names W, the value of a won run; the runner writes "
                 "the job config's into it (runner.playing_spec)",
             )
         # `policy` imports this module (for `Pick`), so it is imported when first asked.
@@ -202,7 +202,7 @@ def play_run(
     step_cap: int = seeding.RUN_STEP_CAP,
     on_fight: Callable[[int], None] | None = None,
 ) -> shards.RunRecord:
-    """Play one Act 1 run and return its RunRecord (DESIGN.md 1.4, 5.7).
+    """Play one full run and return its RunRecord (DESIGN.md 1.4, 5.7; FULL_RUNS.md).
 
     `on_fight(encounter_id)` is called as each fight starts; the runner reports it to the
     parent, which names the fight a quarantined seed died in. A run that reaches
@@ -210,8 +210,8 @@ def play_run(
 
     Raises:
         RuntimeError: If a fight offers no legal action or outlives `combat_mcts.STEP_CAP`
-            decisions, or the run ends with neither a death nor a boss kill -- engine
-            defects to surface, not to record as outcomes.
+            decisions, or the run ends with neither a death nor a win -- engine defects to
+            surface, not to record as outcomes.
 
     """
     budget = CombatBudget.of(combat_budget)
@@ -224,7 +224,7 @@ def play_run(
         while True:
             decision = session.decision()
             if decision is None and session.phase != rc.PHASE_COMBAT:
-                break  # the boss died, or the player did
+                break  # the run is won, or the player died
             if session.steps + run.moves >= step_cap:
                 truncated = True  # only a run that would go on is cut off
                 break
@@ -256,11 +256,11 @@ def play_run(
                 on_fight,
             )
         info = session.info
-        killed, died = session.act1_cleared, session.died
-        if not (killed or died or truncated):
+        won, died = session.won, session.died
+        if not (won or died or truncated):
             raise RuntimeError(
                 f"{seed}: the run stopped on floor {info['floor']} in phase "
-                f"{info['phase']} with neither a death nor a boss kill",
+                f"{info['phase']} with neither a death nor a win",
             )
         stats = session.stats
         return {
@@ -272,8 +272,9 @@ def play_run(
             "combat": {"budget": str(budget), "c": c, "crn_fraction": crn_fraction},
             "ascension": ascension,
             "outcome": {
-                "final_floor": BOSS_KILL_FLOOR if killed else info["floor"],
-                "boss_killed": killed,
+                "final_floor": WON_FLOOR if won else info["floor"],
+                "won": won,
+                "acts_cleared": session.acts_cleared,
                 "died": died,
                 "end_hp": max(0, info["hp"]),
                 "end_max_hp": info["max_hp"],
@@ -302,7 +303,8 @@ class _Run:
         self.decisions: list[dict[str, Any]] = []
         self.fights: list[dict[str, Any]] = []
         self.moves = 0  # combat decisions so far: k of DESIGN.md 1.4 item 2
-        self.normal_fights = 0
+        self.normal_fights = 0  # in the current act
+        self.act_index = 0
         self._map_index: dict[tuple, int] = {}
 
     def state(self, view: RunView) -> dict[str, Any]:
@@ -334,11 +336,15 @@ class _Run:
         """
         combat = session.combat()
         view = session.view()
+        if view.act_index != self.act_index:
+            self.act_index, self.normal_fights = view.act_index, 0
         if combat.node_type == vocab.NODE_MONSTER:
             self.normal_fights += 1
+        # Each act's first normal fights draw from its weak pool: 3 in act 1, 2 in Hive and
+        # Glory (`RunConstants.ActRoomCounts`).
         weak = (
             combat.node_type == vocab.NODE_MONSTER
-            and self.normal_fights <= WEAK_ENCOUNTERS_PER_ACT
+            and self.normal_fights <= vocab.weak_fights(view.act_region)
         )
         if on_fight is not None:
             on_fight(combat.encounter_id)

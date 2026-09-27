@@ -19,4 +19,6 @@ for _path in (_RL, _RL.parent / "src"):  # noqa: RUF067
 
 # The layout of `features.encode` (DESIGN.md 3.2). Any change to a vocabulary or to the
 # layout bumps it, and a checkpoint carrying another version refuses to load.
-FEATURE_VERSION = 1  # noqa: RUF067
+# Version 2 appends block X (act, Act 2-3 region and boss, run progress) to version 1's
+# 1843 numbers, which a version-1 checkpoint still reads (`models.load_numpy`).
+FEATURE_VERSION = 2  # noqa: RUF067

@@ -126,7 +126,7 @@ _MAP_SCORES = {
 
 
 class RulesPolicy:
-    """A plain heuristic for every non-combat decision an Act 1 run raises.
+    """A plain heuristic for every non-combat decision a run raises, Acts 1-3.
 
     `choose(view, decision, rng)` returns an index into `decision.options`. One method per
     decision type; anything it does not know takes the option with the lowest action and
@@ -169,6 +169,7 @@ class RulesPolicy:
             "event": self._event,
             "card_select": self._card_select,
             "bundle": self._bundle,
+            "sphere": self._sphere,
         }.get(decision.type)
         chosen = handler(view, options) if handler is not None else None
         if chosen is None:
@@ -279,6 +280,12 @@ class RulesPolicy:
     @staticmethod
     def _bundle(_view: RunView, options: tuple[Option, ...]) -> int | None:
         return _with_action(options, 0)
+
+    @staticmethod
+    def _sphere(_view: RunView, options: tuple[Option, ...]) -> int | None:
+        """Crystal Sphere: the big tool first (it uncovers more), on the lowest cell."""
+        cells = _of_kind(options, "sphere.cell")
+        return min(cells, key=lambda i: options[i].action) if cells else None
 
 
 def _lowest(options: tuple[Option, ...]) -> int:
