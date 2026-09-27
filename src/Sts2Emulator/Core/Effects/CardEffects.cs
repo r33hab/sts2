@@ -8876,16 +8876,32 @@ public static class CardEffects
         Random rng
     )
     {
-        int count = 0;
+        // Snapshot first: an exhaust can draw (Dark Embrace), and a draw from an empty draw
+        // pile shuffles the discard pile -- possibly this very pile. Each status is then
+        // exhausted from wherever it is by then, as the game's exhaust takes a card from
+        // its current pile.
+        var statuses = new List<CardInstance>();
         for (int i = pile.Count - 1; i >= 0; i--)
         {
-            if (GeneratedData.Cards.Get(pile[i].DefId).Type != CardType.Status)
+            if (GeneratedData.Cards.Get(pile[i].DefId).Type == CardType.Status)
+            {
+                statuses.Add(pile[i]);
+            }
+        }
+
+        int count = 0;
+        foreach (var card in statuses)
+        {
+            if (
+                !pile.Remove(card)
+                && !state.Hand.Remove(card)
+                && !state.DrawPile.Remove(card)
+                && !state.DiscardPile.Remove(card)
+            )
             {
                 continue;
             }
 
-            var card = pile[i];
-            pile.RemoveAt(i);
             ExhaustCard(state, card, rng: rng);
             count++;
         }
