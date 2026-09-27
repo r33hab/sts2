@@ -34,7 +34,8 @@ public class StoneArmorTests
     [Fact]
     public void PlatingBlockIgnoresDexterity()
     {
-        var fight = Fight.Hand()
+        var fight = Fight
+            .Hand()
             .Energy(0)
             .PlayerHp(72, 80)
             .PlayerBuff(BuffId.Plating, 4)

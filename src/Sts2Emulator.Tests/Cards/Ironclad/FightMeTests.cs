@@ -39,7 +39,8 @@ public class FightMeTests
     [Fact]
     public void AKilledTargetTakesTheEnemyStrengthWithItAndNoOneElseGetsIt()
     {
-        var fight = Fight.Hand(new CardInstance(IC.FightMe, true))
+        var fight = Fight
+            .Hand(new CardInstance(IC.FightMe, true))
             .Energy(2)
             .Enemy(hp: 6)
             .Enemy(hp: 55);

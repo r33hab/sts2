@@ -135,7 +135,8 @@ public class ToricToughnessTests
     [Fact]
     public void BarricadeKeepsTheBlockAndThePowerStillPays()
     {
-        var fight = Fight.Hand(new CardInstance(Id, false))
+        var fight = Fight
+            .Hand(new CardInstance(Id, false))
             .Energy(9)
             .Enemy()
             .PlayerBuff(BuffId.Barricade, 1);

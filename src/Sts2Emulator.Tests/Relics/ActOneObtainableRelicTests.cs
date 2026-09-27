@@ -296,10 +296,12 @@ public class RazorToothAndRougeTests
     [InlineData("SturdyClamp")]
     public void SparklingRougePaysOnTurnThreeWhenTheBlockIsKept(string keeper)
     {
-        var fight = keeper == "SturdyClamp"
-            ? Fight.WithRelics(RelicEffects.SparklingRouge, RelicEffects.SturdyClamp)
-            : Fight.WithRelics(RelicEffects.SparklingRouge)
-                .PlayerBuff(keeper == "Barricade" ? BuffId.Barricade : BuffId.Blur, 5);
+        var fight =
+            keeper == "SturdyClamp"
+                ? Fight.WithRelics(RelicEffects.SparklingRouge, RelicEffects.SturdyClamp)
+                : Fight
+                    .WithRelics(RelicEffects.SparklingRouge)
+                    .PlayerBuff(keeper == "Barricade" ? BuffId.Barricade : BuffId.Blur, 5);
 
         fight.EndTurn();
         fight.EndTurn();
