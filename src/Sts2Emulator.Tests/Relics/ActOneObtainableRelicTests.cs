@@ -282,6 +282,31 @@ public class RazorToothAndRougeTests
         fight.EndTurn();
         Assert.Equal(1, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.Strength));
     }
+
+    /// <summary>
+    /// The Rouge pays on turn three even when the block is KEPT. The game's
+    /// `CombatManager` calls `Hook.AfterBlockCleared` for every creature starting its turn,
+    /// after `Creature.ClearBlock` -- which Barricade, Blur and Sturdy Clamp only stop from
+    /// zeroing the block. A live A10 capture (Barricade held, Act 3 elite) showed
+    /// Dexterity 1 -> 2 across turn three, where the emulator predicted 1.
+    /// </summary>
+    [Theory]
+    [InlineData("Barricade")]
+    [InlineData("Blur")]
+    [InlineData("SturdyClamp")]
+    public void SparklingRougePaysOnTurnThreeWhenTheBlockIsKept(string keeper)
+    {
+        var fight = keeper == "SturdyClamp"
+            ? Fight.WithRelics(RelicEffects.SparklingRouge, RelicEffects.SturdyClamp)
+            : Fight.WithRelics(RelicEffects.SparklingRouge)
+                .PlayerBuff(keeper == "Barricade" ? BuffId.Barricade : BuffId.Blur, 5);
+
+        fight.EndTurn();
+        fight.EndTurn();
+
+        Assert.Equal(1, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.Strength));
+        Assert.Equal(1, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.Dexterity));
+    }
 }
 
 public class HistoryCourseTests

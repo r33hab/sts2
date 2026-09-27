@@ -1990,7 +1990,9 @@ public static class RelicEffects
     /// </summary>
     /// <remarks>
     /// `TurnNumber == 3` is exact -- not "from turn three". Block clears at the start of
-    /// the player's turn, so this is the moment turn three begins.
+    /// the player's turn, so this is the moment turn three begins. The hook fires even
+    /// when Barricade, Blur or Sturdy Clamp kept the block: `CombatManager` calls it after
+    /// `ClearBlock` either way.
     /// </remarks>
     internal static void ApplyAfterBlockCleared(CombatState state, int turnNumber)
     {

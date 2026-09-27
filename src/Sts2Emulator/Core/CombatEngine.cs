@@ -1494,20 +1494,26 @@ public static class CombatEngine
         else if (BuffSystem.Get(state.PlayerBuffs, BuffId.Barricade) == 0 && blur == 0)
         {
             state.PlayerBlock = 0;
-            // `ToricToughnessPower.AfterBlockCleared`: the block comes straight back, and
-            // the counter -- which is TURNS, not an amount -- ticks down.
-            int toric = BuffSystem.Get(state.PlayerBuffs, BuffId.ToricToughness);
-            if (toric > 0)
-            {
-                Effects.CardEffects.GainUnpoweredBlock(state, state.ToricToughnessBlock, rng);
-                BuffSystem.Apply(state.PlayerBuffs, BuffId.ToricToughness, -1);
-            }
-
-            // `Hook.AfterBlockCleared`, which Sparkling Rouge answers on turn three only.
-            // Barricade and Blur keep the block, and the hook does not fire when it is
-            // not cleared -- so a Barricade run never gets the Rouge's Strength.
-            Effects.RelicEffects.ApplyAfterBlockCleared(state, state.Turn + 1);
         }
+
+        // `Hook.AfterBlockCleared` fires whether or not the block was cleared.
+        // `CombatManager` calls it for every creature starting its turn, straight after
+        // `Creature.AfterTurnStart` has run `ClearBlock` -- and Barricade, Blur and Sturdy
+        // Clamp only stop `ClearBlock` from zeroing the block, not the hook after it.
+        // Gating it on the block clear cost a Barricade run the Rouge's Strength and
+        // Dexterity (seen live: Dexterity 1 -> 2 on turn three, predicted 1).
+        //
+        // `ToricToughnessPower.AfterBlockCleared`: the block comes straight back, and the
+        // counter -- which is TURNS, not an amount -- ticks down.
+        int toric = BuffSystem.Get(state.PlayerBuffs, BuffId.ToricToughness);
+        if (toric > 0)
+        {
+            Effects.CardEffects.GainUnpoweredBlock(state, state.ToricToughnessBlock, rng);
+            BuffSystem.Apply(state.PlayerBuffs, BuffId.ToricToughness, -1);
+        }
+
+        // Sparkling Rouge answers the same hook, on turn three only.
+        Effects.RelicEffects.ApplyAfterBlockCleared(state, state.Turn + 1);
 
         if (blur > 0)
         {

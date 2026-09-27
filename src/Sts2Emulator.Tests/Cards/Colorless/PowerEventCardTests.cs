@@ -127,6 +127,29 @@ public class ToricToughnessTests
         Assert.Equal(0, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.ToricToughness));
     }
 
+    /// <summary>
+    /// Barricade keeps the block and the power still pays: `ToricToughnessPower` answers
+    /// `Hook.AfterBlockCleared`, which the game's `CombatManager` calls at every turn start
+    /// whether or not `Creature.ClearBlock` actually zeroed the block.
+    /// </summary>
+    [Fact]
+    public void BarricadeKeepsTheBlockAndThePowerStillPays()
+    {
+        var fight = Fight.Hand(new CardInstance(Id, false))
+            .Energy(9)
+            .Enemy()
+            .PlayerBuff(BuffId.Barricade, 1);
+        fight.Play(0);
+
+        fight.EndTurn();
+        Assert.Equal(10, fight.State.PlayerBlock);
+        Assert.Equal(1, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.ToricToughness));
+
+        fight.EndTurn();
+        Assert.Equal(15, fight.State.PlayerBlock);
+        Assert.Equal(0, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.ToricToughness));
+    }
+
     /// <summary>Two turns, not three — the counter runs out.</summary>
     [Fact]
     public void TheThirdTurnGetsNothing()
