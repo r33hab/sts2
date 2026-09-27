@@ -2578,8 +2578,9 @@ public static class RelicEffects
 
     /// <summary>
     /// `IceCream.ShouldPlayerResetEnergy` returns FALSE from turn two onwards — so energy
-    /// carries over instead of being refilled. Turn one still resets, which is what puts
-    /// the starting energy on the board at all.
+    /// carries over, and the turn's energy is added to it (`AddMaxEnergyToCurrent`) rather
+    /// than replacing it. Turn one still resets, which is what puts the starting energy on
+    /// the board at all.
     /// </summary>
     internal static bool ShouldResetEnergy(CombatState state, int turnNumber) =>
         turnNumber <= 1 || !HasRelic(state, IceCream);

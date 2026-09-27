@@ -47,12 +47,14 @@ public class BlockChokepointTests
     // inside the hook and would re-enter), Sandpit's `force: true` kill (death prevention's
     // own exception), and the two max-HP clamps (`SetMaxHp` does not dispatch). Everything
     // else goes through HealPlayer, LoseHp, or an explicit call beside the write.
-    // Energy has TWO: the chokepoint's own write, and turn one's reset catching up with a
-    // +1-energy relic's new maximum, which is the reset path and not a gain. Seal of Gold
-    // was briefly a third, with a bare `state.Energy += 1` that NoEnergyGain could not
-    // stop -- this test is what found it, which is the argument for counting writers
-    // rather than trusting each new one to route itself.
-    [InlineData(@"\.Energy\s*\+=|\.Energy\+\+", 2)]
+    // Energy has THREE: the chokepoint's own write, turn one's reset catching up with a
+    // +1-energy relic's new maximum, and Ice Cream's turn start
+    // (`PlayerCombatState.AddMaxEnergyToCurrent`, a direct `Energy += MaxEnergy` in the
+    // game too). The last two are the reset path and not a gain, so NoEnergyGain does not
+    // apply to them. Seal of Gold was briefly a fourth, with a bare `state.Energy += 1`
+    // that NoEnergyGain could not stop -- this test is what found it, which is the
+    // argument for counting writers rather than trusting each new one to route itself.
+    [InlineData(@"\.Energy\s*\+=|\.Energy\+\+", 3)]
     public void TheOtherChokepointsHaveExactlyOneWriter(string pattern, int expected)
     {
         var offenders = SourceFiles()
