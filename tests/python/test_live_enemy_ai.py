@@ -59,6 +59,31 @@ COMPANIONS = frozenset(
 MODEL_BY_ENTRY = {model.entry: model for model in enemy_ai.MONSTERS.values()}
 STRIKE = 472  # Cards.g.cs StrikeIronclad
 
+# Act 2-3 models with no Act 1 fixture corpus to walk: `fights()`/`hit_fights()` are real
+# Act 1 captures only, so a model here can never turn up "on display" or get a next-move
+# roll checked against one, however correct it is. Checked instead against the decompiled
+# source directly (DecompiledConsistencyTests, which needs none of that corpus) and, per
+# monster, its own fixture-free tests in ToAiTests. Shrinks if an Act 2-3 corpus is ever
+# built; until then this is what tells "no coverage yet" apart from "coverage gap".
+NO_ACT1_CORPUS = frozenset(
+    {
+        "CRUSHER",
+        "BOWLBUG_SILK",
+        "TUNNELER",
+        "THIEVING_HOPPER",
+        "DEVOTED_SCULPTOR",
+        "GLOBE_HEAD",
+        "OWL_MAGISTRATE",
+        "THE_LOST",
+        "THE_FORGOTTEN",
+        "ROCKET",
+        "MECHA_KNIGHT",
+        "MAGI_KNIGHT",
+        "AXEBOT",
+        "PARAFRIGHT",
+    }
+)
+
 # Every Act 1 encounter, by the emulator's name for it (env.ENCOUNTER_NAMES): the fights
 # of Acts/Overgrowth.cs and Acts/Underdocks.cs (GenerateAllEncounters) and the two Act 1
 # events that start one, Dense Vegetation and Punch Off. Corpse Slugs and Seapunk are
@@ -636,6 +661,8 @@ class SelfConsistencyTests(unittest.TestCase):
                 for item in items:
                     shown[f"{item.seen.model.entry} {item.seen.shown}"] += 1
         for model in enemy_ai.MONSTERS.values():
+            if model.entry in NO_ACT1_CORPUS:
+                continue
             for move in model.moves:
                 with self.subTest(monster=model.entry, move=move):
                     self.assertGreater(shown[f"{model.entry} {move}"], 0)
@@ -690,10 +717,11 @@ class ThrowawayChooseIntentsTests(unittest.TestCase):
                         self.assertEqual(got["intent"], want["intent"])
         deterministic = {m.entry for m in enemy_ai.MONSTERS.values() if not m.rng}
         # The gremlins only arrive in the hit fights, which the field checks cover, and a
-        # Gas Bomb's one move ends it, so there is no next intent to roll.
+        # Gas Bomb's one move ends it, so there is no next intent to roll. NO_ACT1_CORPUS
+        # never gets walked here at all: there is no Act 1 fight to find it in.
         self.assertLessEqual(
             deterministic - set(checked),
-            {"SNEAKY_GREMLIN", "FAT_GREMLIN", "GAS_BOMB"},
+            {"SNEAKY_GREMLIN", "FAT_GREMLIN", "GAS_BOMB"} | NO_ACT1_CORPUS,
         )
 
 
@@ -864,7 +892,7 @@ class DecompiledConsistencyTests(unittest.TestCase):
 
     def test_every_act1_monster_has_a_supported_model(self) -> None:
         wanted = {ids.game_entry(name) for name in _act1_monster_classes()}
-        self.assertEqual(wanted, set(MODEL_BY_ENTRY))
+        self.assertEqual(wanted, set(MODEL_BY_ENTRY) - NO_ACT1_CORPUS)
         self.assertEqual(len(wanted), 51)
         self.assertEqual(enemy_ai.SUPPORTED, frozenset(enemy_ai.MONSTERS))
 
@@ -915,7 +943,8 @@ class DecompiledConsistencyTests(unittest.TestCase):
                             stunned_steps[entry] += 1
                         self.assertIn(after, legal, f"{before} -> {after}")
                 walked[entry] += len(log)
-        self.assertEqual(set(walked), set(MODEL_BY_ENTRY))
+        # NO_ACT1_CORPUS is never walked: there is no Act 1 fight to find it in.
+        self.assertEqual(set(walked), set(MODEL_BY_ENTRY) - NO_ACT1_CORPUS)
         # The stun, revive and forced paths were walked too.
         self.assertLessEqual(
             {
@@ -1041,6 +1070,43 @@ class ToAiTests(unittest.TestCase):
         self.assertEqual(warnings, [])
         self.assertEqual(ai, {**enemy_ai.ai_defaults(), "move_index": 3})
         self.assertEqual(intent, emu_intent("Attack", 12))
+        self.assertEqual(buffs, [])
+
+    def test_a_crusher_takes_its_ring_damage_from_the_table(self) -> None:
+        # No EnemyAI.cs case yet (Act 2); Monsters/Crusher.cs's ThrashDamage is 14 from
+        # DeadlyEnemies and 12 below, with no number live.
+        live = enemy(
+            "CRUSHER",
+            ["THRASH_MOVE"],
+            "THRASH_MOVE",
+            intents=[attack_intent(None, None)],
+        )
+        self.assertEqual(to_ai(live, turn=0, ascension=0)[1], emu_intent("Attack", 12))
+        self.assertEqual(to_ai(live, turn=0, ascension=9)[1], emu_intent("Attack", 14))
+
+    def test_a_crusher_wraps_its_ring_after_a_full_lap(self) -> None:
+        # THRASH, ENLARGING_STRIKE, BUG_STING, ADAPT, GUARDED_STRIKE, THRASH again, and a
+        # seventh move lands back on ENLARGING_STRIKE: MoveIndex 6, 6 % 5 == 1.
+        ai, intent, warnings, buffs = to_ai(
+            enemy(
+                "CRUSHER",
+                [
+                    "THRASH_MOVE",
+                    "ENLARGING_STRIKE_MOVE",
+                    "BUG_STING_MOVE",
+                    "ADAPT_MOVE",
+                    "GUARDED_STRIKE_MOVE",
+                    "THRASH_MOVE",
+                    "ENLARGING_STRIKE_MOVE",
+                ],
+                "ENLARGING_STRIKE_MOVE",
+                intents=[attack_intent(4, 1, shown=4)],
+            ),
+            turn=6,
+        )
+        self.assertEqual(warnings, [])
+        self.assertEqual(ai, {**enemy_ai.ai_defaults(), "move_index": 6})
+        self.assertEqual(intent, emu_intent("Attack", 4))
         self.assertEqual(buffs, [])
 
     def test_a_buff_move_takes_its_amount_from_the_table(self) -> None:

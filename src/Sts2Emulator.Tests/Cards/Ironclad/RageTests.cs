@@ -46,6 +46,25 @@ public class RageTests
     }
 
     [Fact]
+    public void DexterityDoesNotIncreaseTheBlock()
+    {
+        // RagePower.AfterCardPlayed: `CreatureCmd.GainBlock(base.Owner, base.Amount,
+        // ValueProp.Unpowered, null)`. A live A10 Act 3 Body Slam (`20260926-220853.jsonl`)
+        // showed 27 -> 32 with Dexterity 2 held; the emulator predicted 34, Dexterity's
+        // +2 folded into Rage's 5 on top of the correct 27 -> 32.
+        var fight = Fight
+            .Hand(Card(IC.Rage), Card(IC.StrikeIronclad))
+            .Energy(9)
+            .Enemy(hp: 40);
+        fight.PlayerBuff(BuffId.Dexterity, 5);
+
+        fight.Play(index: 0);
+        fight.Play(index: 0);
+
+        Assert.Equal(3, fight.State.PlayerBlock);
+    }
+
+    [Fact]
     public void GivesNoBlockForASkill()
     {
         var fight = Fight

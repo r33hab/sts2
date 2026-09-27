@@ -4858,6 +4858,20 @@ public static class CardEffects
         {
             BuffSystem.Remove(state.PlayerBuffs, BuffId.Shrink);
         }
+
+        // A death that holds the fight open (Steam Eruption among the powers that do,
+        // `CombatEngine.HoldsTheFightOpen`) must not wait for the card's own end-of-card
+        // sweep: the game answers it inside the killing blow, and an all-enemies effect
+        // the SAME card still has to run must reach the giant standing again, not a
+        // corpse. `AnswerDeathsHoldingTheFightOpen` is the engine's existing answer for
+        // exactly this -- already called before a step returns and before an enemy phase
+        // begins -- and is a no-op here unless `enemy` is one of the handful of deaths it
+        // covers, so this costs nothing for an ordinary kill. A live A10 Act 1 kill
+        // (`20260926-220853.jsonl`, floor 17) is what found the gap: Thunderclap's own
+        // Vulnerable, reaching every enemy still standing, missed a giant this call had
+        // not yet stood back up, and the end-of-card answer then stripped the Vulnerable
+        // already on it -- 0, where the game reads 1.
+        CombatEngine.AnswerDeathsHoldingTheFightOpen(state, state.ShuffleRng ?? new Random(0));
     }
 
     /// <summary>

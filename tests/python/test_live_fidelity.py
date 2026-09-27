@@ -77,6 +77,17 @@ REAL_PAIRS: dict[str, tuple[str, str | None, str | None, str]] = {
         "CORPSE_SLUG_0",
         f"{SLUGS}_after_kill",
     ),
+    # A10 Act 1 boss kill (`20260926-220853.jsonl`, floor 17). The giant already holds one
+    # Vulnerable; Thunderclap's damage brings it to ABOUT_TO_BLOW, whose death answer
+    # (SteamEruptionPower.AfterDeath) strips every power but Steam Eruption -- Strength
+    # included -- and then Thunderclap's own Vulnerable, reaching every enemy still
+    # standing, lands on the giant again: 1, not 0 and not 2.
+    "Thunderclap brings the Waterfall Giant to ABOUT_TO_BLOW": (
+        "captured/waterfall_giant_about_to_blow",
+        "THUNDERCLAP#0",
+        None,
+        "captured/waterfall_giant_about_to_blow_after_thunderclap",
+    ),
 }
 CARD_PLAYS = [name for name, pair in REAL_PAIRS.items() if pair[1] is not None]
 

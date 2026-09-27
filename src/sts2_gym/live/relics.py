@@ -325,6 +325,11 @@ RELICS: dict[str, Relic] = {
         ),
         _STATELESS,
     ),
+    # Act 2's Ancient pool. `RelicEffects.cs` has no case for it at all -- its whole effect
+    # (sacrifice card rewards to Pael, an Ancient every 2) is a card-reward-screen alternative
+    # (PaelsWing.cs: TryModifyCardRewardAlternatives/OnSacrifice), which the emulator never
+    # touches -- so its Counter (RewardsSacrificed % 2, PaelsWing.cs:36) cannot affect combat.
+    "PAELS_WING": _STATELESS,
     # ── Per-turn counts: PerTurnCounters, cleared at turn start (RelicEffects.cs:990-993,
     # :1364-1371). The game resets `AttacksPlayedThisTurn` in BeforeSideTurnStart too.
     "KUNAI": Relic(counter=_residue("_attacksPlayedThisTurn", 3)),  # :1430
@@ -352,6 +357,9 @@ RELICS: dict[str, Relic] = {
     "CENTENNIAL_PUZZLE": Relic(counter=_flag("_usedThisCombat")),  # :1506
     "PERMAFROST": Relic(counter=_flag("_activatedThisCombat")),  # :1477
     "RUINED_HELMET": Relic(counter=_flag("_usedThisCombat")),  # :2367
+    # Counter 1 once its extra play is spent (ConsumeThrowingAxePlay, :1276-1283); the
+    # emulator's own combat-start reset agrees with the game's AfterRoomEntered (:706, :33).
+    "THROWING_AXE": Relic(counter=_flag("_usedThisCombat")),
     # Once per RUN: the run carries it in UsedUpRelics (:529, :1670).
     "LIZARD_TAIL": Relic(counter=_flag("_wasUsed")),
     # Once per turn, cleared in BeforeSideTurnStart (:1133, :1526-1533).

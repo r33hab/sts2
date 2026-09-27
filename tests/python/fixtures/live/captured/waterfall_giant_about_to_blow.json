@@ -1,0 +1,322 @@
+{
+  "schema": "sts2-live-snapshot/1",
+  "game_version": "v0.107.1",
+  "character": "IRONCLAD",
+  "ascension": 2,
+  "act": 1,
+  "floor": 17,
+  "room_type": "boss",
+  "round": 5,
+  "player": {
+    "hp": 69,
+    "max_hp": 86,
+    "block": 0,
+    "energy": 3,
+    "max_energy": 3,
+    "gold": 72,
+    "stars": 0,
+    "osty": null,
+    "orbs": {
+      "slots": 0,
+      "list": []
+    },
+    "powers": [
+      {
+        "id": "STRENGTH_POWER",
+        "amount": 10
+      },
+      {
+        "id": "THORNS_POWER",
+        "amount": 3
+      },
+      {
+        "id": "REGEN_POWER",
+        "amount": 1
+      }
+    ],
+    "relics": [
+      {
+        "id": "BURNING_BLOOD",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "LARGE_CAPSULE",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "WHETSTONE",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "CANDELABRA",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "HORN_CLEAT",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "TOXIC_EGG",
+        "counter": null,
+        "fields": {}
+      }
+    ],
+    "potions": [
+      {
+        "slot": 0,
+        "id": null
+      },
+      {
+        "slot": 1,
+        "id": null
+      },
+      {
+        "slot": 2,
+        "id": null
+      }
+    ],
+    "max_potion_slots": 3
+  },
+  "hand": [
+    {
+      "id": "SPOILS_MAP",
+      "upgraded": false,
+      "uid": "SPOILS_MAP#0",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "THUNDERCLAP",
+      "upgraded": false,
+      "uid": "THUNDERCLAP#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#3",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    }
+  ],
+  "draw_pile": [
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#4",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "FIGHT_ME",
+      "upgraded": true,
+      "uid": "FIGHT_ME#0",
+      "cost": 2,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "FIGHT_ME",
+      "upgraded": true,
+      "uid": "FIGHT_ME#1",
+      "cost": 2,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "HEMOKINESIS",
+      "upgraded": false,
+      "uid": "HEMOKINESIS#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": true,
+      "uid": "STRIKE_IRONCLAD#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    }
+  ],
+  "discard_pile": [
+    {
+      "id": "BLOODLETTING",
+      "upgraded": true,
+      "uid": "BLOODLETTING#0",
+      "cost": 0,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "BASH",
+      "upgraded": false,
+      "uid": "BASH#0",
+      "cost": 2,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": true,
+      "uid": "STRIKE_IRONCLAD#3",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#4",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "UNRELENTING",
+      "upgraded": true,
+      "uid": "UNRELENTING#0",
+      "cost": 2,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    }
+  ],
+  "exhaust_pile": [],
+  "known_draw_top": [],
+  "known_draw_bottom": [],
+  "enemies": [
+    {
+      "entity_id": "WATERFALL_GIANT_0",
+      "id": "WATERFALL_GIANT",
+      "slot": 0,
+      "hp": 14,
+      "max_hp": 240,
+      "block": 0,
+      "powers": [
+        {
+          "id": "STEAM_ERUPTION_POWER",
+          "amount": 24
+        },
+        {
+          "id": "STRENGTH_POWER",
+          "amount": 2
+        },
+        {
+          "id": "VULNERABLE_POWER",
+          "amount": 1
+        }
+      ],
+      "intents": [
+        {
+          "type": "ATTACK",
+          "damage": 22,
+          "base_damage": 20,
+          "hits": 1
+        },
+        {
+          "type": "BUFF",
+          "damage": null,
+          "base_damage": null,
+          "hits": null
+        }
+      ],
+      "move_id": "PRESSURE_GUN_MOVE",
+      "state_log": [
+        "PRESSURIZE_MOVE",
+        "STOMP_MOVE",
+        "RAM_MOVE",
+        "SIPHON_MOVE",
+        "PRESSURE_GUN_MOVE"
+      ],
+      "ai_fields": {
+        "_currentPressureGunDamage": 20,
+        "_pressureBuildupIdx": 4,
+        "SiphonHeal": 10,
+        "PressurizeAmount": 15,
+        "StompDamage": 15,
+        "RamDamage": 10,
+        "PressureUpDamage": 13,
+        "BasePressureGunDamage": 20,
+        "PressureGunIncrease": 5,
+        "CurrentPressureGunDamage": 20,
+        "PressureBuildupIdx": 4
+      }
+    }
+  ],
+  "history": {
+    "cards_played_this_turn": 1,
+    "cards_played_this_combat": 15,
+    "attacks_played_this_turn": 1,
+    "skills_played_this_turn": 0
+  },
+  "pending_selection": null
+}

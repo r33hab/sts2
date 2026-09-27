@@ -32,24 +32,40 @@ COST_FIELDS = ("cost_this_turn", "cost_for_combat")
 # are the same card to the emulator, so a card with no uid is matched by it.
 FACE = ("id", "upgraded", "cost", "enchantment", "enchant_amount", "fields")
 
+# The live power that zeroes EffectiveCost outright for a card of that CardType
+# (CombatEngine.cs:2297-2318), by the CardType it frees. Unrelenting grants
+# FreeAttackPower; nothing captured in a live run yet grants the other two, so their
+# live ids are read off the BuffId member names rather than a capture.
+FREE_CARD_TYPES = {
+    "FREE_ATTACK_POWER": "Attack",
+    "FREE_SKILL_POWER": "Skill",
+    "FREE_POWER_POWER": "Power",
+}
+
 
 def _expected_cost(
     info: names.CardInfo,
     emu: dict[str, Any],
     *,
     corruption: bool,
+    free_card_types: frozenset[str] = frozenset(),
 ) -> int:
     """Compute what the emulator's `EffectiveCost` will charge, from the terms a card carries.
 
     Mirrors CombatEngine.cs:2094-2133: Tezcatara's Ember and Corruption (on a Skill) zero
     the cost outright; otherwise the combat cost replaces the printed one, the turn cost
-    can only lower it, and the upgrade delta is added last. The other terms of
-    `EffectiveCost` read the board (Stomp's attacks, Tangled, Free*Power, ...) and are not
-    modelled here, so a card they discount shows up as unexplained.
+    can only lower it, and the upgrade delta is added last. `free_card_types` is the other
+    of those terms this carries (:2297-2318): FreeAttackPower/FreeSkillPower/FreePowerPower
+    each zero a card of their one type outright, and are found from the player's own powers
+    (`FREE_CARD_TYPES`) rather than read per card. The remaining terms of `EffectiveCost`
+    read the board (Stomp's attacks, Tangled's addition, ...) and are not modelled here, so
+    a card they discount still shows up as unexplained.
     """
     if emu.get("enchantment") == ids.enchantment("TEZCATARAS_EMBER"):
         return 0
     if corruption and info.card_type == "Skill":
+        return 0
+    if info.card_type in free_card_types:
         return 0
     cost = emu.get("cost_for_combat", info.cost)
     if "cost_this_turn" in emu:
@@ -65,8 +81,11 @@ def to_emu_card(
     path: str,
     warnings: list[str],
     corruption: bool = False,
+    free_card_types: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
-    """Translate one validated live card; `corruption` is whether the player holds it.
+    """Translate one validated live card; `corruption` is whether the player holds it,
+    and `free_card_types` the CardTypes FreeAttackPower/FreeSkillPower/FreePowerPower
+    currently zero (`FREE_CARD_TYPES`).
 
     Raises:
         ConversionError: for an unknown card or enchantment, an enchant amount without an
@@ -119,7 +138,12 @@ def to_emu_card(
 
     shown = card["cost"]
     if shown is not None and not info.unplayable and not info.has_energy_cost_x:
-        expected = _expected_cost(info, emu, corruption=corruption)
+        expected = _expected_cost(
+            info,
+            emu,
+            corruption=corruption,
+            free_card_types=free_card_types,
+        )
         if shown != expected:
             warnings.append(
                 f"{path}: {card['id']} shows cost {shown} but its printed cost and fields "

@@ -353,6 +353,11 @@ public class WaterfallGiantTests
     /// hittable for the rest of the card, so every hit rolls on `Rng.CombatTargets`: three
     /// draws. Only an empty list skips the draw.
     /// </summary>
+    /// <remarks>
+    /// The giant is standing again (`OnEnemyDeath`) before the second and third hits land,
+    /// so they come off the 999999999 sentinel rather than a corpse clamped at zero: 3 and
+    /// 3 more, same as any other hit after the first would take off any other total.
+    /// </remarks>
     [Fact]
     public void HitsAfterTheKillingOneStillRollTheirTargets()
     {
@@ -367,7 +372,7 @@ public class WaterfallGiantTests
         fight.Play(0);
 
         Assert.Equal(3, targets.CallCount);
-        Assert.Equal(AboutToBlowHp, Giant(fight).Hp);
+        Assert.Equal(AboutToBlowHp - 3 - 3, Giant(fight).Hp);
     }
 
     /// <summary>
@@ -408,16 +413,13 @@ public class WaterfallGiantTests
     }
 
     /// <summary>
-    /// KNOWN DIVERGENCE, pinned so that it cannot change unnoticed. In the game the kill
-    /// and the revive happen inside the killing blow (`CreatureCmd.Damage` ends in `Kill`),
-    /// so the rest of Uppercut+ lands on the revived giant. Its Weak 2 is still at 1 when
-    /// EXPLODE swings, and 15 becomes 11. The emulator answers a death after the card, so
-    /// those debuffs meet a giant at zero HP and are dropped, and EXPLODE swings for the
-    /// full 15. If the revive ever moves inside the damage path, this test should flip to
-    /// the game's numbers: Weak 2 on the giant, then 11.
+    /// The kill and the revive happen inside the killing blow (`CreatureCmd.Damage` ends
+    /// in `Kill`; here, `OnEnemyDeath`), so the rest of Uppercut+ lands on the giant
+    /// standing again. Its Weak 2 is still at 1 when EXPLODE swings -- one tick, at
+    /// ABOUT_TO_BLOW's enemy phase -- and 15 becomes 11.
     /// </summary>
     [Fact]
-    public void KnownDivergenceUppercutsWeakOnTheKillingBlowIsDropped()
+    public void UppercutsWeakOnTheKillingBlowLandsOnTheRevivedGiant()
     {
         var fight = Encounter();
         fight.EndTurn();
@@ -428,11 +430,12 @@ public class WaterfallGiantTests
         fight.Play(0, target: 0);
 
         Assert.Equal(AboutToBlowHp, Giant(fight).Hp);
-        Assert.Equal(0, fight.EnemyBuffAmount(BuffId.Weak));
+        Assert.Equal(2, fight.EnemyBuffAmount(BuffId.Weak));
         fight.EndTurn();
+        Assert.Equal(1, fight.EnemyBuffAmount(BuffId.Weak));
         int hp = fight.State.PlayerHp;
         fight.EndTurn();
-        Assert.Equal(hp - 15, fight.State.PlayerHp);
+        Assert.Equal(hp - 11, fight.State.PlayerHp);
     }
 
     /// <summary>
