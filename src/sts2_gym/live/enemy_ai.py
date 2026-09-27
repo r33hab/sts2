@@ -1700,6 +1700,9 @@ _MODELS: tuple[Monster, ...] = (
         },
         prefix=("THIEVERY_MOVE", "FLUTTER_MOVE", "HAT_TRICK_MOVE", "NAB_MOVE"),
         loop=("ESCAPE_MOVE",),
+        # A stun while ESCAPE_MOVE is pending resumes it rather than advancing past it
+        # (Creature.StunInternal).
+        resumes_after_stun=True,
     ),
     # Act 3. EnemyAI.cs:1694-1703, decompiled Monsters/DevotedSculptor.cs: FORBIDDEN_
     # INCANTATION once, then SAVAGE forever.
@@ -1784,7 +1787,11 @@ _MODELS: tuple[Monster, ...] = (
         "MECHA_KNIGHT",
         {
             "CHARGE_MOVE": attack(deadly(30, 25)),
-            "FLAMETHROWER_MOVE": debuff(4),
+            # StatusIntent reads live as STATUS_CARD, which ids.INTENT_TYPES maps to the
+            # emulator's Debuff -- matching EnemyAI.cs's own `IntentType.Debuff` -- but the
+            # live spelling still needs naming, or a resample under this table disagrees
+            # with the game's own DEBUFF and is flagged not comparable rather than read.
+            "FLAMETHROWER_MOVE": debuff(4, live="STATUS_CARD"),
             "WINDUP_MOVE": defend(15),
             "HEAVY_CLEAVE_MOVE": attack(deadly(40, 35)),
         },
