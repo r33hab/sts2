@@ -4785,10 +4785,21 @@ public static class CardEffects
         if (hpLoss > 0 && BuffSystem.Get(target.Buffs, BuffId.Slumber) > 0)
         {
             BuffSystem.Apply(target.Buffs, BuffId.Slumber, -1);
-            // Waking sheds the Plating -- `WakeUpMove` removes the power, it does not let
-            // it decay. Without this the beetle keeps a shrinking wall of block for the
-            // whole fight and the live game shows none.
-            EnemyAI.WakeSlumberingBeetleIfDone(target);
+            // `SlumberPower.AfterDamageReceived` at zero does NOT wake the beetle on the
+            // spot: it calls `CreatureCmd.Stun(owner, WakeUpMove, "ROLL_OUT_MOVE")`, so the
+            // wake -- and the Plating it removes -- is the body of the stun move the
+            // beetle performs on its own turn (`EnemyAI`'s stunned branch), and the
+            // roll-outs start after it. Seen live: the waking hit left Plating 14 standing
+            // and the intent on STUN.
+            if (
+                target.DefId == KE.SlumberingBeetle
+                && BuffSystem.Get(target.Buffs, BuffId.Slumber) <= 0
+            )
+            {
+                BuffSystem.Apply(target.Buffs, BuffId.Stunned, 1);
+                // CreatureCmd.Stun changes the move immediately, so the readout is the stun.
+                target.CurrentIntent = new Intent(IntentType.Unknown, 0);
+            }
         }
 
         if (hpLoss > 0)

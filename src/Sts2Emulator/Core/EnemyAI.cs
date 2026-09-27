@@ -67,6 +67,9 @@ public static class EnemyAI
         if (BuffSystem.Get(enemy.Buffs, BuffId.Stunned) > 0)
         {
             BuffSystem.Apply(enemy.Buffs, BuffId.Stunned, -1);
+            // The stun a waking hit put on the Slumbering Beetle performs `WakeUpMove`,
+            // which removes its Plating (`SlumberPower.AfterDamageReceived`).
+            WakeSlumberingBeetleIfDone(enemy);
             if (enemy.DefId != KE.CorpseSlug)
             {
                 enemy.MoveIndex++;
@@ -5297,10 +5300,10 @@ public static class EnemyAI
         && (enemy.Hp > 0 || BuffSystem.Has(enemy.Buffs, BuffId.SteamEruption));
 
     /// <summary>
-    /// `SlumberPower` reaching zero runs `WakeUpMove`, which REMOVES the beetle's
-    /// `PlatingPower` outright. Called from both decrement paths -- turn end and unblocked
-    /// damage -- because the game wakes from either and a wake wired into one of them
-    /// leaves the other beetle armoured for the rest of the fight.
+    /// `WakeUpMove` REMOVES the beetle's `PlatingPower` outright. It runs when
+    /// `SlumberPower` reaches zero at a turn end, and as the body of the stun an
+    /// unblocked hit that empties the Slumber puts on it -- both paths wake it, and a wake
+    /// wired into only one leaves the other beetle armoured for the rest of the fight.
     /// </summary>
     internal static void WakeSlumberingBeetleIfDone(EnemyState enemy)
     {
