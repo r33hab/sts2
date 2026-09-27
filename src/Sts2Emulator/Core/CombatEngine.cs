@@ -3412,13 +3412,16 @@ public static class CombatEngine
     /// its respawn, and the merc's reinforcements and the Wrigglers their stunned first
     /// turn, in the very next enemy phase). Left unanswered, a held-open death stalls the
     /// fight. So the engine calls this wherever such a death must not wait: before the
-    /// enemies act, as a poison tick kills the giant at the start of its turn, and before a
-    /// step returns.
+    /// enemies act, as a poison tick kills the giant at the start of its turn, before a
+    /// step returns, and (`CardEffects.OnEnemyDeath`) inside the killing blow itself, so an
+    /// all-enemies effect the SAME card still has to run reaches the giant standing again --
+    /// Thunderclap's own Vulnerable, in a live A10 Act 1 kill, missed a giant this call had
+    /// not yet stood back up.
     ///
     /// It sweeps only the corpses it answered, leaving any other death to the check that
     /// owns it.
     /// </remarks>
-    private static void AnswerDeathsHoldingTheFightOpen(CombatState state, Random rng)
+    internal static void AnswerDeathsHoldingTheFightOpen(CombatState state, Random rng)
     {
         List<EnemyState>? dead = null;
         foreach (var enemy in state.Enemies)
