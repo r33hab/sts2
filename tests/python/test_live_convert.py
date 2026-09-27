@@ -852,15 +852,30 @@ class WarningTests(unittest.TestCase):
             [buff("Strength", 2), buff("Vulnerable", 1)],
         )
 
-    def test_a_relic_missing_its_field_takes_the_default_and_warns(self) -> None:
+    def test_a_relic_field_the_mod_leaves_out_is_at_its_default(self) -> None:
+        # The mod reports a relic's int and bool fields and leaves out those at 0 /
+        # false, so a missing key reads as 0 / false (STS2MCP docs/raw-full.md, relic
+        # `fields`): a Lizard Tail reporting `{}` has not been used.
         doc = load("player")
         doc["player"]["relics"].append(
             {"id": "LIZARD_TAIL", "counter": None, "fields": {}},
         )
         result = convert.convert(doc)
         self.assertEqual(result.doc["relics"][-1], {"id": 137, "counter": 0})
+        self.assertEqual(result.warnings, [])
+        self.assertTrue(result.reliable)
+
+    def test_a_relic_field_the_mod_never_reports_still_warns(self) -> None:
+        # Beating Remnant's `_damageReceivedThisTurn` is a decimal (BeatingRemnant.cs),
+        # and the mod reflects int and bool fields only, so its absence says nothing.
+        doc = load("player")
+        doc["player"]["relics"].append(
+            {"id": "BEATING_REMNANT", "counter": None, "fields": {}},
+        )
+        result = convert.convert(doc)
         self.assertEqual(len(result.warnings), 1)
-        self.assertIn("LIZARD_TAIL", result.warnings[0])
+        self.assertIn("BEATING_REMNANT", result.warnings[0])
+        self.assertIn("_damageReceivedThisTurn", result.warnings[0])
         self.assertFalse(result.reliable)
 
     def test_a_relic_outside_the_table_warns_but_still_counts_its_energy(self) -> None:
@@ -1455,10 +1470,13 @@ class RelicTableTests(unittest.TestCase):
             )
             result = self.translate(entry, None, {field: False})
             self.assertEqual((result.relics[0]["counter"], result.warnings), (0, []))
+            # The mod leaves a false flag out (raw-full.md, relic `fields`).
             missing = self.translate(entry, None, {})
-            self.assertEqual(missing.relics[0]["counter"], 0, entry)
-            self.assertEqual(len(missing.warnings), 1, entry)
-            self.assertIn(entry, missing.warnings[0])
+            self.assertEqual(
+                (missing.relics[0]["counter"], missing.warnings),
+                (0, []),
+                entry,
+            )
 
     def test_paels_wing_has_no_combat_state(self) -> None:
         # PaelsWing.cs has no combat hook at all (its whole effect is a card-reward-screen
@@ -1491,11 +1509,14 @@ class RelicTableTests(unittest.TestCase):
             self.assertEqual(result.relics[0]["counter"], expected, entry)
             self.assertEqual(result.warnings, [], entry)
 
-    def test_an_ambiguous_display_warns(self) -> None:
-        # LastingCandy's display is CombatsSeen % 2, which cannot tell 0 from 2.
+    def test_a_count_the_mod_leaves_out_is_zero(self) -> None:
+        # LastingCandy's display is CombatsSeen % 2, which cannot tell 0 from 2, but the
+        # mod leaves a field at 0 out (raw-full.md, relic `fields`), so `{}` is 0 and
+        # Silver Crucible's uses left are all three.
         result = self.translate("LASTING_CANDY", 0, {})
-        self.assertEqual(result.relics[0]["counter"], 0)
-        self.assertEqual(len(result.warnings), 1)
+        self.assertEqual((result.relics[0]["counter"], result.warnings), (0, []))
+        result = self.translate("SILVER_CRUCIBLE", None, {})
+        self.assertEqual((result.relics[0]["counter"], result.warnings), (3, []))
 
     def test_pocketwatch_pays_nothing_on_turn_one(self) -> None:
         fields = {"_cardsPlayedThisTurn": 0, "_cardsPlayedLastTurn": 0}
@@ -1548,11 +1569,16 @@ class RelicTableTests(unittest.TestCase):
             self.assertEqual(result.counters, counters, entry)
             self.assertEqual(result.warnings, [], entry)
 
-    def test_a_missing_combat_state_field_warns(self) -> None:
+    def test_a_combat_state_field_the_mod_leaves_out_is_at_its_default(self) -> None:
         result = self.translate("BELT_BUCKLE", None, {})
         self.assertEqual(result.counters, {"belt_buckle_applied": False})
+        self.assertEqual(result.warnings, [])
+
+    def test_a_combat_state_field_the_mod_never_reports_warns(self) -> None:
+        result = self.translate("BEATING_REMNANT", None, {})
+        self.assertEqual(result.counters, {"unblocked_damage_this_turn": 0})
         self.assertEqual(len(result.warnings), 1)
-        self.assertIn("BELT_BUCKLE", result.warnings[0])
+        self.assertIn("BEATING_REMNANT", result.warnings[0])
 
     def test_a_non_integral_field_refuses(self) -> None:
         with self.assertRaises(live.ConversionError) as caught:
@@ -1759,6 +1785,32 @@ class DecompiledConsistencyTests(unittest.TestCase):
             set(relics.RELICS),
             sorted(reachable - set(relics.RELICS)),
         )
+
+    def test_every_relic_field_read_as_a_default_is_one_the_mod_reports(self) -> None:
+        # The mod reflects a relic's int and bool fields only and leaves those at 0 /
+        # false out (STS2MCP docs/raw-full.md), which is what lets the converter read an
+        # absent field as its default. A field of any other type never arrives, so its
+        # absence says nothing and the converter must keep warning about it.
+        folder = DECOMPILED / "MegaCrit.Sts2.Core.Models.Relics"
+        for entry, rule in relics.RELICS.items():
+            fields = relics.fields_read(rule)
+            if not fields:
+                continue
+            name = "".join(part.capitalize() for part in entry.split("_"))
+            source = (folder / f"{name}.cs").read_text(encoding="utf-8")
+            for field in fields:
+                declared = re.search(
+                    rf"\b(\w+)\??\s+{re.escape(field)}\s*(?:;|=|\{{)",
+                    source,
+                )
+                with self.subTest(relic=entry, field=field):
+                    self.assertIsNotNone(declared, "not declared by the relic's class")
+                    assert declared is not None
+                    self.assertEqual(
+                        declared.group(1) in {"int", "bool"},
+                        (entry, field) not in relics.UNREPORTED_FIELDS,
+                        declared.group(0),
+                    )
 
     def test_the_unmodelled_enchantments(self) -> None:
         folder = DECOMPILED / "MegaCrit.Sts2.Core.Models.Enchantments"
