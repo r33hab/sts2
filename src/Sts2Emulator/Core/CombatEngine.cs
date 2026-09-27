@@ -748,10 +748,13 @@ public static class CombatEngine
             Effects.CardEffects.GainBlock(state, metallicize, rng);
         }
         // Plating (Stone Armor): gain block at end of player turn.
+        // `PlatingPower.BeforeSideTurnEndEarly` gains it with `ValueProp.Unpowered`, so
+        // Dexterity and Frail leave it alone (live: Plating 4 under a Speed Potion's
+        // Dexterity 5 blocked 4, not 9).
         int plating = BuffSystem.Get(state.PlayerBuffs, BuffId.Plating);
         if (plating > 0)
         {
-            Effects.CardEffects.GainBlock(state, plating, rng);
+            Effects.CardEffects.GainUnpoweredBlock(state, plating, rng);
         }
 
         // Ritual (Mazaleth's Gift): gain N Strength at end of player turn.
