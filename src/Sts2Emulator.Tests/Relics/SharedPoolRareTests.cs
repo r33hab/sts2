@@ -172,6 +172,30 @@ public class GamePieceTests
         fight.Play(fight.State.Hand.FindIndex(c => c.DefId == SI.Slice));
         Assert.Single(fight.State.Hand); // an attack draws nothing
     }
+
+    /// <summary>
+    /// `GamePiece.AfterCardPlayed` answers every PLAY, and `CardModel.OnPlayWrapper` runs
+    /// `Hook.AfterCardPlayed` once per play of a card whose play count was raised -- so a
+    /// Power Throwing Axe doubles draws twice. Seen live: Inflame+ as the combat's first
+    /// card with both relics drew two; the emulator drew one.
+    /// </summary>
+    [Fact]
+    public void APowerPlayedTwiceDrawsTwice()
+    {
+        var fight = Fight.WithRelics(RelicEffects.GamePiece, RelicEffects.ThrowingAxe);
+        fight.State.Hand = [Card(IC.Inflame)];
+        fight.State.Energy = 9;
+        fight.State.DrawPile.Clear();
+        for (int i = 0; i < 4; i++)
+        {
+            fight.State.DrawPile.Add(new CardInstance(SI.Backstab, false));
+        }
+
+        fight.Play();
+
+        Assert.Equal(2, fight.State.Hand.Count);
+        Assert.Equal(4, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.Strength)); // 2 x 2
+    }
 }
 
 public class IntimidatingHelmetTests

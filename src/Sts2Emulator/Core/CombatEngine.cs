@@ -291,6 +291,7 @@ public static class CombatEngine
 
         ApplyEnchantmentOnPlay(state, card, rng);
         Effects.CardEffects.Apply(def, card.Upgraded, state, rng, card);
+        Effects.RelicEffects.ApplyAfterEachPlay(state, def, rng);
         if (burstPlays > 0)
         {
             BuffSystem.Apply(state.PlayerBuffs, BuffId.Burst, -1);
@@ -334,6 +335,7 @@ public static class CombatEngine
         for (int i = 0; i < extraPlays; i++)
         {
             Effects.CardEffects.Apply(def, card.Upgraded, state, rng, card);
+            Effects.RelicEffects.ApplyAfterEachPlay(state, def, rng);
         }
 
         // `DuplicationPower.ModifyCardPlayCount` adds one play to ANY card and then
@@ -345,6 +347,7 @@ public static class CombatEngine
         if (duplication > 0)
         {
             Effects.CardEffects.Apply(def, card.Upgraded, state, rng, card);
+            Effects.RelicEffects.ApplyAfterEachPlay(state, def, rng);
             BuffSystem.Apply(state.PlayerBuffs, BuffId.Duplication, -1);
         }
 
@@ -354,6 +357,7 @@ public static class CombatEngine
             if (oneTwoPunch > 0)
             {
                 Effects.CardEffects.Apply(def, card.Upgraded, state, rng, card);
+                Effects.RelicEffects.ApplyAfterEachPlay(state, def, rng);
                 if (oneTwoPunch == 1)
                 {
                     BuffSystem.Remove(state.PlayerBuffs, BuffId.OneTwoPunch);
