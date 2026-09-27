@@ -458,21 +458,24 @@ public static class RunMapGenerator
     /// assumed: see <c>BossRow</c>.
     ///
     /// `_defaultPointTypes` in the game drops index 2 in multiplayer; solo keeps all
-    /// sixteen.
+    /// sixteen. Its Unknowns are the ordinary "?" room, <c>NodeEvent</c>: resolved on
+    /// arrival, where the compass narrows the roll to Event
+    /// (<c>RollUnknownMapPointNodeType</c>). Typed <c>NodeNone</c>, they could not be
+    /// travelled to at all, and the run stopped on row 1.
     /// </remarks>
     private static readonly int[] GoldenPathRooms =
     [
         RunConstants.NodeNormal,
-        RunConstants.NodeNone, // Unknown -- resolved on arrival, and always an Event here.
+        RunConstants.NodeEvent, // Unknown -- resolved on arrival, and always an Event here.
         RunConstants.NodeNormal,
         RunConstants.NodeRest,
         RunConstants.NodeNormal,
         RunConstants.NodeRest,
-        RunConstants.NodeNone,
+        RunConstants.NodeEvent,
         RunConstants.NodeRelic,
-        RunConstants.NodeNone,
+        RunConstants.NodeEvent,
         RunConstants.NodeRelic,
-        RunConstants.NodeNone,
+        RunConstants.NodeEvent,
         RunConstants.NodeShop,
         RunConstants.NodeElite,
         RunConstants.NodeRest,
