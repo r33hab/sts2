@@ -43,6 +43,9 @@ _LOG = logging.getLogger("sts2_gym.live.strategy")
 Scorer = tuple[Any, Callable[[Any, Any], Any]]
 
 
+ACT_ONE_FLOOR_CLASSES = 18  # an export without `floor_classes` is this Act 1 format
+
+
 class NoModelError(Exception):
     """No strategy champion to score with: none is exported, or no training package."""
 
@@ -152,6 +155,14 @@ class StrategyModel:
         # does not know, a map it has not seen yet, a screen it cannot read.
         try:
             view = features.view_from_live(live_run)
+        except Exception as error:
+            raise StrategyError(f"{type(error).__name__}: {error}") from error
+        # An Act 1 export never saw a later act and would only guess there: say so, and
+        # the coach shows its "no between-fight advice outside Act 1" note.
+        classes = info.get("floor_classes", ACT_ONE_FLOOR_CLASSES)
+        if classes == ACT_ONE_FLOOR_CLASSES and getattr(view, "act_index", 0) > 0:
+            raise StrategyError("the Act 1 model does not advise outside Act 1")
+        try:
             decision = features.decision_from_live(screen, view)
             scores = score_options(decision, decision.view or view)
         except Exception as error:
@@ -341,13 +352,13 @@ def _card_label(card: Any) -> str:
 
 
 def _card_name(card_id: int, upgraded: bool = False) -> str:
-    """A card's name as the game shows it: the starters drop their character's name."""
+    """Return a card's name as the game shows it: the starters drop their character's name."""
     name = names.card_name(card_id, upgraded)
     return re.sub(r" (Ironclad|Silent|Defect|Necrobinder|Regent)(?=\+?$)", "", name)
 
 
 def _thing(option: Mapping[str, Any]) -> str | None:
-    """The card, relic or potion an option offers, by name."""
+    """Return the card, relic or potion an option offers, by name."""
     if option.get("card") is not None:
         return _card_label(option["card"])
     if option.get("relic") is not None:
@@ -358,7 +369,7 @@ def _thing(option: Mapping[str, Any]) -> str | None:
 
 
 def _screen_title(screen: Mapping[str, Any], action: object) -> str | None:
-    """The title the live screen gives the choice at `action`, if it gives one."""
+    """Return the title the live screen gives the choice at `action`, if it gives one."""
     body = screen.get(str(screen.get("state_type")))
     choices = body.get("options") if isinstance(body, Mapping) else None
     for choice in choices or ():

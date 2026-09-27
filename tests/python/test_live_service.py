@@ -1845,6 +1845,23 @@ class StrategyTests(unittest.TestCase):
             self.assertEqual(values(), [13.0, 12.0])
             self.assertEqual(policy.LOADS, 2)
 
+    def test_an_act_1_model_does_not_advise_outside_act_1(self) -> None:
+        class ActTwoView:
+            act_index = 1
+            deck = ()
+
+        class ActTwoFeatures(FakeFeatures):
+            def view_from_live(self, live_run: dict[str, Any]) -> Any:
+                self.calls.append(("view_from_live", live_run))
+                return ActTwoView()
+
+        champion = model_dir(self.root)  # no floor_classes: the 18-class Act 1 export
+        answer = self.ask(
+            strategy.StrategyModel(champion, load=FakeTraining(ActTwoFeatures())),
+        )
+        self.assertEqual(answer["error"]["type"], "strategy", answer)
+        self.assertIn("outside Act 1", answer["error"]["message"])
+
     def test_a_training_package_that_fails_to_load_is_a_strategy_error(self) -> None:
         def raising(model_dir: Path, info: Mapping[str, Any]) -> tuple[Any, Any]:
             raise ValueError("the weights do not match the network")
