@@ -896,6 +896,21 @@ class WarningTests(unittest.TestCase):
         doc["hand"][0]["cost"] = 0
         self.assertEqual(len(convert.convert(doc).warnings), 1)
 
+    def test_free_attack_power_explains_a_free_attack(self) -> None:
+        # CombatEngine.EffectiveCost (:2297-2303) checks the buff alone, with no memory
+        # of which card asks: EVERY Attack in hand reads 0 while FreeAttackPower is held
+        # (Unrelenting's own buff), not only the one that will spend it. The fixture's
+        # hand is Strike, Defend, Bash -- both Attacks read 0 here, and the Skill does not.
+        doc = load("player")
+        doc["player"]["powers"].append({"id": "FREE_ATTACK_POWER", "amount": 1})
+        doc["hand"][0]["cost"] = 0  # STRIKE, an Attack
+        doc["hand"][2]["cost"] = 0  # BASH, an Attack
+        result = convert.convert(doc)
+        self.assertEqual(result.warnings, [])
+        # A Skill is not an Attack: at 0 it is still unexplained.
+        doc["hand"][1]["cost"] = 0
+        self.assertEqual(len(convert.convert(doc).warnings), 1)
+
     def test_missing_base_damage_comes_from_the_move_table(self) -> None:
         # WHIP_SLAP is 3 twice (EnemyAI.cs:3285-3301); the table knows it exactly.
         doc = load("enemy")
@@ -1428,6 +1443,7 @@ class RelicTableTests(unittest.TestCase):
             ("PERMAFROST", "_activatedThisCombat"),
             ("LIZARD_TAIL", "_wasUsed"),
             ("RUINED_HELMET", "_usedThisCombat"),
+            ("THROWING_AXE", "_usedThisCombat"),
             ("DEMON_TONGUE", "_triggeredThisTurn"),
             ("RED_SKULL", "_strengthApplied"),
             ("MAW_BANK", "_hasItemBeenBought"),
@@ -1443,6 +1459,14 @@ class RelicTableTests(unittest.TestCase):
             self.assertEqual(missing.relics[0]["counter"], 0, entry)
             self.assertEqual(len(missing.warnings), 1, entry)
             self.assertIn(entry, missing.warnings[0])
+
+    def test_paels_wing_has_no_combat_state(self) -> None:
+        # PaelsWing.cs has no combat hook at all (its whole effect is a card-reward-screen
+        # alternative), and RelicEffects.cs has no case for it, so nothing in combat reads
+        # its Counter: it is 0 whatever the live counter or fields show.
+        for counter, fields in ((None, {}), (1, {}), (0, {"RewardsSacrificed": 1})):
+            result = self.translate("PAELS_WING", counter, fields)
+            self.assertEqual((result.relics[0]["counter"], result.warnings), (0, []))
 
     def test_run_level_counts(self) -> None:
         cases = [

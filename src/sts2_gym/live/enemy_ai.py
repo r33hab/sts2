@@ -1086,6 +1086,22 @@ class WaterfallGiant(Cycle):
         return super().announced(emu)
 
 
+class _Axebot(Cycle):
+    """BOOT_UP once, then HAMMER_UPPERCUT and ONE_TWO forever -- except BOOT_UP is only
+    ever index 0 for a respawn built with a stock override (Axebot.cs:
+    `GenerateMoveStateMachine` returns the machine on `moveState` when
+    `_stockOverrideAmount.HasValue`, and on `moveState3` -- HAMMER_UPPERCUT -- otherwise).
+    A fresh bot with no override skips the prefix entirely and opens on HAMMER_UPPERCUT
+    already at MoveIndex 1: EnemyAI.cs's `MoveIndex == 0` case is BOOT_UP's alone, so a
+    bot that never visits it cannot be sitting on that index.
+    """
+
+    def start(self, moves: Sequence[str], ctx: Context) -> Fields | None:
+        if moves[0] == self.loop[0]:
+            return Fields(move_index=len(self.prefix))
+        return super().start(moves, ctx)
+
+
 # ── The Act 1 monsters ───────────────────────────────────────────────────────
 #
 # Every monster an Act 1 encounter can field: the rosters (GenerateMonsters, plus what a
@@ -1624,6 +1640,203 @@ _MODELS: tuple[Monster, ...] = (
             "PRESSURE_GUN_MOVE",
             "PRESSURE_UP_MOVE",
         ),
+    ),
+    # Act 2. EnemyAI.cs:2462-2496 is a bare 5-ring opening on THRASH, matching decompiled
+    # Monsters/Crusher.cs's GenerateMoveStateMachine exactly: no branches, no per-slot
+    # opener.
+    Cycle(
+        "CRUSHER",
+        {
+            "THRASH_MOVE": attack(deadly(14, 12)),
+            "ENLARGING_STRIKE_MOVE": attack(4),
+            "BUG_STING_MOVE": attack(deadly(7, 6), hits=2),
+            "ADAPT_MOVE": buff(deadly(3, 2)),
+            "GUARDED_STRIKE_MOVE": attack(deadly(14, 12)),
+        },
+        loop=(
+            "THRASH_MOVE",
+            "ENLARGING_STRIKE_MOVE",
+            "BUG_STING_MOVE",
+            "ADAPT_MOVE",
+            "GUARDED_STRIKE_MOVE",
+        ),
+    ),
+    # Act 2. EnemyAI.cs:4153-4178, decompiled Monsters/BowlbugSilk.cs: opens on
+    # TOXIC_SPIT (the machine's initial state, not THRASH), alternating forever.
+    Cycle(
+        "BOWLBUG_SILK",
+        {
+            "TOXIC_SPIT_MOVE": debuff(1),
+            "THRASH_MOVE": attack(deadly(5, 4), hits=2),
+        },
+        loop=("TOXIC_SPIT_MOVE", "THRASH_MOVE"),
+    ),
+    # Act 2. EnemyAI.cs:1449-1472, decompiled Monsters/Tunneler.cs: BITE, BURROW, then
+    # BELOW forever. DIZZY_MOVE (a StunIntent, BurrowedPower.AfterBlockBroken forces it)
+    # is declared but not modelled: breaking the burrow mid-fight is not yet verified
+    # against a live capture, so a log that reaches it falls back to generic rather than
+    # risk a wrong reset.
+    Cycle(
+        "TUNNELER",
+        {
+            "BITE_MOVE": attack(deadly(15, 13)),
+            "BURROW_MOVE": buff(0),
+            "BELOW_MOVE": attack(deadly(26, 23)),
+            "DIZZY_MOVE": unknown(live="STUN"),
+        },
+        prefix=("BITE_MOVE", "BURROW_MOVE"),
+        loop=("BELOW_MOVE",),
+    ),
+    # Act 2. EnemyAI.cs:1474-1503, decompiled Monsters/ThievingHopper.cs: THIEVERY,
+    # FLUTTER, HAT_TRICK, NAB, then ESCAPE forever.
+    Cycle(
+        "THIEVING_HOPPER",
+        {
+            "THIEVERY_MOVE": attack(deadly(19, 17)),
+            "FLUTTER_MOVE": buff(0),
+            "HAT_TRICK_MOVE": attack(deadly(23, 21)),
+            "NAB_MOVE": attack(deadly(16, 14)),
+            "ESCAPE_MOVE": unknown(live="ESCAPE"),
+        },
+        prefix=("THIEVERY_MOVE", "FLUTTER_MOVE", "HAT_TRICK_MOVE", "NAB_MOVE"),
+        loop=("ESCAPE_MOVE",),
+        # A stun while ESCAPE_MOVE is pending resumes it rather than advancing past it
+        # (Creature.StunInternal).
+        resumes_after_stun=True,
+    ),
+    # Act 3. EnemyAI.cs:1694-1703, decompiled Monsters/DevotedSculptor.cs: FORBIDDEN_
+    # INCANTATION once, then SAVAGE forever.
+    Cycle(
+        "DEVOTED_SCULPTOR",
+        {
+            "FORBIDDEN_INCANTATION_MOVE": buff(9),
+            "SAVAGE_MOVE": attack(deadly(15, 12)),
+        },
+        prefix=("FORBIDDEN_INCANTATION_MOVE",),
+        loop=("SAVAGE_MOVE",),
+    ),
+    # Act 3. EnemyAI.cs:1791-1814, decompiled Monsters/GlobeHead.cs: opens on
+    # SHOCKING_SLAP (the machine's initial state), cycling with THUNDER_STRIKE and
+    # GALVANIC_BURST.
+    Cycle(
+        "GLOBE_HEAD",
+        {
+            "SHOCKING_SLAP": attack(deadly(14, 13)),
+            "THUNDER_STRIKE": attack(deadly(7, 6), hits=3),
+            "GALVANIC_BURST": attack(deadly(17, 16)),
+        },
+        loop=("SHOCKING_SLAP", "THUNDER_STRIKE", "GALVANIC_BURST"),
+    ),
+    # Act 3. EnemyAI.cs:1850-1872, decompiled Monsters/OwlMagistrate.cs: MAGISTRATE_
+    # SCRUTINY, PECK_ASSAULT, JUDICIAL_FLIGHT, VERDICT, cycling.
+    Cycle(
+        "OWL_MAGISTRATE",
+        {
+            "MAGISTRATE_SCRUTINY": attack(deadly(17, 16)),
+            "PECK_ASSAULT": attack(4, hits=6),
+            "JUDICIAL_FLIGHT": buff(1),
+            "VERDICT": attack(deadly(36, 33)),
+        },
+        loop=("MAGISTRATE_SCRUTINY", "PECK_ASSAULT", "JUDICIAL_FLIGHT", "VERDICT"),
+    ),
+    # Act 3. EnemyAI.cs:1902-1914, decompiled Monsters/TheLost.cs: DEBILITATING_SMOG,
+    # EYE_LASERS, alternating forever.
+    Cycle(
+        "THE_LOST",
+        {
+            "DEBILITATING_SMOG": debuff(2),
+            "EYE_LASERS": attack(deadly(5, 4), hits=2),
+        },
+        loop=("DEBILITATING_SMOG", "EYE_LASERS"),
+    ),
+    # Act 3. EnemyAI.cs:1916-1934, decompiled Monsters/TheForgotten.cs: MIASMA, DREAD,
+    # alternating forever. DreadDamage is `GetValueIfAscension(Deadly, 15, 13) +` its own
+    # accumulated Dexterity, which climbs a turn at a time -- no table holds that, so it
+    # reads from the live display instead (Move.magnitude None).
+    Cycle(
+        "THE_FORGOTTEN",
+        {
+            "MIASMA": debuff(2),
+            "DREAD": attack(None),
+        },
+        loop=("MIASMA", "DREAD"),
+    ),
+    # Act 2. EnemyAI.cs:2498-2525, decompiled Monsters/Rocket.cs: TARGETING_RETICLE,
+    # PRECISION_BEAM, CHARGE_UP, LASER, RECHARGE, cycling. RECHARGE_MOVE is a SleepIntent.
+    Cycle(
+        "ROCKET",
+        {
+            "TARGETING_RETICLE_MOVE": attack(deadly(4, 3)),
+            "PRECISION_BEAM_MOVE": attack(deadly(20, 18)),
+            "CHARGE_UP_MOVE": buff(deadly(3, 2)),
+            "LASER_MOVE": attack(deadly(35, 31)),
+            "RECHARGE_MOVE": unknown(live="SLEEP"),
+        },
+        loop=(
+            "TARGETING_RETICLE_MOVE",
+            "PRECISION_BEAM_MOVE",
+            "CHARGE_UP_MOVE",
+            "LASER_MOVE",
+            "RECHARGE_MOVE",
+        ),
+    ),
+    # Act 3. EnemyAI.cs:2345-2374, decompiled Monsters/MechaKnight.cs: CHARGE once, then
+    # FLAMETHROWER, WINDUP, HEAVY_CLEAVE forever (HEAVY_CLEAVE's follow-up is the
+    # flamethrower, not the opening, so the charge never repeats).
+    Cycle(
+        "MECHA_KNIGHT",
+        {
+            "CHARGE_MOVE": attack(deadly(30, 25)),
+            # StatusIntent reads live as STATUS_CARD, which ids.INTENT_TYPES maps to the
+            # emulator's Debuff -- matching EnemyAI.cs's own `IntentType.Debuff` -- but the
+            # live spelling still needs naming, or a resample under this table disagrees
+            # with the game's own DEBUFF and is flagged not comparable rather than read.
+            "FLAMETHROWER_MOVE": debuff(4, live="STATUS_CARD"),
+            "WINDUP_MOVE": defend(15),
+            "HEAVY_CLEAVE_MOVE": attack(deadly(40, 35)),
+        },
+        prefix=("CHARGE_MOVE",),
+        loop=("FLAMETHROWER_MOVE", "WINDUP_MOVE", "HEAVY_CLEAVE_MOVE"),
+    ),
+    # Act 3. EnemyAI.cs:2306-2343, decompiled Monsters/MagiKnight.cs: POWER_SHIELD then
+    # DAMPEN once each, then RAM, PREP, MAGIC_BOMB forever (MAGIC_BOMB's follow-up is
+    # RAM, not the opening).
+    Cycle(
+        "MAGI_KNIGHT",
+        {
+            "POWER_SHIELD_MOVE": attack(deadly(7, 6)),
+            "DAMPEN_MOVE": debuff(1),
+            "RAM_MOVE": attack(deadly(11, 10)),
+            "PREP_MOVE": defend(tough(9, 5)),
+            "MAGIC_BOMB": attack(deadly(40, 35)),
+        },
+        prefix=("POWER_SHIELD_MOVE", "DAMPEN_MOVE"),
+        loop=("RAM_MOVE", "PREP_MOVE", "MAGIC_BOMB"),
+    ),
+    # Act 3. EnemyAI.cs:1664-1692, decompiled Monsters/Axebot.cs: see `_Axebot`.
+    _Axebot(
+        "AXEBOT",
+        {
+            "BOOT_UP_MOVE": defend(deadly(15, 10)),
+            "HAMMER_UPPERCUT_MOVE": attack(deadly(14, 12)),
+            "ONE_TWO_MOVE": attack(deadly(10, 9), hits=2),
+        },
+        prefix=("BOOT_UP_MOVE",),
+        loop=("HAMMER_UPPERCUT_MOVE", "ONE_TWO_MOVE"),
+        # `StockPower` (EnemyAI.cs's HoldsTheFightOpen list): its death builds a new one
+        # in its slot while stock is left, so the roster's later Axebots join mid-fight.
+        summoned=True,
+    ),
+    # Act 3. EnemyAI.cs:1965-1970, decompiled Monsters/Parafright.cs: SLAM forever, the
+    # whole creature. Summoned mid-fight by The Obscura's ILLUSION_MOVE
+    # (SummonParafright), not stunned, and carrying Illusion -- REVIVE_MOVE is the
+    # power's own generic display, not one of Parafright's own moves.
+    Cycle(
+        "PARAFRIGHT",
+        {"SLAM_MOVE": attack(deadly(17, 16))},
+        loop=("SLAM_MOVE",),
+        summoned=True,
+        revives=True,
     ),
 )
 

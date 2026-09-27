@@ -370,18 +370,24 @@ def _draw(
     ],
     warnings: list[str],
     corruption: bool,
+    free_card_types: frozenset[str],
 ) -> dict[str, Any]:
     """Translate the draw pile's three regions (`_draw_regions`) into `piles.draw`."""
     top, middle, bottom = regions
     return {
-        "known_top": _translated(top, "known_draw_top", warnings, corruption),
-        "known_bottom": _translated(bottom, "known_draw_bottom", warnings, corruption),
+        "known_top": _translated(
+            top, "known_draw_top", warnings, corruption, free_card_types
+        ),
+        "known_bottom": _translated(
+            bottom, "known_draw_bottom", warnings, corruption, free_card_types
+        ),
         "unordered": [
             cards.to_emu_card(
                 card,
                 path=f"draw_pile[{i}]",
                 warnings=warnings,
                 corruption=corruption,
+                free_card_types=free_card_types,
             )
             for i, card in middle
         ],
@@ -393,6 +399,7 @@ def _translated(
     key: str,
     warnings: list[str],
     corruption: bool,
+    free_card_types: frozenset[str],
 ) -> list[dict[str, Any]]:
     """Translate a validated live pile, keeping its order."""
     return [
@@ -401,6 +408,7 @@ def _translated(
             path=f"{key}[{i}]",
             warnings=warnings,
             corruption=corruption,
+            free_card_types=free_card_types,
         )
         for i, card in enumerate(live_cards)
     ]
@@ -775,11 +783,30 @@ def convert(live: dict[str, Any]) -> ConversionResult:
 
     osty_hp, osty_max_hp = _osty(player["osty"])
     corruption = any(buff["id"] == powers.buff_id("CORRUPTION_POWER") for buff in buffs)
+    # FreeAttackPower/FreeSkillPower/FreePowerPower each spend on the next card of their
+    # type PLAYED -- unlike Corruption's permanent, pile-agnostic recoloring, so unlike
+    # `corruption` this only explains a cost shown in HAND, where a card the game charges
+    # 0 because it would spend the buff can actually be played next. None of the three
+    # has a `BuffId` the live snapshot's own powers carry through as a buff
+    # (`BUFF_ID_TO_LIVE`), so this reads the live power list `powers.to_buffs` has not
+    # yet turned into buffs, by the same live ids `cards.FREE_CARD_TYPES` names.
+    free_card_types = frozenset(
+        card_type
+        for live_id, card_type in cards.FREE_CARD_TYPES.items()
+        if any(
+            power["id"] == live_id and power["amount"] > 0 for power in player_powers
+        )
+    )
+    no_free_types: frozenset[str] = frozenset()
     piles: dict[str, Any] = {
-        "hand": _translated(hand, "hand", warnings, corruption),
-        "discard": _translated(discard, "discard_pile", warnings, corruption),
-        "exhaust": _translated(exhaust, "exhaust_pile", warnings, corruption),
-        "draw": _draw(draw, warnings, corruption),
+        "hand": _translated(hand, "hand", warnings, corruption, free_card_types),
+        "discard": _translated(
+            discard, "discard_pile", warnings, corruption, no_free_types
+        ),
+        "exhaust": _translated(
+            exhaust, "exhaust_pile", warnings, corruption, no_free_types
+        ),
+        "draw": _draw(draw, warnings, corruption, no_free_types),
     }
 
     doc = {
