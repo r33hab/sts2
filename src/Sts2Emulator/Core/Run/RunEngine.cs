@@ -2681,10 +2681,12 @@ public sealed class RunEngine
             case RunConstants.EventSelfHelpBook:
                 if (action is >= 0 and <= 2)
                 {
+                    var page = RunNonCombatEffects.SelfHelpBookEnchantment(action);
                     return RunNonCombatEffects.BeginDeckSelection(
                         State,
                         DeckSelection.Enchant,
-                        (int)RunNonCombatEffects.SelfHelpBookEnchantment(action)
+                        (int)page,
+                        cardType: RunNonCombatEffects.SelfHelpBookCardType(page)
                     )
                         ? 0
                         : -1;
@@ -5881,14 +5883,15 @@ public sealed class RunEngine
     }
 
     /// <summary>
-    /// One page of the book is offered when the deck holds a card its enchantment would
-    /// take -- Sharp for action 0, Nimble for 1, Swift for 2. The page index IS the
-    /// action, so mask and step read the same number.
+    /// One page of the book is offered when the deck holds a card that page would take
+    /// -- Sharp on an Attack for action 0, Nimble on a Skill for 1, Swift on a Power for
+    /// 2 (`PlayerHasCardsAvailable&lt;T&gt;(owner, type)`). The page index IS the action,
+    /// so mask and step read the same number.
     /// </summary>
     private void SetSelfHelpBookMask(Span<int> mask, int action)
     {
         var enchantment = RunNonCombatEffects.SelfHelpBookEnchantment(action);
-        if (State.Deck.Any(card => Enchantments.CanEnchant(card, enchantment)))
+        if (State.Deck.Any(card => RunNonCombatEffects.SelfHelpBookPageTakes(card, enchantment)))
         {
             SetMask(mask, action);
         }

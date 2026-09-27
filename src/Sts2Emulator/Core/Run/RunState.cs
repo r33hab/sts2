@@ -709,6 +709,15 @@ public sealed class RunState
     /// <summary>The amount an Enchant selection lands at, or 0 for the enchantment's default.</summary>
     public int PendingSelectionEnchantAmount;
 
+    /// <summary>
+    /// The card type the screen that opened an Enchant selection narrows it to, or null
+    /// when only the enchantment's own <c>CanEnchant</c> applies. It is the
+    /// <c>additionalFilter</c> of <c>CardSelectCmd.FromDeckForEnchantment</c>, which
+    /// Self-Help Book passes as <c>c.Type == typeRestriction</c>: Swift itself takes any
+    /// card, and only the book's Swift page is Powers-only.
+    /// </summary>
+    public CardType? PendingSelectionCardType;
+
     public bool PendingSelectionReturnsToEvent;
 
     /// <summary>Where this selection leaves the run when it is answered.</summary>

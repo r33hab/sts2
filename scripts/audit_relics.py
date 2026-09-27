@@ -788,7 +788,7 @@ READ: dict[str, tuple[str, str]] = {
     "SignetRing": ("9f6083896263", "GoldVar(999) on pickup, through GainGold so Bloody Idol sees it."),
     "BeautifulBracelet": (
         "6a62fd539b52",
-        "FromDeckForEnchantment with Swift at 3, on three cards. Swift takes Powers only, so the count is what the screen ASKS for and not what it is guaranteed to get.",
+        "FromDeckForEnchantment with Swift at 3, on three cards, and no filter of its own. Swift takes any enchantable card (no CanEnchant override), and the count is what the screen ASKS for, not what it is guaranteed to get.",
     ),
     "Claws": (
         "fc125c0ecc8a",
@@ -1319,7 +1319,7 @@ READ: dict[str, tuple[str, str]] = {
     ),
     "WingCharm": (
         "4cb68d06f63c",
-        "Swift on one option; Powers-only, so a screen with no Power gets nothing",
+        "Swift on one option that Swift.CanEnchant takes -- any enchantable card, not only a Power",
     ),
 }
 

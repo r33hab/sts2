@@ -481,6 +481,7 @@ public static class StateCloning
             PendingSelectionFollowUpHpLoss = state.PendingSelectionFollowUpHpLoss,
             PendingSelectionFollowUpMaxHpGain = state.PendingSelectionFollowUpMaxHpGain,
             PendingSelectionEnchantAmount = state.PendingSelectionEnchantAmount,
+            PendingSelectionCardType = state.PendingSelectionCardType,
             PendingSelectionReturnsToEvent = state.PendingSelectionReturnsToEvent,
             PendingSelectionReturn = state.PendingSelectionReturn,
             EventRandomOffer = (int[])state.EventRandomOffer.Clone(),

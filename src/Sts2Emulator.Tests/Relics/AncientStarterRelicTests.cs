@@ -991,12 +991,13 @@ public class DeckSelectionPickupRelicTests
     }
 
     /// <summary>
-    /// Swift takes Powers only, and the starter deck has none -- so the bracelet asks for
-    /// three and the selection declines to open at all. The count is what the screen ASKS
-    /// for, not what the deck can supply.
+    /// A deck with no Power still opens the bracelet's screen: `FromDeckForEnchantment`
+    /// passes no filter of its own, and Swift's `CanEnchant` is the base rule, so the
+    /// starter deck's Strikes, Defends and Bash can all take it. The emulator used to read
+    /// Swift as Powers-only and opened nothing here.
     /// </summary>
     [Fact]
-    public void BeautifulBraceletOpensNothingOnAPowerlessDeck()
+    public void BeautifulBraceletOpensOnAPowerlessDeck()
     {
         var engine = Run();
         Assert.DoesNotContain(
@@ -1006,7 +1007,51 @@ public class DeckSelectionPickupRelicTests
 
         RunNonCombatEffects.ApplyRelicPickup(engine.State, RunConstants.RelicBeautifulBracelet);
 
-        Assert.Equal(DeckSelection.None, engine.State.PendingSelectionKind);
+        Assert.Equal(DeckSelection.Enchant, engine.State.PendingSelectionKind);
+        Assert.Equal((int)Enchantment.Swift, engine.State.PendingSelectionArg);
+        var attacksAndSkills = Enumerable
+            .Range(0, engine.State.Deck.Count)
+            .Where(i =>
+                GeneratedData.Cards.Get(engine.State.Deck[i].DefId).Type
+                    is CardType.Attack
+                        or CardType.Skill
+            )
+            .ToList();
+        Assert.NotEmpty(attacksAndSkills);
+        Assert.All(
+            attacksAndSkills,
+            i => Assert.True(RunNonCombatEffects.CanSelectCard(engine.State, i))
+        );
+    }
+
+    /// <summary>
+    /// Nonupeipe adds the bracelet to its pool when four deck cards can take Swift
+    /// (`Deck.Cards.Count(Swift.CanEnchant) &gt;= 4`), and a starter deck has ten that can.
+    /// Read as Powers-only, a powerless deck never saw the bracelet offered.
+    /// </summary>
+    [Fact]
+    public void NonupeipeOffersTheBraceletToAPowerlessDeck()
+    {
+        for (int seed = 0; seed < 30; seed++)
+        {
+            var engine = new RunEngine();
+            engine.Reset($"NONUPEIPE{seed}");
+            Assert.DoesNotContain(
+                engine.State.Deck,
+                card => GeneratedData.Cards.Get(card.DefId).Type == CardType.Power
+            );
+
+            int[] offered = RunNonCombatEffects.GenerateAncientOptions(
+                engine.State,
+                RunConstants.AncientNonupeipe
+            );
+            if (offered.Contains(RunConstants.RelicBeautifulBracelet))
+            {
+                return;
+            }
+        }
+
+        Assert.Fail("thirty powerless starter decks and Nonupeipe never offered the bracelet");
     }
 
     /// <summary>Beautiful Bracelet enchants three cards with Swift at 3.</summary>
