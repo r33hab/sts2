@@ -3243,6 +3243,15 @@ public static class CombatEngine
                 BuffSystem.Remove(fallen.Buffs, BuffId.PossessStrength);
             }
 
+            // `HexPower.AfterDeath` removes the Hex when its APPLIER dies (with removal not
+            // prevented), and `AfterRemoved` clears the Hexed cards. The Spectral Knight is
+            // the only creature that applies Hex, and a Knights fight has one, so its death
+            // is the applier's.
+            if (fallen.DefId == KE.SpectralKnight)
+            {
+                BuffSystem.Remove(state.PlayerBuffs, BuffId.Hex);
+            }
+
             // `DampenPower.AfterDeath`: the power tracks the CASTERS that applied it and
             // lifts once the last of them is gone -- and `AfterRemoved` is what gives the
             // upgrades back. Read off the roster rather than a caster set, because the Magi
