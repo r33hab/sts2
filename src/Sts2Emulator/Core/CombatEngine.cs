@@ -3917,13 +3917,26 @@ public static class CombatEngine
         enemy.MaxHp = enemy.Hp;
         enemy.Block = 0;
         enemy.MoveIndex = 0;
+        // `StockPower.AfterDeath` adds a NEW Axebot in the slot -- `ModelDb.Monster<Axebot>()
+        // .ToMutable()` with `StockAmount = Amount - 1` -- whose `AfterAddedToRoom` applies
+        // that stock and nothing else. The dead bot's Strength, and every debuff the player
+        // put on it, die with it; so does its move log.
+        enemy.Buffs.Clear();
+        enemy.PoweredHitsThisTurn = 0;
+        enemy.MoveHistory.Clear();
+        enemy.LastMove = -1;
+        enemy.LastMoveRepeats = 0;
         // A respawned Axebot is built with a stock override, which starts its machine on
         // BOOT_UP -- index 0 -- rather than on the HAMMER_UPPERCUT a fresh one opens with.
         enemy.CurrentIntent = new Intent(
             IntentType.Defend,
             Ascension.Value(ascension, Ascension.DeadlyEnemies, 15, 10)
         );
-        BuffSystem.Apply(enemy.Buffs, BuffId.Stock, -1);
+        if (stock > 1)
+        {
+            BuffSystem.Apply(enemy.Buffs, BuffId.Stock, stock - 1);
+        }
+
         return true;
     }
 
