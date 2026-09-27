@@ -1428,6 +1428,7 @@ class RelicTableTests(unittest.TestCase):
             ("PERMAFROST", "_activatedThisCombat"),
             ("LIZARD_TAIL", "_wasUsed"),
             ("RUINED_HELMET", "_usedThisCombat"),
+            ("THROWING_AXE", "_usedThisCombat"),
             ("DEMON_TONGUE", "_triggeredThisTurn"),
             ("RED_SKULL", "_strengthApplied"),
             ("MAW_BANK", "_hasItemBeenBought"),
@@ -1443,6 +1444,14 @@ class RelicTableTests(unittest.TestCase):
             self.assertEqual(missing.relics[0]["counter"], 0, entry)
             self.assertEqual(len(missing.warnings), 1, entry)
             self.assertIn(entry, missing.warnings[0])
+
+    def test_paels_wing_has_no_combat_state(self) -> None:
+        # PaelsWing.cs has no combat hook at all (its whole effect is a card-reward-screen
+        # alternative), and RelicEffects.cs has no case for it, so nothing in combat reads
+        # its Counter: it is 0 whatever the live counter or fields show.
+        for counter, fields in ((None, {}), (1, {}), (0, {"RewardsSacrificed": 1})):
+            result = self.translate("PAELS_WING", counter, fields)
+            self.assertEqual((result.relics[0]["counter"], result.warnings), (0, []))
 
     def test_run_level_counts(self) -> None:
         cases = [
