@@ -844,9 +844,11 @@ class PriorLoop:
 
         """
         captured = io.StringIO()
+        # Line-buffered: training runs for hours, and its epochs are the only progress.
         with Path(self.iter_dir(k) / UPSTREAM_LOG).open(
             "a",
             encoding="utf-8",
+            buffering=1,
         ) as logfile:
             logfile.write(f"\n==== {now()}\n")
             with contextlib.redirect_stdout(_Tee(logfile, captured)):
