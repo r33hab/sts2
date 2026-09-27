@@ -3662,6 +3662,10 @@ public static class CombatEngine
             return true;
         }
 
+        // The death strips every power `Hook.ShouldPowerBeRemovedOnDeath` does not veto, and
+        // `IllusionPower` vetoes only buffs and temporary debuffs: a debuff that is not an
+        // `ITemporaryPower` (Vulnerable, Weak, Poison ...) goes with the death.
+        enemy.Buffs.RemoveAll(buff => BuffSystem.IsDebuff(buff.Id));
         BuffSystem.Apply(enemy.Buffs, BuffId.Reviving, 1);
         // A HealIntent, so the readout says what the turn will be spent on.
         enemy.CurrentIntent = new Intent(IntentType.Buff, 0);
