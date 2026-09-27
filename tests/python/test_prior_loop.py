@@ -23,7 +23,7 @@ for _path in (ROOT, ROOT / "rl", ROOT / "src"):
 
 import train_combat  # noqa: E402
 
-from rl.prior_loop import cli, loop  # noqa: E402
+from rl.prior_loop import cli, loop, real_fights  # noqa: E402
 
 # The frozen set's own hash. Changing fight_set.json changes this; it must not change.
 FIGHT_SET_SHA256 = "8acde2f68b456b80e6dc05aca6544415f179a3617961749af0aba46021e3c124"
@@ -440,8 +440,6 @@ class RealFightsTest(unittest.TestCase):
     """`real_fights.py` deals a recorded stage-2 fight start as that position."""
 
     def test_a_recorded_fight_is_dealt_as_recorded(self):
-        from rl.prior_loop import real_fights
-
         state = {
             "deck": [[472, 0, 0, 0], [131, 1, 0, 0], [30, 0, 0, 0], [472, 0, 5, 1]],
             "relics": [36],
@@ -463,7 +461,9 @@ class RealFightsTest(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as tmp:
             with gzip.open(Path(tmp) / "r0000.jsonl.gz", "wt") as shard:
-                shard.write(json.dumps({"fights": [fight, {**fight, "node_type": 7}]}) + "\n")
+                shard.write(
+                    json.dumps({"fights": [fight, {**fight, "node_type": 7}]}) + "\n"
+                )
             fights = real_fights.load_real_fights(Path(tmp), {2: 5})
         self.assertEqual(len(fights), 1)  # the event fight (7) is not asked for
         dealt = fights[0]
