@@ -155,7 +155,10 @@ class _Names:
 
     A creature the move added is the game's newcomer of its kind, in order: an enemy the
     position after lists and the one before does not. One the game has no newcomer for is
-    named by its kind and slot.
+    named by its kind and slot. So is a creature the emulator rebuilds in a dead one's
+    place, as a dying Axebot's StockPower does (EnemyAI.cs HoldsTheFightOpen): alive at the
+    (def id, slot) of an enemy the position after no longer lists, it is the game's
+    newcomer of its kind, not the dead one.
     """
 
     def __init__(self, pre: Mapping[str, Any], post: Mapping[str, Any]) -> None:
@@ -164,6 +167,7 @@ class _Names:
             for enemy in pre["enemies"]
         }
         listed = {enemy["entity_id"] for enemy in pre["enemies"]}
+        self._after = {enemy["entity_id"] for enemy in post["enemies"]}
         self._newcomers: dict[int, list[str]] = {}
         for enemy in post["enemies"]:
             if enemy["entity_id"] not in listed:
@@ -176,7 +180,13 @@ class _Names:
         named = []
         for enemy in roster:
             name = self._places.get((enemy["def_id"], enemy["slot"]))
-            if name is None:
+            rebuilt = (
+                name is not None
+                and name not in self._after
+                and bool(waiting.get(enemy["def_id"]))
+                and enemy["hp"] > 0
+            )
+            if name is None or rebuilt:
                 newcomers = waiting.get(enemy["def_id"])
                 name = (
                     newcomers.pop(0)

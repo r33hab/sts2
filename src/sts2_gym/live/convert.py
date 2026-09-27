@@ -223,10 +223,16 @@ def _cards(value: object, path: str) -> list[dict[str, Any]]:
 
 
 def _powers(value: object, path: str) -> list[dict[str, Any]]:
-    return [
-        _object(power, f"{path}[{i}]", ("id", "amount"))
-        for i, power in enumerate(_list(value, path))
-    ]
+    out = []
+    for i, power in enumerate(_list(value, path)):
+        where = f"{path}[{i}]"
+        # `fields` (schema section 1, amended 2026-09-27): what a power keeps beside its
+        # amount, which `powers.to_buffs` and `powers.to_ai_fields` read by name.
+        checked = _object(power, where, ("id", "amount"), ("fields",))
+        if "fields" in checked:
+            _primitives(checked["fields"], f"{where}.fields")
+        out.append(checked)
+    return out
 
 
 # ── Areas ────────────────────────────────────────────────────────────────────
@@ -466,6 +472,8 @@ def _enemies(
     turn: int,
     ascension: int,
     warnings: list[str],
+    *,
+    no_card_played: bool,
 ) -> list[dict[str, Any]]:
     listed = _list(live["enemies"], "enemies")
     if len(listed) > MAX_ENEMIES:
@@ -483,6 +491,7 @@ def _enemies(
             owner="enemy",
             path=f"{where}.powers",
             warnings=warnings,
+            no_card_played=no_card_played,
         )
         # The per-monster tables rebuild the AI block and the intent, and set the
         # emulator-only BuffIds that carry AI state on `buffs`.
@@ -494,7 +503,7 @@ def _enemies(
             buffs=buffs,
         )
         warnings.extend(ai_warnings)
-        ai.update(powers.to_ai_fields(enemy["powers"]))
+        ai.update(powers.to_ai_fields(enemy["powers"], path=f"{where}.powers"))
         out.append(
             {
                 "def_id": def_id,
@@ -838,7 +847,15 @@ def convert(live: dict[str, Any]) -> ConversionResult:
         "potions": _potions(player, warnings),
         "piles": piles,
         "incoming": {"return_to_hand": [], "copies_to_hand": []},
-        "enemies": _enemies(top, turn, ascension, warnings),
+        "enemies": _enemies(
+            top,
+            turn,
+            ascension,
+            warnings,
+            # No card has finished this turn and none is waiting on a selection.
+            no_card_played=live_pending is None
+            and history.get("cards_played_this_turn") == 0,
+        ),
         "counters": {**history, **power_counters, **relic_state.counters, **_ALWAYS},
         "pending_selection": pending,
     }

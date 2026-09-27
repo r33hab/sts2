@@ -852,15 +852,30 @@ class WarningTests(unittest.TestCase):
             [buff("Strength", 2), buff("Vulnerable", 1)],
         )
 
-    def test_a_relic_missing_its_field_takes_the_default_and_warns(self) -> None:
+    def test_a_relic_field_the_mod_leaves_out_is_at_its_default(self) -> None:
+        # The mod reports a relic's int and bool fields and leaves out those at 0 /
+        # false, so a missing key reads as 0 / false (STS2MCP docs/raw-full.md, relic
+        # `fields`): a Lizard Tail reporting `{}` has not been used.
         doc = load("player")
         doc["player"]["relics"].append(
             {"id": "LIZARD_TAIL", "counter": None, "fields": {}},
         )
         result = convert.convert(doc)
         self.assertEqual(result.doc["relics"][-1], {"id": 137, "counter": 0})
+        self.assertEqual(result.warnings, [])
+        self.assertTrue(result.reliable)
+
+    def test_a_relic_field_the_mod_never_reports_still_warns(self) -> None:
+        # Beating Remnant's `_damageReceivedThisTurn` is a decimal (BeatingRemnant.cs),
+        # and the mod reflects int and bool fields only, so its absence says nothing.
+        doc = load("player")
+        doc["player"]["relics"].append(
+            {"id": "BEATING_REMNANT", "counter": None, "fields": {}},
+        )
+        result = convert.convert(doc)
         self.assertEqual(len(result.warnings), 1)
-        self.assertIn("LIZARD_TAIL", result.warnings[0])
+        self.assertIn("BEATING_REMNANT", result.warnings[0])
+        self.assertIn("_damageReceivedThisTurn", result.warnings[0])
         self.assertFalse(result.reliable)
 
     def test_a_relic_outside_the_table_warns_but_still_counts_its_energy(self) -> None:
@@ -1386,6 +1401,180 @@ class PowerTranslationTests(unittest.TestCase):
         )
 
 
+class PowerFieldTests(unittest.TestCase):
+    """The state a power keeps beside its amount, from the live power's `fields`.
+
+    Schema section 1 as amended 2026-09-27: the mod reports it for the powers whose
+    emulator half no amount can carry, and a power without it keeps its warning.
+    """
+
+    @staticmethod
+    def to_buffs(
+        live_powers: list[dict[str, Any]],
+        owner: str,
+        *,
+        no_card_played: bool = False,
+    ) -> tuple[list, list]:
+        warnings: list[str] = []
+        out = powers.to_buffs(
+            live_powers,
+            owner=owner,
+            warnings=warnings,
+            no_card_played=no_card_played,
+        )
+        return out, warnings
+
+    def test_skittish_spent_comes_from_its_field(self) -> None:
+        # SkittishPower.HasGainedBlockThisTurn is the emulator's SkittishSpent
+        # (BuffState.cs), which bars a second flinch this turn (CardEffects.cs:4768-4779).
+        spent = {"has_gained_block_this_turn": True}
+        out, warnings = self.to_buffs(
+            [{"id": "SKITTISH_POWER", "amount": 6, "fields": spent}],
+            "enemy",
+        )
+        self.assertEqual(
+            (out, warnings),
+            ([buff("Skittish", 6), buff("SkittishSpent", 1)], []),
+        )
+        fresh = {"has_gained_block_this_turn": False}
+        out, warnings = self.to_buffs(
+            [{"id": "SKITTISH_POWER", "amount": 6, "fields": fresh}],
+            "enemy",
+        )
+        self.assertEqual((out, warnings), ([buff("Skittish", 6)], []))
+
+    def test_skittish_is_unspent_before_any_card_this_turn(self) -> None:
+        # It flinches only from a card's attack (decompiled SkittishPower.AfterAttack) and
+        # is reset when the player's turn ends, so with no card played yet it is unspent.
+        live_powers = [{"id": "SKITTISH_POWER", "amount": 6}]
+        out, warnings = self.to_buffs(live_powers, "enemy", no_card_played=True)
+        self.assertEqual((out, warnings), ([buff("Skittish", 6)], []))
+        out, warnings = self.to_buffs(live_powers, "enemy")
+        self.assertEqual(out, [buff("Skittish", 6)])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("SkittishSpent", warnings[0])
+
+    def test_surrounded_facing_comes_from_its_field(self) -> None:
+        # The emulator keeps the facing as the magnitude: 1 right, 2 left (BuffState.cs).
+        for facing, magnitude in (("Right", 1), ("Left", 2)):
+            out, warnings = self.to_buffs(
+                [{"id": "SURROUNDED_POWER", "amount": 1, "fields": {"facing": facing}}],
+                "player",
+            )
+            self.assertEqual((out, warnings), ([buff("Surrounded", magnitude)], []))
+
+    def test_an_unknown_facing_refuses_with_its_path(self) -> None:
+        with self.assertRaises(live.ConversionError) as caught:
+            powers.to_buffs(
+                [{"id": "SURROUNDED_POWER", "amount": 1, "fields": {"facing": "Up"}}],
+                owner="player",
+                path="player.powers",
+            )
+        self.assertEqual(caught.exception.path, "player.powers[0].fields.facing")
+
+    def test_the_possess_tallies_come_from_their_field(self) -> None:
+        # The emulator keeps what was stolen as the magnitude, handed back on death
+        # (CombatEngine.cs:3213-3231); nothing stolen yet is no buff at all.
+        for entry, stored in (
+            ("POSSESS_SPEED_POWER", "PossessSpeed"),
+            ("POSSESS_STRENGTH_POWER", "PossessStrength"),
+        ):
+            with self.subTest(entry):
+                out, warnings = self.to_buffs(
+                    [{"id": entry, "amount": 1, "fields": {"stolen": 4}}],
+                    "enemy",
+                )
+                self.assertEqual((out, warnings), ([buff(stored, 4)], []))
+                out, warnings = self.to_buffs(
+                    [{"id": entry, "amount": 1, "fields": {"stolen": 0}}],
+                    "enemy",
+                )
+                self.assertEqual((out, warnings), ([], []))
+
+    def test_a_possess_tally_without_its_field_warns(self) -> None:
+        out, warnings = self.to_buffs(
+            [{"id": "POSSESS_SPEED_POWER", "amount": 1}],
+            "enemy",
+        )
+        self.assertEqual(out, [buff("PossessSpeed", 1)])
+        self.assertEqual(len(warnings), 1)
+
+    def test_the_swiped_card_rides_the_ai_block(self) -> None:
+        # `EnemyState.StolenCard`, which the thief's death hands back (CombatEngine.cs:
+        # 3296-3303).
+        swipe = {
+            "id": "SWIPE_POWER",
+            "amount": 1,
+            "fields": {"stolen_card": "FIGHT_ME", "stolen_card_upgraded": True},
+        }
+        out, warnings = self.to_buffs([swipe], "enemy")
+        self.assertEqual((out, warnings), ([buff("Swipe", 1)], []))
+        self.assertEqual(
+            powers.to_ai_fields([swipe]),
+            {"stolen_card": {"def_id": ids.card_id("FIGHT_ME"), "upgraded": True}},
+        )
+
+    def test_a_swipe_without_its_card_warns(self) -> None:
+        out, warnings = self.to_buffs([{"id": "SWIPE_POWER", "amount": 1}], "enemy")
+        self.assertEqual(out, [buff("Swipe", 1)])
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(powers.to_ai_fields([{"id": "SWIPE_POWER", "amount": 1}]), {})
+
+    def test_an_unknown_swiped_card_refuses_with_its_path(self) -> None:
+        with self.assertRaises(live.ConversionError) as caught:
+            powers.to_ai_fields(
+                [
+                    {
+                        "id": "SWIPE_POWER",
+                        "amount": 1,
+                        "fields": {
+                            "stolen_card": "NOT_A_CARD",
+                            "stolen_card_upgraded": False,
+                        },
+                    },
+                ],
+                path="enemies[0].powers",
+            )
+        self.assertEqual(
+            caught.exception.path,
+            "enemies[0].powers[0].fields.stolen_card",
+        )
+
+    def test_convert_reads_power_fields_and_refuses_nested_ones(self) -> None:
+        doc = load("enemy")
+        doc["history"] = {"cards_played_this_turn": 1}
+        doc["enemies"][0]["powers"].append(
+            {
+                "id": "SKITTISH_POWER",
+                "amount": 6,
+                "fields": {"has_gained_block_this_turn": True},
+            },
+        )
+        result = convert.convert(doc)
+        self.assertIn(buff("SkittishSpent", 1), result.doc["enemies"][0]["buffs"])
+        self.assertFalse(any("SKITTISH" in warning for warning in result.warnings))
+        doc["enemies"][0]["powers"][-1]["fields"] = {"facing": {"nested": 1}}
+        with self.assertRaises(live.ConversionError) as caught:
+            convert.convert(doc)
+        self.assertEqual(caught.exception.path, "enemies[0].powers[1].fields.facing")
+
+    def test_convert_knows_skittish_is_unspent_at_the_turns_start(self) -> None:
+        doc = load("enemy")
+        doc["enemies"][0]["powers"].append({"id": "SKITTISH_POWER", "amount": 6})
+        for played, flagged in ((0, False), (1, True)):
+            doc["history"] = {"cards_played_this_turn": played}
+            result = convert.convert(doc)
+            with self.subTest(played=played):
+                self.assertEqual(
+                    any("SKITTISH" in warning for warning in result.warnings),
+                    flagged,
+                )
+        # No history at all says nothing about the turn.
+        doc["history"] = {}
+        result = convert.convert(doc)
+        self.assertTrue(any("SKITTISH" in warning for warning in result.warnings))
+
+
 # ── The relic table ──────────────────────────────────────────────────────────
 
 
@@ -1455,10 +1644,13 @@ class RelicTableTests(unittest.TestCase):
             )
             result = self.translate(entry, None, {field: False})
             self.assertEqual((result.relics[0]["counter"], result.warnings), (0, []))
+            # The mod leaves a false flag out (raw-full.md, relic `fields`).
             missing = self.translate(entry, None, {})
-            self.assertEqual(missing.relics[0]["counter"], 0, entry)
-            self.assertEqual(len(missing.warnings), 1, entry)
-            self.assertIn(entry, missing.warnings[0])
+            self.assertEqual(
+                (missing.relics[0]["counter"], missing.warnings),
+                (0, []),
+                entry,
+            )
 
     def test_paels_wing_has_no_combat_state(self) -> None:
         # PaelsWing.cs has no combat hook at all (its whole effect is a card-reward-screen
@@ -1491,11 +1683,14 @@ class RelicTableTests(unittest.TestCase):
             self.assertEqual(result.relics[0]["counter"], expected, entry)
             self.assertEqual(result.warnings, [], entry)
 
-    def test_an_ambiguous_display_warns(self) -> None:
-        # LastingCandy's display is CombatsSeen % 2, which cannot tell 0 from 2.
+    def test_a_count_the_mod_leaves_out_is_zero(self) -> None:
+        # LastingCandy's display is CombatsSeen % 2, which cannot tell 0 from 2, but the
+        # mod leaves a field at 0 out (raw-full.md, relic `fields`), so `{}` is 0 and
+        # Silver Crucible's uses left are all three.
         result = self.translate("LASTING_CANDY", 0, {})
-        self.assertEqual(result.relics[0]["counter"], 0)
-        self.assertEqual(len(result.warnings), 1)
+        self.assertEqual((result.relics[0]["counter"], result.warnings), (0, []))
+        result = self.translate("SILVER_CRUCIBLE", None, {})
+        self.assertEqual((result.relics[0]["counter"], result.warnings), (3, []))
 
     def test_pocketwatch_pays_nothing_on_turn_one(self) -> None:
         fields = {"_cardsPlayedThisTurn": 0, "_cardsPlayedLastTurn": 0}
@@ -1548,11 +1743,16 @@ class RelicTableTests(unittest.TestCase):
             self.assertEqual(result.counters, counters, entry)
             self.assertEqual(result.warnings, [], entry)
 
-    def test_a_missing_combat_state_field_warns(self) -> None:
+    def test_a_combat_state_field_the_mod_leaves_out_is_at_its_default(self) -> None:
         result = self.translate("BELT_BUCKLE", None, {})
         self.assertEqual(result.counters, {"belt_buckle_applied": False})
+        self.assertEqual(result.warnings, [])
+
+    def test_a_combat_state_field_the_mod_never_reports_warns(self) -> None:
+        result = self.translate("BEATING_REMNANT", None, {})
+        self.assertEqual(result.counters, {"unblocked_damage_this_turn": 0})
         self.assertEqual(len(result.warnings), 1)
-        self.assertIn("BELT_BUCKLE", result.warnings[0])
+        self.assertIn("BEATING_REMNANT", result.warnings[0])
 
     def test_a_non_integral_field_refuses(self) -> None:
         with self.assertRaises(live.ConversionError) as caught:
@@ -1759,6 +1959,32 @@ class DecompiledConsistencyTests(unittest.TestCase):
             set(relics.RELICS),
             sorted(reachable - set(relics.RELICS)),
         )
+
+    def test_every_relic_field_read_as_a_default_is_one_the_mod_reports(self) -> None:
+        # The mod reflects a relic's int and bool fields only and leaves those at 0 /
+        # false out (STS2MCP docs/raw-full.md), which is what lets the converter read an
+        # absent field as its default. A field of any other type never arrives, so its
+        # absence says nothing and the converter must keep warning about it.
+        folder = DECOMPILED / "MegaCrit.Sts2.Core.Models.Relics"
+        for entry, rule in relics.RELICS.items():
+            fields = relics.fields_read(rule)
+            if not fields:
+                continue
+            name = "".join(part.capitalize() for part in entry.split("_"))
+            source = (folder / f"{name}.cs").read_text(encoding="utf-8")
+            for field in fields:
+                declared = re.search(
+                    rf"\b(\w+)\??\s+{re.escape(field)}\s*(?:;|=|\{{)",
+                    source,
+                )
+                with self.subTest(relic=entry, field=field):
+                    self.assertIsNotNone(declared, "not declared by the relic's class")
+                    assert declared is not None
+                    self.assertEqual(
+                        declared.group(1) in {"int", "bool"},
+                        (entry, field) not in relics.UNREPORTED_FIELDS,
+                        declared.group(0),
+                    )
 
     def test_the_unmodelled_enchantments(self) -> None:
         folder = DECOMPILED / "MegaCrit.Sts2.Core.Models.Enchantments"

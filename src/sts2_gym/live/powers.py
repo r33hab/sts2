@@ -307,6 +307,91 @@ _UNCARRIED_HALF = {
     ),
 }
 
+# ── Live power fields ────────────────────────────────────────────────────────
+# Live snapshot schema section 1, amended 2026-09-27: a power may carry `fields`, the state
+# it keeps beside its amount, which the mod reports for the four powers below. Each is the
+# `_UNCARRIED_HALF` of its power, so a power without its field keeps that warning.
+
+# `SkittishPower.HasGainedBlockThisTurn`, the emulator's `SkittishSpent` companion.
+_SKITTISH = "SKITTISH_POWER"
+# `SurroundedPower.Facing` (decompiled SurroundedPower.cs `Direction`) as the emulator's
+# magnitude: 1 right, 2 left (BuffState.cs `Surrounded`).
+_SURROUNDED = "SURROUNDED_POWER"
+_FACING = {"Right": 1, "Left": 2}
+# What `PossessSpeedPower` / `PossessStrengthPower` took from the player, which they keep in
+# internal data and the emulator keeps as the magnitude (CombatEngine.cs:3213-3231).
+_POSSESS = frozenset({"POSSESS_SPEED_POWER", "POSSESS_STRENGTH_POWER"})
+# `SwipePower.StolenCard`, the emulator's `EnemyState.StolenCard` (`to_ai_fields`).
+_SWIPE = "SWIPE_POWER"
+
+
+def _fields(power: Mapping[str, Any]) -> Mapping[str, Any]:
+    return power.get("fields") or {}
+
+
+def _facing(power: Mapping[str, Any], where: str) -> int | None:
+    """Give Surrounded's facing as the emulator's magnitude, or None when not reported.
+
+    Raises:
+        ConversionError: for a facing the game does not have, naming its path.
+
+    """
+    facing = _fields(power).get("facing")
+    if facing is None:
+        return None
+    if facing not in _FACING:
+        raise ConversionError(
+            f"expected one of {sorted(_FACING)}, got {facing!r}",
+            path=f"{where}.fields.facing",
+        )
+    return _FACING[facing]
+
+
+def _stolen(power: Mapping[str, Any], where: str) -> int | None:
+    """Give what a Possess power has taken so far, or None when not reported.
+
+    Raises:
+        ConversionError: for a tally that is not a non-negative integer, naming its path.
+
+    """
+    stolen = _fields(power).get("stolen")
+    if stolen is None:
+        return None
+    if not isinstance(stolen, int) or isinstance(stolen, bool) or stolen < 0:
+        raise ConversionError(
+            f"expected a non-negative integer, got {stolen!r}",
+            path=f"{where}.fields.stolen",
+        )
+    return stolen
+
+
+def _spent(
+    power: Mapping[str, Any],
+    where: str,
+    *,
+    no_card_played: bool,
+) -> bool | None:
+    """Say whether Skittish has flinched this turn, or None when nothing says.
+
+    The flag is set only by a card's attack (decompiled `SkittishPower.AfterAttack`) and
+    cleared when the player's turn ends (`AfterSideTurnEnd`), so before any card has been
+    played this turn it is down whatever the snapshot reports.
+
+    Raises:
+        ConversionError: for a flag that is not a boolean, naming its path.
+
+    """
+    spent = _fields(power).get("has_gained_block_this_turn")
+    if spent is None:
+        return False if no_card_played else None
+    if not isinstance(spent, bool):
+        raise ConversionError(
+            f"expected a boolean, got {spent!r}",
+            path=f"{where}.fields.has_gained_block_this_turn",
+        )
+    return spent
+
+
 # The CombatState counters `combat_counters` can derive.
 COMBAT_COUNTER_NAMES = frozenset({"skill_played_while_smoggy"})
 
@@ -395,17 +480,19 @@ def to_buffs(
     owner: str,
     path: str = "powers",
     warnings: list[str] | None = None,
+    no_card_played: bool = False,
 ) -> list[dict[str, int]]:
     """Translate one creature's live powers into emulator buffs, `[{"id", "amount"}]`.
 
     `owner` is "player" or "enemy": the temporary-stat buffs store their hand-back with the
     opposite sign on the two sides. Powers that land on the same BuffId are summed, and a
     total of zero is dropped, the way the emulator sheds a spent buff. `warnings`, when
-    given, collects what could not be carried.
+    given, collects what could not be carried. `no_card_played` says no card has finished
+    this turn and none is waiting on a selection, which settles Skittish (`_spent`).
 
     Raises:
-        ConversionError: for a power the game does not have, or an amount that is not an
-            integer, naming its path.
+        ConversionError: for a power the game does not have, an amount that is not an
+            integer, or a power field of the wrong kind, naming its path.
         ValueError: for an owner other than "player" or "enemy".
 
     """
@@ -443,7 +530,21 @@ def to_buffs(
         if buff_names[ordinal] in _TEMPORARY_BUFFS:
             sign = -1 if entry in STRENGTH_DOWN_VARIANTS else 1
             magnitude = sign * amount if owner == "player" else -sign * amount
+        # Whether the power's `fields` carry its `_UNCARRIED_HALF`.
+        carried, spent = False, None
+        if entry == _SURROUNDED and (facing := _facing(power, where)) is not None:
+            magnitude, carried = facing, True
+        elif entry in _POSSESS and (stolen := _stolen(power, where)) is not None:
+            magnitude, carried = stolen, True
+        elif entry == _SKITTISH:
+            spent = _spent(power, where, no_card_played=no_card_played)
+            carried = spent is not None
+        elif entry == _SWIPE:
+            # Read and checked by `to_ai_fields`; null is a Swipe with nothing stolen.
+            carried = "stolen_card" in _fields(power)
         _add(totals, ordinal, magnitude)
+        if spent:
+            _add(totals, _ORDINAL_OF["SkittishSpent"], 1)
 
         if (per_play := _PER_PLAY_SELF_DAMAGE.get(entry)) is not None:
             companion, base, upgraded = per_play
@@ -456,20 +557,62 @@ def to_buffs(
             _add(totals, _ORDINAL_OF[companion], min(plays, default=0))
         if entry == _PANACHE_ARMED[0]:
             totals[_ORDINAL_OF[_PANACHE_ARMED[1]]] = 1
-        if (half := _UNCARRIED_HALF.get(entry)) is not None:
+        if (half := _UNCARRIED_HALF.get(entry)) is not None and not carried:
             sink.append(f"{where}: {entry}: {half} is not in the live snapshot")
+    stolen_cards = [
+        power
+        for power in live_powers
+        if power.get("id") == _SWIPE and _fields(power).get("stolen_card") is not None
+    ]
+    if len(stolen_cards) > 1:
+        sink.append(
+            f"{path}: {len(stolen_cards)} SWIPE_POWER cards, where the emulator keeps one "
+            "(EnemyState.StolenCard); only the first is carried",
+        )
     return [
         {"id": ordinal, "amount": total} for ordinal, total in totals.items() if total
     ]
 
 
-def to_ai_fields(live_powers: list[dict[str, Any]]) -> dict[str, int]:
-    """Return the `EnemyState` fields a creature's powers stand for (`HEIST_POWER` -> gold)."""
-    return {
+def to_ai_fields(
+    live_powers: list[dict[str, Any]],
+    *,
+    path: str = "powers",
+) -> dict[str, Any]:
+    """Return the `EnemyState` fields a creature's powers stand for.
+
+    `HEIST_POWER`'s amount is the gold it took; `SWIPE_POWER`'s `stolen_card` field is the
+    card it took, `{"def_id", "upgraded"}` (null when it holds none), and a Swipe without
+    that field leaves the card out, as `to_buffs` warns.
+
+    Raises:
+        ConversionError: for a stolen card the game does not have, or a malformed one,
+            naming its path.
+
+    """
+    fields: dict[str, Any] = {
         AI_FIELD_POWERS[power["id"]]: power["amount"]
         for power in live_powers
         if power.get("id") in AI_FIELD_POWERS
     }
+    for index, power in enumerate(live_powers):
+        where = f"{path}[{index}]"
+        carried = _fields(power)
+        if power.get("id") != _SWIPE or "stolen_card" not in carried:
+            continue
+        entry, upgraded = carried["stolen_card"], carried.get("stolen_card_upgraded")
+        if entry is None:
+            fields.setdefault("stolen_card", None)
+            continue
+        def_id = ids.card_id(entry, path=f"{where}.fields.stolen_card")
+        if not isinstance(upgraded, bool):
+            raise ConversionError(
+                f"expected a boolean, got {upgraded!r}",
+                path=f"{where}.fields.stolen_card_upgraded",
+            )
+        if fields.get("stolen_card") is None:
+            fields["stolen_card"] = {"def_id": def_id, "upgraded": upgraded}
+    return fields
 
 
 def combat_counters(

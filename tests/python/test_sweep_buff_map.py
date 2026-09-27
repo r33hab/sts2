@@ -135,7 +135,12 @@ class SweepBuffMapTests(unittest.TestCase):
         `CombatState`. Neither side is wrong -- the numbers are not the same quantity -- so
         only presence is comparable. The full-sweep run that added the player comparison
         reported this on six rows before the rule existed.
+
+        The dozen are read off the decompiled powers' `DisplayAmount` overrides, so without
+        that gitignored tree there is nothing to derive them from.
         """
+        if not (_REPO / "decompiled" / "MegaCrit.Sts2.Core.Models.Powers").is_dir():
+            self.skipTest("decompiled sources not present")
         tender = next(
             key for key, value in combat_sweep.BUFF_ID_TO_LIVE.items() if value == "TENDER_POWER"
         )
