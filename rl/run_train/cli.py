@@ -34,7 +34,7 @@ from . import loop, selfplay
 from .engine import CombatBudget
 from .policy import STRATEGY_MODEL_DIR
 
-__all__ = ["build_parser", "configure", "main", "running_pid"]
+__all__ = ["build_parser", "configure", "export_dest", "main", "running_pid"]
 
 # The config sections `start` takes options for, and the aliases some options also go by.
 _SECTIONS = ("job", "training", "loop")
@@ -139,9 +139,11 @@ def configure(root: Path, args: argparse.Namespace) -> loop.LoopConfig:
     for section, name, _ in _config_fields():
         value = getattr(args, f"{section}__{name}")
         if value is not None:
-            given[section][name] = (
-                CombatBudget.parse(value) if name == "combat_budget" else value
-            )
+            if name == "combat_budget":
+                value = CombatBudget.parse(value)
+            elif name == "export_dest" and value:
+                value = str(Path(value).expanduser().resolve())
+            given[section][name] = value
     config = dataclasses.replace(
         base,
         job=dataclasses.replace(base.job, **given["job"]),
@@ -257,9 +259,8 @@ def _export(args: argparse.Namespace) -> int:
     info = json.loads(path.read_text(encoding="utf-8"))
     print(
         f"exported the champion (generation {info['generation']}) to {path.parent}: "
-        f"eval mean floor {info['eval']['mean_floor']:.2f}, boss kills "
-        f"{info['eval']['boss_kill_rate']:.3f}, self-play boss kills "
-        f"{info['selfplay_boss_kill_rate']}",
+        f"eval mean floor {info['eval']['mean_floor']:.2f}, wins "
+        f"{info['eval']['win_rate']:.3f}, self-play wins {info['selfplay_win_rate']}",
     )
     return 0
 
@@ -274,11 +275,19 @@ def _final_test(args: argparse.Namespace) -> int:
             job=dataclasses.replace(config.job, workers=args.workers),
         )
     report = loop.Loop(root, config).final_test()
-    shown = ("champion", "rules", "n", "floor_difference", "boss_kill_difference")
+    shown = ("champion", "rules", "n", "floor_difference", "win_difference")
     print(json.dumps({key: report[key] for key in shown}, indent=2))
     print(f"wrote {root / loop.FINAL_TEST}")
     return 0
 
 
+def export_dest(config: loop.LoopConfig | None) -> Path:
+    """Where the loop exports each new champion: the job's `export_dest`, or the coach's."""
+    if config is None or not config.export_dest:
+        return STRATEGY_MODEL_DIR
+    return Path(config.export_dest)
+
+
 def _run(args: argparse.Namespace) -> int:
-    return loop.run_detached(args.root.resolve(), export_dest=STRATEGY_MODEL_DIR)
+    root = args.root.resolve()
+    return loop.run_detached(root, export_dest=export_dest(loop.read_config(root)))

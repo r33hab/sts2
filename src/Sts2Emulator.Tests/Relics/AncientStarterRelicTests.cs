@@ -1539,7 +1539,10 @@ public class RunShapingRelicTests
         }
     }
 
-    /// <summary>And its "?" rooms are events rather than a roll.</summary>
+    /// <summary>
+    /// And its "?" rooms are ordinary unknown rooms on the map, which the compass resolves
+    /// to events on arrival rather than by a roll (<c>RollUnknownMapPointNodeType</c>).
+    /// </summary>
     [Fact]
     public void TheCompassTurnsEveryUnknownIntoAnEvent()
     {
@@ -1549,7 +1552,11 @@ public class RunShapingRelicTests
 
         Assert.Contains(
             engine.State.MapNodes.Values,
-            node => node.NodeType == RunConstants.NodeNone && node.Row > 0
+            node => node.NodeType == RunConstants.NodeEvent && node.Row > 0
+        );
+        Assert.DoesNotContain(
+            engine.State.MapNodes.Values,
+            node => node.NodeType == RunConstants.NodeNone
         );
     }
 }
@@ -1666,6 +1673,33 @@ public class GoldenPathLengthTests
         return engine;
     }
 
+    /// <summary>
+    /// Every room on the path can be travelled to, the "?" rooms included. Typed
+    /// <c>NodeNone</c>, row 2 was never offered: the map screen had no legal action and
+    /// the run stopped there (a full-run self-play seed, T0000R0433, in act 2).
+    /// </summary>
+    [Fact]
+    public void EveryRoomOnThePathCanBeTravelledTo()
+    {
+        var engine = Compass();
+        int bossRow = RunMapGenerator.BossRow(engine.State);
+
+        for (int row = 0; row < bossRow; row++)
+        {
+            engine.State.CurrentMapCoord = (RunConstants.MapStartCol, row);
+            RunMapGenerator.RefreshMapOptions(engine.State);
+
+            Assert.True(
+                engine.State.MapNodeTypes[0] != RunConstants.NodeNone,
+                $"row {row + 1} cannot be travelled to"
+            );
+            Assert.Equal(
+                ((int, int)?)(RunConstants.MapStartCol, row + 1),
+                engine.State.MapOptionCoords[0]
+            );
+        }
+    }
+
     /// <summary>Sixteen rooms, which is one more than the standard map holds.</summary>
     [Fact]
     public void TheGoldenPathIsSixteenRoomsLong()
@@ -1682,7 +1716,7 @@ public class GoldenPathLengthTests
 
     /// <summary>
     /// The sequence is `GoldenPathActMap._defaultPointTypes` in order, with its Unknowns
-    /// left unresolved -- they become Events on arrival, not at generation.
+    /// as "?" rooms (NodeEvent) -- they become Events on arrival, not at generation.
     /// </summary>
     [Fact]
     public void TheSequenceIsTheGamesOwnOrder()
@@ -1699,16 +1733,16 @@ public class GoldenPathLengthTests
             new[]
             {
                 RunConstants.NodeNormal,
-                RunConstants.NodeNone,
+                RunConstants.NodeEvent,
                 RunConstants.NodeNormal,
                 RunConstants.NodeRest,
                 RunConstants.NodeNormal,
                 RunConstants.NodeRest,
-                RunConstants.NodeNone,
+                RunConstants.NodeEvent,
                 RunConstants.NodeRelic,
-                RunConstants.NodeNone,
+                RunConstants.NodeEvent,
                 RunConstants.NodeRelic,
-                RunConstants.NodeNone,
+                RunConstants.NodeEvent,
                 RunConstants.NodeShop,
                 RunConstants.NodeElite,
                 RunConstants.NodeRest,

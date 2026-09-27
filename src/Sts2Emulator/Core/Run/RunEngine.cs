@@ -2374,11 +2374,17 @@ public sealed class RunEngine
         // which `AdvanceAfterRelicReward` handles. This only catches a run that has walked
         // past where any map could take it -- so it reads the boss row off the map the run
         // is on rather than assuming the standard one. Golden Compass lays a map a row
-        // taller, and a constant here cut its last room off.
+        // taller, and a constant here cut its last room off. It reads the map POSITION,
+        // not the floor: the floor carries across acts, so act 2's rooms are floors 19-34,
+        // and comparing them with one act's boss row ended every act-2 run on floor 19.
         int bossRow = RunMapGenerator.BossRow(State);
-        int terminalFloor = State.Act == RunConstants.ActUnderdocks ? bossRow * 2 + 1 : bossRow + 1;
-        if (State.Floor >= terminalFloor)
+        if (!State.AwaitingActStartNode && State.CurrentMapCoord.Row >= bossRow)
         {
+            if (EnterNextAct())
+            {
+                return 0;
+            }
+
             State.Phase = RunPhase.Complete;
             terminal = true;
             return 0;

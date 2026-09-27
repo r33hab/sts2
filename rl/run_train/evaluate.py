@@ -9,15 +9,14 @@ seeds count, and a quarantined seed is a row with its status, never a missing on
 `compare(challenger, champion)` does the comparison 5.6 promotes and rolls back by, on
 S, the seeds both sides completed:
 
-1. the CI rule: the challenger's 95% lower bound on mean floor, mean - 1.96 s / sqrt(|S|),
-   exceeds the champion's mean floor;
-2. the boss-kill guard: n01 - n10 <= max(2, ceil(1.96 sqrt(n01 + n10))), n01 counting the
-   seeds of S the champion cleared and the challenger did not, n10 the reverse (E8).
+1. the CI rule: the challenger's 95% lower bound on mean value `V_W`, mean - 1.96 s /
+   sqrt(|S|), exceeds the champion's mean value;
+2. the win guard: n01 - n10 <= max(2, ceil(1.96 sqrt(n01 + n10))), n01 counting the seeds
+   of S the champion won and the challenger did not, n10 the reverse (E8).
 
 The challenger is promoted when both hold. The learner is rolled back when the
-challenger's upper bound falls below the champion's mean. A boss kill counts as floor 18,
-the one convention everywhere (E10), and mean `V_W` (a kill worth W) is reported beside
-mean floor.
+challenger's upper bound falls below the champion's mean. A won run counts as floor 53
+(the last floor + 1), the one convention everywhere, and its value is W = 53 as well.
 
 `python -m rl.run_train.evaluate --out <path>` evaluates the rules policy on the eval
 seeds with the defaults of 5.9 (the rules baseline of section 2).
@@ -50,7 +49,7 @@ __all__ = [
     "EvalResult",
     "SeedResult",
     "Summary",
-    "boss_kill_guard",
+    "win_guard",
     "compare",
     "eval_meta",
     "evaluate",
@@ -95,8 +94,8 @@ def wilson(k: int, n: int, z: float = Z95) -> tuple[float, float] | None:
     return max(0.0, centre - half), min(1.0, centre + half)
 
 
-def boss_kill_guard(n01: int, n10: int) -> bool:
-    """Whether the challenger loses no boss kills beyond noise (5.6, erratum E8).
+def win_guard(n01: int, n10: int) -> bool:
+    """Whether the challenger loses no won runs beyond noise (5.6, erratum E8).
 
     The noise of a paired count, `ceil(1.96 sqrt(n01 + n10))`, with 2 as a floor.
     """
@@ -112,7 +111,7 @@ def boss_kill_guard(n01: int, n10: int) -> bool:
 class SeedResult:
     """One seed's evaluation (5.6).
 
-    `floor` is 1-17, or 18 for a boss kill; `value` is the run's `V_W` (W for a kill,
+    `floor` is 1-52, or 53 for a won run; `value` is the run's `V_W` (W for a win,
     else the floor) and is set for completed seeds only. `seconds` is the run's time
     in its worker; `detail` the failure of an aborted or error seed.
     """
@@ -120,7 +119,7 @@ class SeedResult:
     seed: str
     status: str
     floor: int | None
-    boss_killed: bool
+    won: bool
     value: float | None
     seconds: float | None = None
     detail: dict[str, Any] | None = None
@@ -134,7 +133,7 @@ class SeedResult:
             "seed": self.seed,
             "status": self.status,
             "floor": self.floor,
-            "boss_killed": self.boss_killed,
+            "won": self.won,
             "value": self.value,
             "seconds": self.seconds,
             "detail": self.detail,
@@ -161,7 +160,7 @@ class EvalMeta:
     native_api: int
     run_native_api: int
     feature_version: int
-    W: float  # the value of a boss kill (5.2)
+    W: float  # the value of a won run (5.2)
     seeds_sha256: str
     policy_sha256: str | None
 
@@ -190,7 +189,7 @@ class Summary:
     n: int
     mean_floor: float | None
     ci95: tuple[float, float] | None
-    boss_kill_rate: float | None
+    win_rate: float | None
     wilson95: tuple[float, float] | None
     mean_value: float | None
 
@@ -199,7 +198,7 @@ class Summary:
             "n": self.n,
             "mean_floor": self.mean_floor,
             "ci95": None if self.ci95 is None else list(self.ci95),
-            "boss_kill_rate": self.boss_kill_rate,
+            "win_rate": self.win_rate,
             "wilson95": None if self.wilson95 is None else list(self.wilson95),
             "mean_value": self.mean_value,
         }
@@ -233,13 +232,13 @@ class EvalResult:
         values = [r.value for r in chosen if r.value is not None]
         n = len(chosen)
         mean, ci95 = mean_ci(floors)
-        kills = sum(r.boss_killed for r in chosen)
+        wins = sum(r.won for r in chosen)
         return Summary(
             n=n,
             mean_floor=mean,
             ci95=ci95,
-            boss_kill_rate=kills / n if n else None,
-            wilson95=wilson(kills, n),
+            win_rate=wins / n if n else None,
+            wilson95=wilson(wins, n),
             mean_value=statistics.fmean(values) if values else None,
         )
 
@@ -286,7 +285,7 @@ class Comparison:
     challenger: Summary
     champion: Summary
     ci_rule: bool
-    n01: int  # seeds of S the champion cleared and the challenger did not
+    n01: int  # seeds of S the champion won and the challenger did not
     n10: int  # the reverse
     guard: bool
     promoted: bool
@@ -324,8 +323,8 @@ def compare(challenger: EvalResult, champion: EvalResult) -> Comparison:
         if seed not in both
     }
     mine, best = challenger.summary(s), champion.summary(s)
-    n01 = sum(theirs[seed].boss_killed and not ours[seed].boss_killed for seed in s)
-    n10 = sum(ours[seed].boss_killed and not theirs[seed].boss_killed for seed in s)
+    n01 = sum(theirs[seed].won and not ours[seed].won for seed in s)
+    n10 = sum(ours[seed].won and not theirs[seed].won for seed in s)
     # The value, not the floor: floors saturate at the boss, where a kill is only floor
     # 18, while the value weighs a kill at W, the currency the policy maximizes (5.2).
     ci_rule = rolled_back = False
@@ -333,7 +332,7 @@ def compare(challenger: EvalResult, champion: EvalResult) -> Comparison:
     if value_ci is not None and best.mean_value is not None:
         low, high = value_ci
         ci_rule, rolled_back = low > best.mean_value, high < best.mean_value
-    guard = boss_kill_guard(n01, n10)
+    guard = win_guard(n01, n10)
     return Comparison(
         seeds=s,
         excluded_eval_seeds=excluded,
@@ -404,9 +403,9 @@ def _seed_result(record: shards.RunRecord, w: float) -> SeedResult:
     floor = int(outcome["final_floor"])
     if outcome["truncated"]:
         return SeedResult(record["seed"], "truncated", floor, False, None, seconds)
-    killed = bool(outcome["boss_killed"])
-    value = float(w) if killed else float(floor)
-    return SeedResult(record["seed"], "completed", floor, killed, value, seconds)
+    won = bool(outcome["won"])
+    value = float(w) if won else float(floor)
+    return SeedResult(record["seed"], "completed", floor, won, value, seconds)
 
 
 def evaluate(

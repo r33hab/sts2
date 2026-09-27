@@ -5,6 +5,11 @@ repo). It fixes every interface Tasks 2-5 build against. Paths are relative to t
 root; line numbers are at `37e4264`. Numbers in section 2 were measured on this machine by
 `rl/run_train/probe_throughput.py`; everything else cites the code it rests on.
 
+> **Full runs.** Self-play now plays Acts 1-3 to death or victory. `FULL_RUNS.md`
+> supersedes 1.4 items 3-4 and 6 (outcome, step cap), 3.2's version (2: block X), 5.1-5.2's
+> 18 classes and W = 26 (53 classes, W = 53, the last floor + 1) and 5.6's boss-kill guard
+> (a win guard). The Act 1 export still loads and scores (`models.load_numpy`).
+
 **The seven decisions that shape everything else**
 
 1. **Combat inside a run is searched on run clones.** `combat_mcts.run_search` runs

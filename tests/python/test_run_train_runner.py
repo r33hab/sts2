@@ -137,7 +137,7 @@ def quick_play(task, on_fight) -> dict:
         "seed": task.seed,
         "generation": task.generation,
         "niceness": os.nice(0),
-        "outcome": {"final_floor": 5, "boss_killed": False, "truncated": False},
+        "outcome": {"final_floor": 5, "won": False, "truncated": False},
         "stats": {"seconds": 0.0},
     }
 

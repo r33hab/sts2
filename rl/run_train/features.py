@@ -222,6 +222,11 @@ OPTION_KINDS = (
     "select.enchant",
     "select.duplicate",
     "bundle.pick",
+    # Act 2 events with screens of their own (FULL_RUNS.md), never scorable: a Crystal
+    # Sphere divination (what a cell hides is hidden) and the Fake Merchant's throw (it
+    # starts a fight). The rules decide both.
+    "sphere.cell",
+    "merchant.throw",
     # A decision the contract does not know (an Act 2+ screen, an unrecognized purpose):
     # never scorable, decided by the rules fallback and counted.
     "unknown",
@@ -241,12 +246,19 @@ D_OFFSET, D_SIZE = 305, 25
 E_OFFSET, E_SIZE = 330, 1154
 F_OFFSET, F_SIZE = 1484, 296
 G_OFFSET, G_SIZE = 1780, 63
-BASE_SIZE = 1843
+# Blocks E-G, the counts, close feature version 1's vector; version 2 appends X.
+COUNTS_END = V1_BASE_SIZE = 1843
+X_OFFSET, X_SIZE = 1843, 12
+BASE_SIZE = 1855
 FIGHT_BLOCK_SIZE = 8  # H, appended by the policy (3.3)
-assert G_OFFSET + G_SIZE == BASE_SIZE
+assert G_OFFSET + G_SIZE == COUNTS_END == X_OFFSET
+assert X_OFFSET + X_SIZE == BASE_SIZE
 
 # Block A 16-21: the act-1 bosses, in this order.
 BOSS_ORDER = (74, 82, 83, 77, 79, 84)
+# Block X (feature version 2): 0-2 act index one-hot, 3 region == Hive, 4 region ==
+# Glory, 5-10 the Act 2-3 bosses in this order, 11 floor / LAST_FLOOR (run progress).
+LATER_BOSS_ORDER = (75, 76, 81, 73, 78, 80)
 # Block B 22-30: the pending room, in this order (note unknown before boss, unlike NODE_*).
 ROOM_ORDER = (
     vocab.NODE_NONE,
@@ -375,11 +387,13 @@ def view_from_engine(env, ascension: int) -> RunView:
     position = native.run_state_list(handle, 21, 2)
     # List 14 is (act, boss encounter, node count).
     act_summary = native.run_state_list(handle, 14, 3)
+    region = int(info[2])
     return RunView(
         ascension=ascension,
-        # Stage 2 plays Act 1 only, and `RunState.CurrentActIndex` is not exported.
-        act_index=0,
-        act_region=int(info[2]),
+        # `RunState.CurrentActIndex` is not exported, but every act index has its own
+        # regions (`ActCandidatesByIndex`), so the region names it.
+        act_index=vocab.act_index_of_region()[region],
+        act_region=region,
         floor=int(info[1]),
         hp=int(info[5]),
         max_hp=int(info[6]),
@@ -427,9 +441,13 @@ def from_run_engine(env, ascension: int) -> np.ndarray:
 
 
 def encode(view: RunView) -> np.ndarray:
-    """Encode the 1843-wide base vector. The policy appends the fight block H (3.3)."""
+    """Encode the 1855-wide base vector. The policy appends the fight block H (3.3).
+
+    Its first `V1_BASE_SIZE` numbers are feature version 1's vector, unchanged.
+    """
     x = np.zeros(BASE_SIZE, dtype=np.float32)
     _write_scalars(x, view)
+    _write_act(x, view)
     _write_pending(x, view.pending)
     x[C_OFFSET : C_OFFSET + C_SIZE] = map_ahead(view)
     x[D_OFFSET : D_OFFSET + D_SIZE] = deck_aggregates(view.deck)
@@ -463,6 +481,17 @@ def _write_scalars(x: np.ndarray, view: RunView) -> None:
     x[a + 15] = (_boss_row(view.map_nodes) - view.position[1]) / MAP_ROWS
     if view.boss in BOSS_ORDER:
         x[a + 16 + BOSS_ORDER.index(view.boss)] = 1.0
+
+
+def _write_act(x: np.ndarray, view: RunView) -> None:
+    """Block X: where in the whole run the view stands (feature version 2)."""
+    if 0 <= view.act_index < vocab.ACTS:
+        x[X_OFFSET + view.act_index] = 1.0
+    x[X_OFFSET + 3] = float(view.act_region == vocab.REGION_HIVE)
+    x[X_OFFSET + 4] = float(view.act_region == vocab.REGION_GLORY)
+    if view.boss in LATER_BOSS_ORDER:
+        x[X_OFFSET + 5 + LATER_BOSS_ORDER.index(view.boss)] = 1.0
+    x[X_OFFSET + 11] = view.floor / vocab.LAST_FLOOR
 
 
 def _boss_row(nodes: tuple[MapNode, ...]) -> int:
@@ -1546,7 +1575,8 @@ def to_live_run(view: RunView) -> dict:
 # a plain random transform (not upgraded); `select.transform_to`, `select.enchant` and
 # `unknown` never.
 LIVE_BUILDABLE_KINDS = frozenset(
-    set(OPTION_KINDS) - {"select.transform_to", "select.enchant", "unknown"},
+    set(OPTION_KINDS)
+    - {"select.transform_to", "select.enchant", "unknown", "sphere.cell", "merchant.throw"},
 )
 # Sources that open a transform screen which is not a plain random transform: Wood
 # Carvings (TransformTo Peck or Toric Toughness), Claws (TransformToCarrying into Maul),

@@ -6,7 +6,10 @@ live-run object and a live screen (the training branch's rl/run_train/DESIGN.md,
 first, with the champion's `model.json`.
 
 The champion is what the training loop's `export` writes to `MODEL_DIR`: `model.json` and
-its `.npz` weights. The training package, `rl/run_train`, arrives with the training merge;
+its `.npz` weights -- the 18-class Act 1 export or a 53-class full-run one; the training
+package scores both. Every option goes out with a readable `label` (card, relic and potion
+names, the node type of a map pick, short names for rest, shop and event options), which
+the coach panel shows verbatim. The training package, `rl/run_train`, arrives with the training merge;
 it is imported on the first request, never at start-up, so the service starts without it
 and answers `NoModelError` until both it and a champion are there. `_training_package` is
 the one place that binds it, and the merge adapts that function if the binding differs.
@@ -18,11 +21,14 @@ import importlib
 import json
 import logging
 import math
+import re
 import sys
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, SupportsFloat
+
+from sts2_gym import names
 
 MODEL_DIR = (
     Path.home() / "Documents" / "git" / "spire-coach" / "data" / "models" / "strategy"
@@ -150,7 +156,8 @@ class StrategyModel:
             scores = score_options(decision, decision.view or view)
         except Exception as error:
             raise StrategyError(f"{type(error).__name__}: {error}") from error
-        return {"options": _best_first(scores), "model": info}
+        deck = getattr(decision.view or view, "deck", ())
+        return {"options": _best_first(scores, deck, screen), "model": info}
 
     def _loaded(self, info: Mapping[str, Any]) -> Scorer:
         """Bind the training package to the champion.
@@ -194,26 +201,171 @@ class StrategyModel:
         return info
 
 
-def _best_first(scores: Iterable[Any]) -> list[dict[str, Any]]:
+def _best_first(
+    scores: Iterable[Any],
+    deck: Iterable[Any] = (),
+    screen: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Put the policy's option scores in protocol form: best value first, unscored last.
 
     A score is the training package's `OptionScore(option, value, p_boss, scorable)`,
-    whose value and boss-kill chance are None for an option it cannot score. The option
-    goes out as its fields (`features.Option` is a dataclass). The policy keeps its own
+    whose value and win chance are None for an option it cannot score. The option goes
+    out as its fields (`features.Option` is a dataclass) plus its readable `label`, which
+    also stands beside it: `deck` is the view its `deck_index` points into, and `screen`
+    the live screen, whose event options carry their titles. The policy keeps its own
     order, best first; the sort does not rely on it, and keeps it among equals.
     """
-    options = [
-        {
-            "option": _plain(score.option),
-            "value": _number(score.value),
-            "p_boss": _number(score.p_boss),
-        }
-        for score in scores
-    ]
+    cards = [_plain(card) for card in deck]
+    options = []
+    for score in scores:
+        option = _plain(score.option)
+        text = label(option, cards, screen or {})
+        if isinstance(option, dict):
+            option = {**option, "label": text}
+        options.append(
+            {
+                "option": option,
+                "label": text,
+                "value": _number(score.value),
+                "p_boss": _number(score.p_boss),
+            },
+        )
     return sorted(
         options,
         key=lambda option: (option["value"] is None, -(option["value"] or 0.0)),
     )
+
+
+# The map's node types (`run_train.vocab` NODE_*), as the map screen names them.
+_NODE_NAMES = {
+    1: "Monster",
+    2: "Elite",
+    3: "Rest Site",
+    4: "Shop",
+    5: "Treasure",
+    6: "Boss",
+    7: "Unknown",
+    8: "Ancient",
+}
+# Options that are the same short name on every screen.
+_FIXED_LABELS = {
+    "card.skip": "Skip",
+    "card.sacrifice": "Sacrifice",
+    "card.reroll": "Reroll",
+    "reward.proceed": "Proceed",
+    "shop.leave": "Leave shop",
+    "rest.heal": "Rest",
+    "rest.lift": "Lift",
+    "rest.dig": "Dig",
+    "rest.cook": "Cook",
+    "rest.hatch": "Hatch",
+    "rest.kindle": "Kindle",
+    "rest.clone": "Clone",
+    "rest.leave": "Leave",
+    "select.offer_done": "Done",
+    "merchant.throw": "Throw Foul Potion",
+}
+# Options on a card of the deck (`deck_index`), by the verb their label starts with.
+_DECK_VERBS = {
+    "shop.remove": "Remove",
+    "rest.smith": "Smith",
+    "select.upgrade": "Upgrade",
+    "select.remove": "Remove",
+    "select.transform": "Transform",
+    "select.enchant": "Enchant",
+    "select.duplicate": "Duplicate",
+}
+
+
+def label(
+    option: Mapping[str, Any],
+    deck: list[Any] | None = None,
+    screen: Mapping[str, Any] | None = None,
+) -> str:
+    """Return an option's readable label: "Take Inflame", "Elite (col 3)", "Rest".
+
+    `option` is a `features.Option`'s fields. Cards, relics and potions are named by the
+    emulator's tables (`sts2_gym.names`); a `deck_index` names the card of `deck` it points
+    at (the view's sorted deck); an event option takes its title off the live `screen`.
+    """
+    kind = str(option.get("kind") or "option")
+    price = option.get("price") or 0
+    cost = f" ({price}g)" if price else ""
+    if kind in _FIXED_LABELS:
+        return _FIXED_LABELS[kind]
+    if kind == "map.node" and option.get("node") is not None:
+        col, _row, node_type = option["node"]
+        return f"{_NODE_NAMES.get(int(node_type), 'Node')} (col {col})"
+    if kind in _DECK_VERBS:
+        index = option.get("deck_index")
+        cards = deck or []
+        named = (
+            _card_label(cards[index])
+            if isinstance(index, int) and 0 <= index < len(cards)
+            else "a card"
+        )
+        return f"{_DECK_VERBS[kind]} {named}{cost}"
+    thing = _thing(option)
+    if kind in {"card.take", "reward.potion", "reward.relic"} and thing:
+        return f"Take {thing}"
+    if kind.startswith("shop.") and thing:
+        return f"Buy {thing}{cost}"
+    if kind in {"neow.relic", "select.offer"} and thing:
+        return thing
+    if kind == "select.transform_to" and option.get("arg"):
+        return f"Transform into {_card_name(int(option['arg']))}"
+    if kind == "bundle.pick":
+        bundle = ", ".join(_card_label(card) for card in option.get("cards") or ())
+        return f"Bundle: {bundle}" if bundle else "Bundle"
+    if kind == "sphere.cell":
+        return f"Divine cell {option.get('action')}"
+    title = _screen_title(screen or {}, option.get("action"))
+    if kind == "event.option":
+        if title:
+            return title
+        event = option.get("event")
+        if event is not None and event[0] is not None:
+            return f"{names.event_name(int(event[0]))}: option {int(event[1]) + 1}"
+        return f"Option {int(option.get('action') or 0) + 1}"
+    return title or f"Option {option.get('action')}"
+
+
+def _card_label(card: Any) -> str:
+    """Name a `features.CardRef` (or its fields): "Bash+", "Strike (Sharp)"."""
+    fields = card if isinstance(card, Mapping) else _plain(card)
+    if not isinstance(fields, Mapping) or fields.get("card_id") is None:
+        return "a card"
+    name = _card_name(int(fields["card_id"]), bool(fields.get("upgraded")))
+    enchantment = int(fields.get("enchantment") or 0)
+    return f"{name} ({names.enchantment_name(enchantment)})" if enchantment else name
+
+
+def _card_name(card_id: int, upgraded: bool = False) -> str:
+    """A card's name as the game shows it: the starters drop their character's name."""
+    name = names.card_name(card_id, upgraded)
+    return re.sub(r" (Ironclad|Silent|Defect|Necrobinder|Regent)(?=\+?$)", "", name)
+
+
+def _thing(option: Mapping[str, Any]) -> str | None:
+    """The card, relic or potion an option offers, by name."""
+    if option.get("card") is not None:
+        return _card_label(option["card"])
+    if option.get("relic") is not None:
+        return names.relic_name(int(option["relic"]))
+    if option.get("potion") is not None:
+        return names.potion_name(int(option["potion"]))
+    return None
+
+
+def _screen_title(screen: Mapping[str, Any], action: object) -> str | None:
+    """The title the live screen gives the choice at `action`, if it gives one."""
+    body = screen.get(str(screen.get("state_type")))
+    choices = body.get("options") if isinstance(body, Mapping) else None
+    for choice in choices or ():
+        if isinstance(choice, Mapping) and choice.get("index") == action:
+            title = choice.get("title") or choice.get("name")
+            return str(title) if title else None
+    return None
 
 
 def _plain(option: object) -> object:

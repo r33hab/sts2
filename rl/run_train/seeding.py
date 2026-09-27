@@ -21,7 +21,7 @@ from sts2_gym.seeds import canonicalize
 MOVE_BASE_LIMIT = 1_000_000
 # The run's engine-step cap (DESIGN.md 1.4 item 6) and the largest per-decision budget;
 # `CombatBudget` refuses anything above `MAX_SIMS`.
-RUN_STEP_CAP = 6_000
+RUN_STEP_CAP = 20_000  # a full run (Acts 1-3); Act 1 runs took about 250
 MAX_SIMS = 2_000
 assert (MOVE_BASE_LIMIT + RUN_STEP_CAP) * MAX_SIMS < 2**31
 
