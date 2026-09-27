@@ -398,7 +398,9 @@ public static class CombatEngine
             int rage = BuffSystem.Get(state.PlayerBuffs, BuffId.Rage);
             if (rage > 0)
             {
-                Effects.CardEffects.GainBlock(state, rage, rng);
+                // RagePower.AfterCardPlayed: `ValueProp.Unpowered` -- Dexterity does not
+                // apply.
+                Effects.CardEffects.GainUnpoweredBlock(state, rage, rng);
             }
 
             int calamity = BuffSystem.Get(state.PlayerBuffs, BuffId.CalamityPower);
@@ -4463,7 +4465,9 @@ public static class CombatEngine
             int rage = BuffSystem.Get(state.PlayerBuffs, BuffId.Rage);
             if (rage > 0)
             {
-                Effects.CardEffects.GainBlock(state, rage, rng);
+                // RagePower.AfterCardPlayed: `ValueProp.Unpowered` -- Dexterity does not
+                // apply.
+                Effects.CardEffects.GainUnpoweredBlock(state, rage, rng);
             }
 
             int calamity = BuffSystem.Get(state.PlayerBuffs, BuffId.CalamityPower);
