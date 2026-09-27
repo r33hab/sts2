@@ -14,12 +14,16 @@ how many checks hit it. A mismatched field is also listed with its count.
 
 Usage:
     uv run python scripts/fidelity_replay.py <path-to-run.jsonl> [--resamples N]
+
+The coach is imported from ~/Documents/git/spire-coach, or from SPIRE_COACH_REPO when set
+(a worktree with snapshot changes of its own).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from collections import Counter, defaultdict
@@ -28,7 +32,9 @@ from typing import Any
 
 _REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO / "src"))
-_SPIRE_COACH = Path.home() / "Documents" / "git" / "spire-coach"
+_SPIRE_COACH = Path(
+    os.environ.get("SPIRE_COACH_REPO", Path.home() / "Documents" / "git" / "spire-coach"),
+)
 sys.path.insert(0, str(_SPIRE_COACH))
 
 from coach.snapshot import SnapshotError, build_live_snapshot  # noqa: E402
