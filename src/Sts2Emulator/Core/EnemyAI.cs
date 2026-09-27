@@ -794,7 +794,13 @@ public static class EnemyAI
             && enemy.MoveIndex % 3 == 1
         )
         {
-            enemy.Block += BuffSystem.IncomingBlock(6, enemy.Buffs);
+            // `Nibbit.SliceBlock` is `GetValueIfAscension(ToughEnemies, 6, 5)`. The 6 was
+            // hardcoded, so SLICE carried the tough block at every ascension below it (a
+            // live A2 Nibbit ended the enemy turn on 5).
+            enemy.Block += BuffSystem.IncomingBlock(
+                Ascension.Value(ascension, Ascension.ToughEnemies, 6, 5),
+                enemy.Buffs
+            );
         }
 
         if (enemy.DefId == KE.BowlbugEgg && enemy.CurrentIntent.Type == IntentType.Attack)
