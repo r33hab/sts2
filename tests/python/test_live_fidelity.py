@@ -406,6 +406,26 @@ class EnemyNameTests(unittest.TestCase):
             ],
         )
 
+    def test_a_creature_rebuilt_in_a_dead_ones_place_is_the_games_newcomer(
+        self,
+    ) -> None:
+        # A dying Axebot's StockPower builds a new one in its slot (EnemyAI.cs
+        # HoldsTheFightOpen): the emulator keeps it at the dead one's (def id, slot), and
+        # the game lists it under a new entity id.
+        axebot = ids.enemy_id("AXEBOT")
+        pre = {"enemies": [{"entity_id": "AXEBOT_0", "id": "AXEBOT", "slot": 0}]}
+        post = {"enemies": [{"entity_id": "AXEBOT_1", "id": "AXEBOT", "slot": 0}]}
+
+        self.assertEqual(
+            fidelity._Names(pre, post).of([{"def_id": axebot, "slot": 0, "hp": 70}]),
+            ["AXEBOT_1"],
+        )
+        # A body the emulator holds at 0 HP is still the dead one.
+        self.assertEqual(
+            fidelity._Names(pre, post).of([{"def_id": axebot, "slot": 0, "hp": 0}]),
+            ["AXEBOT_0"],
+        )
+
 
 class RealRunTests(unittest.TestCase):
     """Every move of a live A10 run, checked against the position the game showed after.
