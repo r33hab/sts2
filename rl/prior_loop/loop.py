@@ -411,12 +411,51 @@ def merge_datasets(sources: Sequence[tuple[int, Path]]) -> dict[str, np.ndarray]
 # ---- playing the fight set ----------------------------------------------------------------
 
 
-def play_gen(fight: dict[str, Any], settings: dict[str, Any], *, use_prior: bool):
-    """One fixed-set fight under search, as a generator that yields prior requests.
+def open_fight(fight: dict[str, Any], ascension: int) -> Combat:
+    """Deal a fight at turn 0.
 
-    `play_net.play_gen`'s protocol with the deck and relics read from the frozen set: the
-    fight's own RNG from (encounter, seed), the tempo rollout, CRN at the root, and
-    `best_action` -- by visits under a prior, by mean without one. No root noise.
+    A fixed-set fight is `Combat.opening` with its sampled cards and relics, as
+    `play_net.py` deals it. A fight with a `deck` is a recorded run position
+    (`real_fights.py`): its deck with upgrades and enchantments, relics, potions, HP,
+    belt, floor and its own ascension, through the arena entry point.
+    """
+    seed, encounter = int(fight["seed"]), int(fight["encounter"])
+    if "deck" not in fight:
+        return Combat.opening(
+            seed,
+            encounter,
+            ascension,
+            0,
+            list(fight["extra_cards"]),
+            list(fight["relics"]),
+        )
+    combat = Combat(native.create(seed))
+    combat.encounter_id = encounter
+    native.reset_arena(
+        combat.handle,
+        list(fight["deck"]),
+        combat.obs,
+        enchantments=fight.get("enchantments"),
+        encounter_id=encounter,
+        relic_ids=list(fight["relics"]),
+        potion_ids=list(fight["potions"]),
+        player_hp=int(fight["hp"]),
+        player_max_hp=int(fight["max_hp"]),
+        player_gold=int(fight.get("gold", 0)),
+        ascension=int(fight["ascension"]),
+        total_floor=int(fight["floor"]),
+        max_potion_slots=int(fight["max_potion_slots"]),
+    )
+    return combat
+
+
+def play_gen(fight: dict[str, Any], settings: dict[str, Any], *, use_prior: bool):
+    """One fight under search, as a generator that yields prior requests.
+
+    `play_net.play_gen`'s protocol with the position read from the fight: the fight's own
+    RNG from (encounter, seed), the tempo rollout, CRN at the root, and `best_action` --
+    by visits under a prior, by mean without one. No root noise. A fight may carry its
+    own `sims` (a budget by room kind); otherwise `settings["sims"]` applies.
 
     Yields:
         The determinized world whenever a node needs its prior (see `drive_batched`).
@@ -424,14 +463,8 @@ def play_gen(fight: dict[str, Any], settings: dict[str, Any], *, use_prior: bool
     """
     seed, encounter = int(fight["seed"]), int(fight["encounter"])
     rng = np.random.default_rng([encounter, seed])
-    combat = Combat.opening(
-        seed,
-        encounter,
-        int(settings["ascension"]),
-        0,
-        list(fight["extra_cards"]),
-        list(fight["relics"]),
-    )
+    sims = int(fight.get("sims") or settings["sims"])
+    combat = open_fight(fight, int(settings["ascension"]))
     start_hp = combat.hp()
     decisions = 0
     try:
@@ -444,7 +477,7 @@ def play_gen(fight: dict[str, Any], settings: dict[str, Any], *, use_prior: bool
             root = yield from run_search_gen(
                 combat,
                 legal,
-                int(settings["sims"]),
+                sims,
                 rng,
                 float(settings["c"]),
                 move,

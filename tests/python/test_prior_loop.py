@@ -6,6 +6,7 @@ played by a fake that returns chosen results, except in the one test of the real
 which generates, trains and evaluates at a few simulations on one encounter.
 """
 
+import gzip
 import json
 import sys
 import tempfile
@@ -433,6 +434,50 @@ class RealPipelineTest(unittest.TestCase):
             # The champion (no prior) is deterministic: replaying a fight gives the same end.
             again = loop.evaluate_fights(fights[:1], None, prior_loop.eval_settings())
             self.assertEqual(again[0], results["champion"]["results"][0])
+
+
+class RealFightsTest(unittest.TestCase):
+    """`real_fights.py` deals a recorded stage-2 fight start as that position."""
+
+    def test_a_recorded_fight_is_dealt_as_recorded(self):
+        from rl.prior_loop import real_fights
+
+        state = {
+            "deck": [[472, 0, 0, 0], [131, 1, 0, 0], [30, 0, 0, 0], [472, 0, 5, 1]],
+            "relics": [36],
+            "potions": [5],
+            "hp": 51,
+            "max_hp": 83,
+            "gold": 99,
+            "ascension": 9,
+            "max_potion_slots": 2,
+        }
+        fight = {
+            "floor": 8,
+            "node_type": 2,
+            "encounter": 62,
+            "hp_after": 40,
+            "won": True,
+            "sims": 500,
+            "state": state,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with gzip.open(Path(tmp) / "r0000.jsonl.gz", "wt") as shard:
+                shard.write(json.dumps({"fights": [fight, {**fight, "node_type": 7}]}) + "\n")
+            fights = real_fights.load_real_fights(Path(tmp), {2: 5})
+        self.assertEqual(len(fights), 1)  # the event fight (7) is not asked for
+        dealt = fights[0]
+        self.assertEqual(dealt["deck"], [472, -131, 30, 472])
+        self.assertEqual(dealt["enchantments"], [(0, 0), (0, 0), (0, 0), (5, 1)])
+        self.assertEqual(real_fights.with_budget(fights, "120/500")[0]["sims"], 500)
+        combat = loop.open_fight(dealt, ascension=0)
+        try:
+            self.assertEqual((combat.hp(), combat.max_hp()), (51, 83))
+            state_json = loop.native.get_state_json(combat.handle)
+            self.assertEqual(state_json["ascension"], 9)
+            self.assertEqual(state_json["encounter_id"], 62)
+        finally:
+            combat.close()
 
 
 class CliTest(unittest.TestCase):

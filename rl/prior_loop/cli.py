@@ -8,6 +8,8 @@
 - `status` prints `status.json`, the champion and each iteration's gate.
 - `export` copies the champion prior to the coach's model folder.
 - `freeze-fight-set` writes `fight_set.json`. It is frozen: only for a fresh checkout.
+- `real-fights` plays a sample of the fights a stage-2 job recorded, read-only from its
+  shards, with and without a prior at one budget (`real_fights.py`).
 
 Every command takes `--root` (default `runs/prior_loop`).
 """
@@ -52,7 +54,42 @@ def build_parser() -> argparse.ArgumentParser:
 
     freeze = commands.add_parser("freeze-fight-set", help="write fight_set.json (once)")
     freeze.add_argument("--out", type=Path, default=loop.FIGHT_SET)
+
+    real = commands.add_parser(
+        "real-fights",
+        help="play fights stage-2 self-play reached, with and without a prior",
+    )
+    real.add_argument("--policy", type=Path, required=True)
+    real.add_argument("--shards", type=Path, default=None)
+    real.add_argument("--budget", default="60", help='"60", or "120/500" by room kind')
+    real.add_argument("--hallway", type=int, default=96)
+    real.add_argument("--elite", type=int, default=72)
+    real.add_argument("--boss", type=int, default=72)
+    real.add_argument("--workers", type=int, default=2)
+    real.add_argument("--out", type=Path, required=True)
     return parser
+
+
+def _real_fights(args: argparse.Namespace) -> int:
+    from . import real_fights  # noqa: PLC0415 -- only this command reads stage-2 shards
+
+    report = real_fights.run(
+        args.policy,
+        shard_dir=args.shards or real_fights.DEFAULT_SHARDS,
+        per_kind={1: args.hallway, 2: args.elite, 6: args.boss},
+        budget=args.budget,
+        workers=args.workers,
+        out=args.out,
+    )
+    for group, row in report["comparison"].items():
+        print(
+            f"{group:<8} n={row['n']:<4} HP lost {row['champion']['mean_hp_lost']:.1f} -> "
+            f"{row['challenger']['mean_hp_lost']:.1f}  deaths "
+            f"{row['champion']['deaths']} -> {row['challenger']['deaths']}  "
+            f"end HP diff {row['mean_diff_end_hp']:+.2f} (95% CI {row['ci95']})",
+        )
+    print(f"wrote {args.out}")
+    return 0
 
 
 def _status(root: Path) -> int:
@@ -74,6 +111,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "status":
         return _status(args.root)
+    if args.command == "real-fights":
+        return _real_fights(args)
 
     stored = loop.read_json(args.root / loop.CONFIG)
     config = (
