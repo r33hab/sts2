@@ -1281,8 +1281,11 @@ public static class CombatFactory
     private static EnemyState CreateSlumberingBeetle(Random rng)
     {
         var enemy = CreateEnemy(KE.SlumberingBeetle, rng, new Intent(IntentType.Unknown, 0));
-        enemy.Block = 18;
-        BuffSystem.Apply(enemy.Buffs, BuffId.Plating, 18);
+        // PlatingAmount, the Tough pair; Plating's BeforeSideTurnStart hands an enemy that
+        // much block on round one.
+        int plating = Ascension.Value(_currentAscension, Ascension.ToughEnemies, 18, 15);
+        enemy.Block = plating;
+        BuffSystem.Apply(enemy.Buffs, BuffId.Plating, plating);
         BuffSystem.Apply(enemy.Buffs, BuffId.Slumber, 3);
         return enemy;
     }
@@ -1556,7 +1559,12 @@ public static class CombatFactory
     private static EnemyState CreateVantom(Random rng)
     {
         var enemy = CreateEnemy(KE.Vantom, rng, new Intent(IntentType.Attack, 8));
-        BuffSystem.Apply(enemy.Buffs, BuffId.Slippery, 9);
+        // SlipperyAmt, the Tough pair (decompiled Vantom.cs).
+        BuffSystem.Apply(
+            enemy.Buffs,
+            BuffId.Slippery,
+            Ascension.Value(_currentAscension, Ascension.ToughEnemies, 9, 8)
+        );
         return enemy;
     }
 
@@ -2006,7 +2014,12 @@ public static class CombatFactory
 
         if (enemy.DefId == KE.LouseProgenitor)
         {
-            BuffSystem.Apply(enemy.Buffs, BuffId.CurlUp, 18);
+            // AfterAddedToRoom applies CurlUpPower at CurlBlock, the Tough pair.
+            BuffSystem.Apply(
+                enemy.Buffs,
+                BuffId.CurlUp,
+                Ascension.Value(_currentAscension, Ascension.ToughEnemies, 18, 14)
+            );
         }
 
         if (enemy.DefId == KE.PhantasmalGardener)

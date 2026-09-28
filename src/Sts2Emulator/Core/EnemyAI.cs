@@ -1610,9 +1610,12 @@ public static class EnemyAI
                         IntentType.Attack,
                         Ascension.Value(ascension, Ascension.DeadlyEnemies, 10, 9)
                     ),
-                    // CurlBlock is GetValueIfAscension(ToughEnemies, 18, 14), and Tough
-                    // IS live at A8 -- so this 18 is right where the others were not.
-                    1 => new Intent(IntentType.Defend, 18),
+                    // CurlBlock is GetValueIfAscension(ToughEnemies, 18, 14): 18 from A8
+                    // up, where Tough is live, and 14 below it.
+                    1 => new Intent(
+                        IntentType.Defend,
+                        Ascension.Value(ascension, Ascension.ToughEnemies, 18, 14)
+                    ),
                     // PounceDamage
                     _ => new Intent(
                         IntentType.Attack,
