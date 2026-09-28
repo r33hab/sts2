@@ -109,13 +109,18 @@ public enum SelectionReturn
     Rest,
 }
 
+/// <param name="SecondBossEncounterId">
+/// The act's second boss, or 0: `RoomSet.SecondBoss`, which only DoubleBoss (A10) sets, and
+/// only on the last act (`RunManager.GenerateRooms`).
+/// </param>
 public sealed record ActRooms(
     int Act,
     int[] Events,
     int[] NormalEncounters,
     int[] EliteEncounters,
     int BossEncounterId,
-    string Ancient
+    string Ancient,
+    int SecondBossEncounterId = 0
 )
 {
     /// <summary>Stands in before a run has been generated.</summary>
@@ -127,6 +132,33 @@ public sealed record ActRooms(
         0,
         RunConstants.AncientNeow
     );
+}
+
+/// <summary>
+/// One card offer as the screen shows it: the cards, and which of them rolled an upgrade.
+/// </summary>
+/// <remarks>
+/// <c>CardFactory.CreateForReward</c> rolls an upgrade per card unless it is told not to,
+/// and from act 2 the roll can land (act index times <c>UpgradedCardOddScaling</c>). An
+/// offer carried as bare ids dropped what it rolled -- the stream was right and the card
+/// on the screen was not.
+/// </remarks>
+public readonly record struct CardOffer(int[] Cards, bool[] Upgraded)
+{
+    /// <summary>An offer that rolled no upgrades (<c>NoUpgradeRoll</c>, or none landed).</summary>
+    public static CardOffer Plain(int[] cards) => new(cards, new bool[cards.Length]);
+
+    /// <summary>Put this offer on the card-reward screen.</summary>
+    public void ShowOn(RunState state)
+    {
+        Array.Clear(state.RewardCards);
+        Array.Clear(state.RewardUpgraded);
+        for (int i = 0; i < state.RewardCards.Length && i < Cards.Length; i++)
+        {
+            state.RewardCards[i] = Cards[i];
+            state.RewardUpgraded[i] = i < Upgraded.Length && Upgraded[i];
+        }
+    }
 }
 
 public sealed class RunState
@@ -299,6 +331,14 @@ public sealed class RunState
     public int[] MapNodeTypes = new int[RunConstants.MapChoices];
     public int[] MapChoices = new int[RunConstants.MapChoices];
     public int[] ShopCards = new int[7];
+
+    /// <summary>
+    /// Which shop cards the merchant shows upgraded, slot for slot. The merchant's own roll
+    /// never upgrades (<c>RollForUpgrade(..., -999999999m)</c>); an egg does, through
+    /// <c>ModifyMerchantCardCreationResults</c> -- at stocking, and again whenever the
+    /// entries update (a relic bought on the spot).
+    /// </summary>
+    public bool[] ShopCardUpgraded = new bool[7];
     public int[] ShopRelics = new int[3];
     public int[] ShopPotions = new int[3];
     public int[] ShopCosts = new int[14];
@@ -374,7 +414,7 @@ public sealed class RunState
     /// them: RewardsSet populates every reward as the screen opens, in the order the
     /// rewards were listed, and those draws all come off the same stream.
     /// </summary>
-    public List<int[]> PendingCardOffers = [];
+    public List<CardOffer> PendingCardOffers = [];
 
     /// <summary>
     /// Which character Orobas branded its Sea Glass with, as an index into
@@ -468,6 +508,16 @@ public sealed class RunState
     {
         get => CurrentAct.BossEncounterId;
         set => CurrentAct = CurrentAct with { BossEncounterId = value };
+    }
+
+    /// <summary>
+    /// The act's second boss, 0 for none: A10's DoubleBoss gives the last act one, fought on
+    /// the map point one row above the first boss.
+    /// </summary>
+    public int SecondBossEncounterId
+    {
+        get => CurrentAct.SecondBossEncounterId;
+        set => CurrentAct = CurrentAct with { SecondBossEncounterId = value };
     }
 
     /// <summary>The ancient this act opens on — Neow in act 1, one of Hive's three after.</summary>
@@ -637,6 +687,13 @@ public sealed class RunState
     /// deck. A picked card leaves the offer, the way it leaves the game's grid.
     /// </summary>
     public int[] PendingOfferCards = [];
+
+    /// <summary>
+    /// Which of <see cref="PendingOfferCards" /> rolled an upgrade, index for index. A grid
+    /// built by <c>CardFactory.CreateForReward</c> rolls one per card (Lead Paperweight,
+    /// Sea Glass), and from act 2 some of those land.
+    /// </summary>
+    public bool[] PendingOfferUpgraded = [];
 
     /// <summary>
     /// Scroll Boxes' two bundles, three card ids each, flat: bundle 0 then bundle 1.

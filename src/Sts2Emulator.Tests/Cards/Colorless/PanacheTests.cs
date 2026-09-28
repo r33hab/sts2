@@ -69,4 +69,33 @@ public class PanacheTests
 
         Assert.Equal(hp - 10, fight.Enemy0.Hp);
     }
+
+    /// <summary>
+    /// The count is per TURN: `PanachePower.AfterSideTurnEnd` puts `CardsLeft` back to five
+    /// at its owner's turn end (decompiled PanachePower.cs). Three cards one turn and two
+    /// the next are not five, and the emulator had them add up.
+    /// </summary>
+    [Fact]
+    public void TheCountStartsAgainEachTurn()
+    {
+        var fight = Fight.Hand(Card(CL.Panache)).Energy(9).PlayerHp(999).Enemy(hp: 200);
+        fight.Play();
+        for (int i = 0; i < 3; i++)
+        {
+            fight.State.Hand.Add(new CardInstance(IC.DefendIronclad, false));
+            fight.Play(0);
+        }
+
+        fight.EndTurn();
+        fight.State.Hand.Clear();
+        fight.State.Energy = 9;
+        int hp = fight.Enemy0.Hp;
+        for (int i = 0; i < 2; i++)
+        {
+            fight.State.Hand.Add(new CardInstance(IC.DefendIronclad, false));
+            fight.Play(0);
+        }
+
+        Assert.Equal(hp, fight.Enemy0.Hp);
+    }
 }

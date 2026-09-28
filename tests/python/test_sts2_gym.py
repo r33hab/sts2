@@ -1,5 +1,6 @@
 import ctypes
 import importlib
+import operator
 import sys
 import unittest
 from pathlib import Path
@@ -18,6 +19,7 @@ run_env = importlib.import_module("sts2_gym.run_env")
 
 Sts2CombatEnv = sts2_gym.Sts2CombatEnv
 Sts2RunEnv = sts2_gym.Sts2RunEnv
+NODE_BOSS = run_env.NODE_BOSS
 NODE_NORMAL = run_env.NODE_NORMAL
 PHASE_ANCIENT = run_env.PHASE_ANCIENT
 PHASE_CARD_REWARD = run_env.PHASE_CARD_REWARD
@@ -558,22 +560,65 @@ class RunAscensionTests(unittest.TestCase):
             env.close()
 
     def test_a_level_the_run_engine_does_not_model_is_refused(self):
-        # DoubleBoss (A10) is not modelled, so the run refuses the level outright rather
-        # than play a run that is quietly wrong.
+        # The game's levels are 0-10 (`AscensionManager.maxAscensionAllowed`); anything
+        # else is refused outright rather than played as something it is not.
         handle = native.run_create()
         try:
             obs = (ctypes.c_int * native.RUN_OBS_SIZE)()
-            self.assertEqual(native.run_reset(handle, "0", obs, 10), -2)
+            self.assertEqual(native.run_reset(handle, "0", obs, 11), -2)
             self.assertEqual(native.run_reset(handle, "0", obs, -1), -2)
+            self.assertEqual(native.run_reset(handle, "0", obs, 10), 0)
             self.assertEqual(native.run_reset(handle, "0", obs, 9), 0)
         finally:
             native.run_destroy(handle)
-        env = Sts2RunEnv(seed="0", ascension=10)
+        env = Sts2RunEnv(seed="0", ascension=11)
         try:
-            with self.assertRaises(RuntimeError):
+            with self.assertRaisesRegex(RuntimeError, "0-10"):
                 env.reset()
         finally:
             env.close()
+
+    def test_ascension_ten_puts_a_second_boss_on_the_last_act(self):
+        # DoubleBoss: the last act's map carries a second boss one row above the first,
+        # and the map reader names both.
+        for ascension, bosses in ((9, 1), (10, 2)):
+            env = Sts2RunEnv(seed="3PFLW9XC5D", ascension=ascension)
+            try:
+                env.reset()
+                env.debug_enter_next_act()
+                self.assertEqual(1, len(_boss_nodes(env.map_graph())))
+                env.debug_enter_next_act()
+                graph = env.map_graph()
+                found = _boss_nodes(graph)
+                self.assertEqual(bosses, len(found))
+                handle = env._run_handle
+                assert handle is not None
+                summary = native.run_state_list(handle, 14, 4)
+                if bosses == 1:
+                    self.assertEqual(0, summary[3])
+                    self.assertIsNone(graph["second_boss_encounter"])
+                    continue
+                first, second = found
+                self.assertEqual((first[0], first[1] + 1), second)
+                self.assertIn((first, second), graph["edges"])
+                self.assertNotEqual(0, summary[3])
+                self.assertNotEqual(summary[1], summary[3])
+                self.assertIn(
+                    graph["second_boss_encounter"],
+                    {"aeonglass", "queen", "test-subject"},
+                )
+                self.assertNotEqual(
+                    graph["boss_encounter"],
+                    graph["second_boss_encounter"],
+                )
+            finally:
+                env.close()
+
+
+def _boss_nodes(graph: dict) -> list[tuple[int, int]]:
+    """Return the boss points of a `map_graph`, lowest row first."""
+    bosses = [coord for coord, kind in graph["nodes"].items() if kind == NODE_BOSS]
+    return sorted(bosses, key=operator.itemgetter(1))
 
 
 class CombatAscensionTests(unittest.TestCase):

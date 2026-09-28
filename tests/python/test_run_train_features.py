@@ -145,8 +145,16 @@ class LayoutTests(unittest.TestCase):
         self.assertEqual([vocab.weak_fights(r) for r in (1, 2, 3, 4)], [3, 3, 2, 2])
 
     def test_event_one_hot_covers_every_emulator_event(self):
-        # 43 + (event_id-1)*4 + option for ids 1..58, and 275 for anything else.
-        self.assertEqual(max(vocab.event_slugs()), features.EVENT_SLOTS)
+        # 43 + (event_id-1)*4 + option for ids 1..58, and 275 for anything else. The
+        # Architect (59) is the room a won run ends in, whose options all win: it is left
+        # in the shared slot rather than widening the layout a trained model reads.
+        choices = {
+            event_id
+            for event_id, slug in vocab.event_slugs().items()
+            if slug != "THE_ARCHITECT"
+        }
+        self.assertEqual(max(choices), features.EVENT_SLOTS)
+        self.assertEqual(max(vocab.event_slugs()), features.EVENT_SLOTS + 1)
         self.assertEqual(features.B_OFFSET + 21 + features.EVENT_SLOTS * 4, 275)
 
 

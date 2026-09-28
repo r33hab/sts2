@@ -182,6 +182,7 @@ public static class CombatSnapshot
         new("void_form_cards_played_this_turn", s => ref s.VoidFormCardsPlayedThisTurn),
         new("cards_generated_this_combat", s => ref s.CardsGeneratedThisCombat),
         new("tender_cards_played_this_turn", s => ref s.TenderCardsPlayedThisTurn),
+        new("rupture_owed", s => ref s.RuptureOwed),
         new("unblocked_damage_hit_count", s => ref s.UnblockedDamageHitCount),
     ];
 
@@ -192,6 +193,8 @@ public static class CombatSnapshot
         new("merc_gold_was_stolen", s => ref s.MercGoldWasStolen),
         new("pen_nib_armed", s => ref s.PenNibArmed),
         new("vambrace_spent", s => ref s.VambraceSpent),
+        new("vambrace_card", s => ref s.VambraceCard),
+        new("paels_legion_card", s => ref s.PaelsLegionCard),
         new("rainbow_ring_paid_this_turn", s => ref s.RainbowRingPaidThisTurn),
         new("unsettling_lamp_spent", s => ref s.UnsettlingLampSpent),
         new("unsettling_lamp_card", s => ref s.UnsettlingLampCard),
@@ -286,6 +289,7 @@ public static class CombatSnapshot
         "move_history",
         "starts_on_branch",
         "rolls_next_move",
+        "curl_up_armed",
         "last_branch",
         "repeat_streak",
         "branch_cooldown",
@@ -535,6 +539,7 @@ public static class CombatSnapshot
         enemy.MoveHistory = ai.Items("move_history", AsInt);
         enemy.StartsOnBranch = ai.Bool("starts_on_branch", enemy.StartsOnBranch);
         enemy.RollsNextMove = ai.Bool("rolls_next_move", enemy.RollsNextMove);
+        enemy.CurlUpArmed = ai.Bool("curl_up_armed", enemy.CurlUpArmed);
         enemy.LastBranch = ai.Int("last_branch", enemy.LastBranch);
         enemy.RepeatStreak = ai.Int("repeat_streak", enemy.RepeatStreak);
         enemy.BranchCooldown = ai.Int("branch_cooldown", enemy.BranchCooldown);
@@ -1361,6 +1366,7 @@ public static class CombatSnapshot
         );
         w.WriteBoolean("starts_on_branch", enemy.StartsOnBranch);
         w.WriteBoolean("rolls_next_move", enemy.RollsNextMove);
+        w.WriteBoolean("curl_up_armed", enemy.CurlUpArmed);
         w.WriteNumber("last_branch", enemy.LastBranch);
         w.WriteNumber("repeat_streak", enemy.RepeatStreak);
         w.WriteNumber("branch_cooldown", enemy.BranchCooldown);

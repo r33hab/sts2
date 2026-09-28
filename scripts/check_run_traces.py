@@ -104,7 +104,33 @@ def main() -> int:
             file=sys.stderr,
         )
 
-    return 1 if regressions or fixed else 0
+    offering_failures = check_offerings()
+    return 1 if regressions or fixed or offering_failures else 0
+
+
+def check_offerings() -> list[str]:
+    """Replay the same fixtures through the run-layer replay (`replay_real_run.py`) and
+    fail on any offering or holding that parts company with the capture.
+
+    The step replay above compares what the run looks like; this compares what it was
+    OFFERED -- card rewards, gold, potions, relics, shops, events, maps, encounters -- in
+    categories, which no step field covered (a shop's shelf was never compared).
+    """
+    sys.path.insert(0, str(REPO / "scripts"))
+    import replay_real_run  # noqa: PLC0415 - loads the native library; only here
+
+    doc = replay_real_run.evaluate([], fixtures=True)
+    failures = [
+        f"{run['label']}: {line}"
+        for run in doc["runs"]
+        for line in [*run["divergences"], *run["flow"]]
+    ]
+    compared = sum(stats["compared"] for stats in doc["totals"].values())
+    matched = sum(stats["matched"] for stats in doc["totals"].values())
+    print(f"run offerings: {matched}/{compared} match over {len(doc['runs'])} fixtures")
+    for line in failures:
+        print(f"OFFERING {line}", file=sys.stderr)
+    return failures
 
 
 if __name__ == "__main__":

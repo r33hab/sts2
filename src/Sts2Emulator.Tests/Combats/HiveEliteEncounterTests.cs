@@ -118,6 +118,36 @@ public class DecimillipedeTests
     }
 
     /// <summary>
+    /// Killed on the ENEMY turn -- here by the player's Thorns as it swings -- a segment
+    /// spends ONE enemy phase dead, not two. The game forces DEAD_MOVE, and the roll at the
+    /// next player turn leaves it at once (DEAD_MOVE has no MustPerformOnce, and the
+    /// segment has performed a move), so REATTACH_MOVE shows that very turn and heals in the
+    /// next enemy phase (decompiled ReattachPower.cs, MonsterMoveStateMachine.cs). The
+    /// emulator seeded the two phases a player-turn death needs.
+    /// </summary>
+    [Fact]
+    public void ASegmentKilledOnTheEnemyTurnReattachesAPhaseSooner()
+    {
+        var fight = Fight.EncounterWithStream(RunConstants.DecimillipedeEncounterId, 0);
+        var segment = fight.State.Enemies[0];
+        fight.State.PlayerHp = 999;
+        fight.State.PlayerBuffs.Add(new BuffState(BuffId.Thorns, 5));
+        segment.Hp = 1;
+        segment.Block = 0;
+
+        fight.EndTurn();
+
+        // Killed swinging, and on the REATTACH turn already.
+        Assert.Equal(0, segment.Hp);
+        Assert.Equal(1, BuffSystem.Get(segment.Buffs, BuffId.Reviving));
+
+        fight.State.PlayerHp = 999;
+        fight.EndTurn();
+
+        Assert.Equal(RunConstants.DecimillipedeReattachHeal, segment.Hp);
+    }
+
+    /// <summary>
     /// Death STRIPS the segment's powers. `PowerModel.ShouldPowerBeRemovedAfterOwnerDeath`
     /// defaults to true and `ReattachPower` is one of the few that overrides it to false,
     /// so a segment comes back holding its Reattach and nothing else -- the Strength its

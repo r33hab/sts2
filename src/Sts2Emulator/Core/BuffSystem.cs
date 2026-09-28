@@ -405,23 +405,46 @@ public static class BuffSystem
         return Math.Max(0, (int)blk);
     }
 
-    internal static bool IsDebuff(BuffId id) =>
-        id
-            is BuffId.Vulnerable
-                or BuffId.Weak
-                or BuffId.Frail
-                or BuffId.Poison
-                or BuffId.Burn
-                or BuffId.Shrink
-                or BuffId.Tangled
-                or BuffId.Constrict
-                or BuffId.Smoggy
-                or BuffId.NoBlock
-                or BuffId.Doom
-                // `DemisePower.Type => PowerType.Debuff` in the decompiled source, so
-                // `ArtifactPower.TryModifyPowerAmountReceived` (which blocks any power whose
-                // `GetTypeForAmount` resolves to Debuff) blocks it in the real game. Missing
-                // here, Powdered Demise ignored Artifact entirely -- found verifying the
-                // potion against the source, the same way Task 1 found Fortifier's bug.
-                or BuffId.Demise;
+    /// <summary>
+    /// Whether a BuffId is a DEBUFF power: what Artifact stops, and what a dying Illusion
+    /// sheds. `ArtifactPower.TryModifyPowerAmountReceived` asks the power's
+    /// `GetTypeForAmount`, not a list, so this is read off the generated `IsBuff` flag for
+    /// every BuffId that models a power (`FooPower` by name, like the converter's map).
+    /// </summary>
+    /// <remarks>
+    /// It was a hand-kept list of twelve, and Hex, Dampen, No Draw, Sloth and twenty-five
+    /// more went straight past an Artifact -- found by `scripts/audit_effects.py powers`.
+    /// Two kinds stay out on purpose. The TEMPORARY powers hand their effect back by being
+    /// removed, and the emulator keeps that as bookkeeping its call sites guard (a
+    /// temporary Strength loss consumes Artifact where it is applied); and an id with no
+    /// power behind it is an emulator counter, which is nothing's debuff.
+    /// </remarks>
+    internal static bool IsDebuff(BuffId id) => (int)id < DebuffIds.Length && DebuffIds[(int)id];
+
+    private static readonly bool[] DebuffIds = BuildDebuffIds();
+
+    private static bool[] BuildDebuffIds()
+    {
+        var ids = Enum.GetValues<BuffId>();
+        var debuffs = new bool[ids.Max(id => (int)id) + 1];
+        foreach (var id in ids)
+        {
+            if (
+                id
+                is BuffId.TemporaryStrength
+                    or BuffId.TemporaryDexterity
+                    or BuffId.TemporaryFocus
+                    or BuffId.Illusion
+            )
+            {
+                continue;
+            }
+
+            int? power =
+                GeneratedData.Powers.FindId($"{id}Power") ?? GeneratedData.Powers.FindId($"{id}");
+            debuffs[(int)id] = power is int found && !GeneratedData.Powers.Get(found).IsBuff;
+        }
+
+        return debuffs;
+    }
 }

@@ -221,6 +221,43 @@ public class HiveAscensionIntentTests
         Assert.Equal((IntentType.Defend, 18, 1), IntentOf(fight, KE.LouseProgenitor));
     }
 
+    /// <summary>
+    /// And below A8 the Tough branch is not live: <c>CurlBlock</c> is 14 there, both as
+    /// CURL_AND_GROW's block and as the <c>CurlUpPower</c> AfterAddedToRoom applies
+    /// (decompiled LouseProgenitor.cs). The emulator hardcoded 18 in both places, which
+    /// was right only while it modelled A8 alone.
+    /// </summary>
+    [Theory]
+    [InlineData(7, 14)]
+    [InlineData(8, 18)]
+    public void LouseProgenitorCurlsForItsToughPairAtEveryLevel(int ascension, int curl)
+    {
+        var fight = At(CombatFactory.ActOneEncounter.LouseProgenitor, ascension);
+        var louse = fight.State.Enemies.First(e => e.DefId == KE.LouseProgenitor);
+        Assert.Equal(curl, BuffSystem.Get(louse.Buffs, BuffId.CurlUp));
+
+        fight.EndTurn();
+
+        Assert.Equal((IntentType.Defend, curl, 1), IntentOf(fight, KE.LouseProgenitor));
+    }
+
+    /// <summary>
+    /// <c>SlumberingBeetle.PlatingAmount</c> is <c>GetValueIfAscension(ToughEnemies, 18,
+    /// 15)</c>, and Plating's <c>BeforeSideTurnStart</c> hands an enemy that much block
+    /// on round one. The emulator hardcoded the A8 value for both.
+    /// </summary>
+    [Theory]
+    [InlineData(7, 15)]
+    [InlineData(8, 18)]
+    public void SlumberingBeetlePlatesForItsToughPairAtEveryLevel(int ascension, int plating)
+    {
+        var fight = At(CombatFactory.ActOneEncounter.SlumberingBeetle, ascension);
+        var beetle = fight.State.Enemies.First(e => e.DefId == KE.SlumberingBeetle);
+
+        Assert.Equal(plating, BuffSystem.Get(beetle.Buffs, BuffId.Plating));
+        Assert.Equal(plating, beetle.Block);
+    }
+
     [Theory]
     [InlineData(8, 13, 4)]
     [InlineData(9, 15, 6)]

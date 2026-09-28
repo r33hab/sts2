@@ -54,10 +54,16 @@ public sealed class CombatState
 
     /// <summary>
     /// `PaelsLegion`'s `Cooldown`: turns left before the pet will double a card's block
-    /// again. Set to `Turns` (2) when a doubled gain lands, decremented at the owner's
-    /// side turn start.
+    /// again. Set to `Turns` (2) once the card whose gain it doubled finishes
+    /// (`AfterCardPlayed`), decremented at the owner's side turn start.
     /// </summary>
     public int PaelsLegionCooldown;
+
+    /// <summary>
+    /// `PaelsLegion`'s `AffectedCardPlay`: the card being played has had a gain doubled,
+    /// so its other gains are doubled too, and the cooldown starts when it finishes.
+    /// </summary>
+    public bool PaelsLegionCard;
 
     /// <summary>
     /// <c>GremlinMercNormal.GoldWasStolen</c>: the merc died having taken something.
@@ -279,6 +285,12 @@ public sealed class CombatState
 
     /// <summary>`Vambrace` doubles the FIRST card block of a combat; this latches it.</summary>
     public bool VambraceSpent;
+
+    /// <summary>
+    /// `Vambrace`'s `TriggeringCard`: the card being played has had a gain doubled, so its
+    /// other gains are doubled too, and the relic is spent when it finishes.
+    /// </summary>
+    public bool VambraceCard;
 
     /// <summary>
     /// `BeatingRemnant.DamageReceivedThisTurn` — the running total its 20-per-turn cap is
@@ -606,6 +618,13 @@ public sealed class CombatState
     /// has to be carried rather than recomputed.
     /// </summary>
     public int TenderCardsPlayedThisTurn;
+
+    /// <summary>
+    /// `RupturePower`'s bank: the Strength owed for HP a card cost the player while it was
+    /// being played (`playedCards[cardSource]`), paid in `AfterCardPlayed` once the card
+    /// has finished. A play can pause on a selection, so it is carried.
+    /// </summary>
+    public int RuptureOwed;
     public int UnblockedDamageHitCount; // times player took unblocked damage this combat (TearAsunder)
     public int TargetEnemyIndex = -1; // -1 = auto (first living enemy), >=0 = specific index
 

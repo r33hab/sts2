@@ -64,7 +64,7 @@ class Sts2RunEnv(gym.Env):
         self._seed = seed
         self._max_episode_steps = max_episode_steps
         self._max_floors = max_floors
-        # The run's ascension level, 0-9. Every ascension rule in the run and in its
+        # The run's ascension level, 0-10. Every ascension rule in the run and in its
         # combats reads it; the committed traces were captured at 8 and pass it.
         self._ascension = ascension
         self._elapsed_steps = 0
@@ -98,7 +98,7 @@ class Sts2RunEnv(gym.Env):
         if status != 0:
             raise RuntimeError(
                 f"Sts2Run_Reset failed with status {status} "
-                f"(ascension {self._ascension}).",
+                f"(ascension {self._ascension}; the run engine plays 0-10).",
             )
         return self._obs(), self._info()
 
@@ -194,7 +194,9 @@ class Sts2RunEnv(gym.Env):
 
         Returns:
             ``{"nodes": {(col, row): node_type}, "edges": ((from, to), ...),
-            "current": (col, row)}``.
+            "boss_encounter": name, "second_boss_encounter": name or None,
+            "current": (col, row)}``. The second boss is A10's DoubleBoss, on the last
+            act only: a boss node one row above the first.
 
         Raises:
             RuntimeError: If the environment has not been reset yet.
@@ -217,14 +219,19 @@ class Sts2RunEnv(gym.Env):
         # The act's boss, which the game names on its map from the moment the act opens --
         # unlike the encounter behind a monster node, which it never names. Read here
         # rather than put in the observation: this is what a SCREEN needs, and widening
-        # what a policy is handed is a separate decision from drawing a map.
-        act_summary = native.run_state_list(self._run_handle, 14, 3)
+        # what a policy is handed is a separate decision from drawing a map. The fourth
+        # entry is A10's second boss (0 for none), which the map shows the same way.
+        act_summary = native.run_state_list(self._run_handle, 14, 4)
+        second_boss = act_summary[3] if len(act_summary) > 3 else 0
         return {
             "nodes": nodes,
             "edges": edges,
             "boss_encounter": ENCOUNTER_NAMES.get(
                 act_summary[1] if len(act_summary) > 1 else -1,
                 "unknown",
+            ),
+            "second_boss_encounter": (
+                ENCOUNTER_NAMES.get(second_boss, "unknown") if second_boss else None
             ),
             "current": (current[0], current[1]) if len(current) == 2 else None,
         }
@@ -254,7 +261,9 @@ class Sts2RunEnv(gym.Env):
         The point is testability: reaching act 2 honestly costs a buffed run that wins a
         boss fight. This is the same transition, without the run.
         """
-        assert self._run_handle is not None, "Call reset() before debug_enter_next_act()"
+        assert (
+            self._run_handle is not None
+        ), "Call reset() before debug_enter_next_act()"
         native.run_debug_enter_next_act(self._run_handle, self._run_obs_buf)
         return self._obs(), self._info()
 
@@ -262,6 +271,31 @@ class Sts2RunEnv(gym.Env):
         """Mirror the mod's debug_upgrade_deck. See debug_gain_max_hp."""
         assert self._run_handle is not None, "Call reset() before debug_upgrade_deck()"
         native.run_debug_upgrade_deck(self._run_handle, self._run_obs_buf)
+        return self._obs(), self._info()
+
+    def debug_resolve_combat(self, **outcome) -> tuple[np.ndarray, dict]:
+        """Win the fight in progress without playing it (replay-only).
+
+        scripts/replay_real_run.py replays a real run's run layer through this; its
+        fights are measured separately by the live combat checks. ``outcome`` carries
+        the fight's reward-relevant results: ``stolen_back_gold``, ``fat_gremlin_escaped``
+        and ``merc_gold_stolen``.
+        """
+        assert (
+            self._run_handle is not None
+        ), "Call reset() before debug_resolve_combat()"
+        native.run_debug_resolve_combat(self._run_handle, self._run_obs_buf, **outcome)
+        return self._obs(), self._info()
+
+    def debug_set_player(self, **holdings) -> tuple[np.ndarray, dict]:
+        """Set the player's holdings where a real run had them (replay-only).
+
+        Takes ``hp``, ``max_hp``, ``gold``, ``cards`` (``[(id, upgraded, enchantment,
+        amount)]``), ``relics``, ``potions`` and ``max_potion_slots``; anything left out
+        stays as it is. No pickup effect runs.
+        """
+        assert self._run_handle is not None, "Call reset() before debug_set_player()"
+        native.run_debug_set_player(self._run_handle, self._run_obs_buf, **holdings)
         return self._obs(), self._info()
 
     def close(self):

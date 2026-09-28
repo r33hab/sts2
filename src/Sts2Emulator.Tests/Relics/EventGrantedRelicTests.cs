@@ -475,11 +475,26 @@ public class WongosMysteryTicketTests
         return engine;
     }
 
-    /// <summary>Five combats, then THREE relics, then it is spent for good.</summary>
+    /// <summary>Every relic the reward screen owes: the one on it and the queue behind.</summary>
+    private static List<int> RelicsOwed(RunEngine engine) =>
+        [
+            .. engine.State.RelicReward != 0 ? [engine.State.RelicReward] : Array.Empty<int>(),
+            .. engine.State.PendingBonusRelicRewards,
+        ];
+
+    /// <summary>
+    /// Five combats, then THREE relics, then it is spent for good. A monster room pays no
+    /// relic of its own, so those three are the screen's only relics: the ticket's first
+    /// takes the slot and two queue behind it. The emulator queued all three AND rolled the
+    /// slot's own, so a monster room paid four (`WongosMysteryTicket.TryModifyRewards` adds
+    /// `RepeatVar(3)` RelicRewards; decompiled WongosMysteryTicket.cs).
+    /// </summary>
     [Fact]
     public void ItPaysThreeRelicsAfterFiveCombats()
     {
         var engine = WithTicket();
+        engine.State.CurrentNodeType = RunConstants.NodeNormal;
+        engine.State.LastResolvedRoomType = RunConstants.NodeNormal;
 
         for (int fight = 1; fight <= 4; fight++)
         {
@@ -492,8 +507,26 @@ public class WongosMysteryTicketTests
 
         RunRewardGenerator.GenerateCombatRewards(engine.State);
 
-        Assert.Equal(3, engine.State.PendingBonusRelicRewards.Count);
-        Assert.Equal(3, engine.State.PendingBonusRelicRewards.Distinct().Count());
+        var owed = RelicsOwed(engine);
+        Assert.Equal(3, owed.Count);
+        Assert.Equal(3, owed.Distinct().Count());
+    }
+
+    /// <summary>An elite's own relic comes first, and the ticket's three on top of it.</summary>
+    [Fact]
+    public void AnEliteRoomPaysItsOwnRelicAndTheThree()
+    {
+        var engine = WithTicket();
+        engine.State.CurrentNodeType = RunConstants.NodeElite;
+        engine.State.LastResolvedRoomType = RunConstants.NodeElite;
+        for (int fight = 1; fight <= 5; fight++)
+        {
+            RelicEffects.CountCombatForWongosTicket(engine.State);
+        }
+
+        RunRewardGenerator.GenerateCombatRewards(engine.State);
+
+        Assert.Equal(4, RelicsOwed(engine).Count);
     }
 
     [Fact]
