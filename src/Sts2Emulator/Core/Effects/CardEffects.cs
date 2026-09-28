@@ -7486,7 +7486,9 @@ public static class CardEffects
                 }
                 return true;
             case "Exterminate":
-                DealDamageMultiHit(state, Dmg(state, def, upgraded, card), 4, rng);
+                // TargetType.AllEnemies, `TargetingAllOpponents`: each of the four hits
+                // lands on every enemy (decompiled Exterminate.cs), not four on one.
+                DealDamageToAllMultiHit(state, Dmg(state, def, upgraded, card), 4);
                 return true;
             case "Peck":
                 DealDamageMultiHit(state, Dmg(state, def, upgraded, card), upgraded ? 4 : 3, rng);
