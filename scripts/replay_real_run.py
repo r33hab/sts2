@@ -142,6 +142,8 @@ REST_ACTIONS = {
     "LIFT": rc.REST_LIFT_ACTION,
     "DIG": rc.REST_DIG_ACTION,
 }
+# The emulator names an act by its region; a standard run's first act is either of two.
+ACT_NUMBERS = {"overgrowth": 1, "underdocks": 1, "hive": 2, "glory": 3}
 SHOP_CARD_SLOTS = range(7)
 SHOP_RELIC_SLOTS = range(7, 10)
 SHOP_POTION_SLOTS = range(10, 13)
@@ -885,14 +887,35 @@ class Replayer:
         self.flow(screen.floor, why, screen.kind)
         self.skip_floor = screen.floor
 
+    @property
+    def emulator_act(self) -> int:
+        """The act the emulator is in, 1-based, off its region."""
+        return ACT_NUMBERS.get(str(self.info.get("act")), 0)
+
     def arrive(self, screen: Screen) -> bool:
         """Make sure the emulator is on this kind of screen, proceeding if it lags."""
+        if screen.kind == "map" and 0 < self.emulator_act < screen.act:
+            self.catch_up_to_act(screen)
         if self.phase in SCREEN_PHASES.get(screen.kind, set()):
             return True
         if screen.kind == "map" and self.reach("map", screen.floor):
             return True
         self.desync(screen, f"the game is on a {screen.kind} screen")
         return False
+
+    def catch_up_to_act(self, screen: Screen) -> None:
+        """The game moved on to a later act while the emulator could not follow (a map it
+        draws differently, a fight lost that the game won): walk it into that act with
+        `debug_enter_next_act`, the same transition a won boss makes, so the act's own
+        offerings are still compared. Recorded as a flow difference, never scored."""
+        while 0 < self.emulator_act < screen.act:
+            before = self.emulator_act
+            self.flow(
+                screen.floor, f"catching up from act {before}", f"act {screen.act}"
+            )
+            self.obs, self.info = self.env.debug_enter_next_act()
+            if self.emulator_act == before:
+                break
 
     # map ----------------------------------------------------------------------
 
@@ -959,6 +982,9 @@ class Replayer:
     def compare_map(self, screen: Screen) -> None:
         nodes = screen.body.get("nodes")
         if not nodes or screen.act in self.maps_compared:
+            return
+        if self.emulator_act != screen.act:
+            # Two different acts' maps: not a comparison of map generation at all.
             return
         self.maps_compared.add(screen.act)
         graph = self.env.map_graph()
