@@ -166,8 +166,8 @@ class CombatBudget:
 def new_run_env(seed: str, ascension: int) -> Sts2RunEnv:
     """Return a run env at `ascension` (run API 20), the level passed straight through.
 
-    The run engine models 0-9 (`Ascension.MaxRunLevel`): DoubleBoss, A10, is not modelled,
-    and the env's `reset` raises for a level outside that range rather than play it wrong.
+    The run engine plays the game's 0-10 (`Ascension.MaxRunLevel`), A10's second boss on
+    the last act included, and the env's `reset` raises for a level outside that range.
     """
     return Sts2RunEnv(seed=seed, max_episode_steps=10**9, ascension=ascension)
 

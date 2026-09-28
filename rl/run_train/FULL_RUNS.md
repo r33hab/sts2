@@ -120,6 +120,33 @@ folder is untouched.
 **Stop:** `uv run python -m rl.run_train stop --root runs/full` (in this worktree, after
 `source ~/Documents/git/spire-coach/tools/env.sh`). Status: `... status --root runs/full`.
 
+## Real A10 (branch `m2-asc`)
+
+The run engine models A10: DoubleBoss gives the last act a second boss, one map row above
+the first (decompiled `RunManager.GenerateRooms`, `StandardActMap`, `RoomSet`,
+`NRewardsScreen`). The last act's boss rooms pay nothing (`RewardsSet.WithRewardsFromRoom`):
+an empty screen whose Proceed leads to the second boss or to the win. Reward cards roll
+their act-scaled upgrade (`CardFactory.UpgradedCardOddScaling`, halved by Scarcity).
+
+- **Play real A10:** a new job plays it by default (`start --root runs/a10 --ascension 10`).
+  Restarting an A9-for-A10 job keeps it at 9/10; `start --ascension 10` on it moves it to
+  real A10 and drops the stand-in. A stand-in must name a level above the one played.
+- **Smoke test:** `uv run python -m rl.run_train.smoke --ascension 10 --runs 20` (rules,
+  eps 0, 120/500, seeds `S0000R0001-0020`, one process per seed, 4 at a time, nice 10).
+  It fails on any crash, unknown decision or truncated run.
+
+| drive                                    | completed | reached Act 2 / 3 | won | died in Act 1 / 2 / 3 | last act: 1st boss beaten / 2nd fought | unknown | crashes | truncated | mean floor |
+| ---------------------------------------- | --------- | ----------------: | --: | --------------------: | -------------------------------------: | ------: | ------: | --------: | ---------: |
+| A10, rules eps 0, `S0000R0001-0020`      | 20 of 20  |             2 / 0 |   0 |            18 / 2 / 0 |                                  0 / 0 |       0 |       0 |         0 |       14.1 |
+| A10, +250 max HP, eps 0.15, `X000C0001-0012` | 12 of 12 |          10 / 6 |   0 |             2 / 4 / 6 |                                  1 / 1 |       0 |       0 |         0 |       37.8 |
+
+The buffed drive (debug hook, not training data) is the one that reaches the last act:
+`X000C0010` beat its first Act 3 boss on floor 51, walked back onto the map and died to
+the second on floor 52; the longest run took 983 steps and 192 s. The same drive at A9, on
+the engine before these changes, won 2 of 12 (above). Floors are the emulator's: its Act 2 and 3 maps are 17 rows like Act 1's,
+where the game's are 16 and 15 (`BaseNumberOfRooms` 14 and 13), so the game's A10 second
+boss is floor 49, not 52.
+
 ## Risks
 
 - **Acts 2-3 are not verified against the real game** (111 of 121 monsters, 65 of 68

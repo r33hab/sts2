@@ -2326,6 +2326,22 @@ public sealed class RunEngine
     {
         if (State.CurrentNodeType == RunConstants.NodeBoss)
         {
+            // `NRewardsScreen.OnProceedButtonPressed`: with a second boss on the map and the
+            // run standing on the first, Proceed goes back to the MAP
+            // (`ProceedFromTerminalRewardsScreen`) instead of changing act. A10's last act.
+            if (
+                State.MapNodes.TryGetValue(State.CurrentMapCoord, out var bossNode)
+                && bossNode.Children.Any(child =>
+                    State.MapNodes.TryGetValue(child, out var next)
+                    && RunMapGenerator.IsSecondBoss(State, next)
+                )
+            )
+            {
+                EnterMapPhase();
+                terminal = false;
+                return 0;
+            }
+
             // RunManager.EnterNextAct: a boss is the end of the RUN only in the last act.
             // Anywhere else it is the end of an ACT, and the run walks onto the next act's
             // map — a live capture proceeds from the act 1 boss reward straight onto act

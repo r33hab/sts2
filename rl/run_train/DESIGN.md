@@ -220,15 +220,16 @@ searches run clones; the export waits for the prior integration in section 6.5.*
    `selfplay`, `runner`, `evaluate`, the stage-3 generator
    (`train_combat.py --ascension`; the combat API has taken an ascension since v16) and
    the model metadata.
-   The engine models 0-9 (`Ascension.MaxRunLevel`) and refuses 10 rather than play it
-   wrong: DoubleBoss gives the last act a second boss and spends an UpFront draw at run
-   start. **By erratum E11 the default is 10**, the user's level. Act 1 at A10 is
-   rule-identical to A9, since DoubleBoss applies only to the last act, so until
-   run-fidelity Task 5 lands, jobs play 9 and record `ascension_stands_in_for: 10`. One
-   seed does not play the same run at both levels (A10's extra UpFront draw shifts every
-   later one), so A9 results do not carry over per seed. When 10 lands, the champion's
-   `EvalMeta` no longer matches and it is re-evaluated (5.6). Sections 2.1-2.8 were
-   measured at A8, the only level the engine ran then; 2.9 is at A9.
+   The engine models 0-10 (`Ascension.MaxRunLevel`). **By erratum E11 the default is
+   10**, the user's level. DoubleBoss gives the last act a second boss, one map row above
+   the first, and spends one more UpFront draw at run start -- the last one, so an A10
+   seed plays A9's run up to the last act's boss, except where the emulator still rolls
+   an event effect off UpFront as a stand-in stream. Before the engine modelled 10, jobs
+   played 9 (Act 1 is rule-identical) and recorded `ascension_stands_in_for: 10`; such a
+   job keeps doing so on restart, and `start --ascension 10` moves it (or a new job) to
+   real A10, which drops the stand-in. The champion's `EvalMeta` then no longer matches
+   and it is re-evaluated (5.6). Sections 2.1-2.8 were measured at A8, the only level the
+   engine ran then; 2.9 is at A9.
 2. **Treasure rooms never granted the chest relic** (fixed since run API 20: the room
    offers the chest's relic as action 0, `StepTreasure`, and `RunSession`'s treasure auto
    step takes it; a test holds the room to exactly one relic). `EnterTreasureRoom` paid
@@ -541,7 +542,7 @@ seeds (5.6), at the default budget 120/500, through `evaluate.evaluate` on 8 wor
 nice 10. Its `EvalResult` is the initial champion's, `runs/stage2/champion/eval.json`.
 
 - **A9 standing in for A10** (erratum E11). The user plays A10 and the default is 10,
-  but the run engine models 0-9 until run-fidelity Task 5. Act 1 at A10 is rule-identical
+  but the run engine modelled 0-9 when this ran. Act 1 at A10 is rule-identical
   to A9, since DoubleBoss applies only to the last act, so the baseline ran at 9, and its
   `EvalMeta` says so: `ascension: 9`, `ascension_stands_in_for: 10`. At 10 the same seeds
   draw other runs (1.5.1), so these are A9's numbers. When 10 lands, the stored
@@ -1791,7 +1792,7 @@ Task 5, the default 10 (E11).
 | `workers` (stage 2 / stage 3) | 8 / 2                                                                                     | Global Constraints       |
 | `combat_budget`               | 120/500 (`CombatBudget(normal=120, hard=500)`), rechecked in Task 4                       | 2.7                      |
 | `c`, `crn_fraction`, rollout  | 0.1, 0.2, tempo                                                                           | `combat_mcts` (FINDINGS) |
-| `ascension`                   | 10 (erratum E11); A9 stands in (`ascension_stands_in_for: 10`) until the engine models 10 | 1.5.1                    |
+| `ascension`                   | 10 (erratum E11), played outright; older jobs played A9 (`ascension_stands_in_for: 10`)   | 1.5.1                    |
 | `W` (value of a boss kill)    | 26                                                                                        | 5.2                      |
 | `runs_per_generation`         | 2,000                                                                                     | 5.6                      |
 | seed sets                     | 200 eval, 500 final test, 200 budget check                                                | 5.6                      |

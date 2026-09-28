@@ -273,8 +273,16 @@ public static class RunNativeExports
             11 => WriteIntArray(run.State.NormalEncounterSequence, output),
             12 => WriteIntArray(run.State.EliteEncounterSequence, output),
             13 => WriteIntArray(run.State.EventSequence, output),
+            // 14: (act, boss, map node count, second boss). The second boss is A10's
+            // DoubleBoss on the last act and 0 everywhere else; it comes last so a reader of
+            // the first three is unchanged.
             14 => WriteIntArray(
-                [run.State.Act, run.State.BossEncounterId, run.State.MapNodes.Count],
+                [
+                    run.State.Act,
+                    run.State.BossEncounterId,
+                    run.State.MapNodes.Count,
+                    run.State.SecondBossEncounterId,
+                ],
                 output
             ),
             // 15: the whole map as (col, row, nodeType) triples, ordered so the

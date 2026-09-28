@@ -144,6 +144,16 @@ def configure(root: Path, args: argparse.Namespace) -> loop.LoopConfig:
             elif name == "export_dest" and value:
                 value = str(Path(value).expanduser().resolve())
             given[section][name] = value
+    # A job that stood a lower level in for a higher one moves to that level outright by
+    # naming it: `--ascension 10` on an A9-for-A10 job drops the stale stand-in with it.
+    stored_stand_in = base.job.ascension_stands_in_for
+    if (
+        "ascension" in given["job"]
+        and "ascension_stands_in_for" not in given["job"]
+        and stored_stand_in is not None
+        and stored_stand_in <= given["job"]["ascension"]
+    ):
+        given["job"]["ascension_stands_in_for"] = None
     config = dataclasses.replace(
         base,
         job=dataclasses.replace(base.job, **given["job"]),

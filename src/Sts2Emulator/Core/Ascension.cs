@@ -42,13 +42,11 @@ public static class Ascension
     public const int DefaultLevel = 8;
 
     /// <summary>
-    /// The highest level a RUN can be played at. DoubleBoss gives the last act a second boss,
-    /// and `RunManager.GenerateRooms` spends an UpFront draw on it at run start that every
-    /// later UpFront draw sits behind. The run engine models neither, so a run at 10 is
-    /// refused rather than played wrong; a lone combat can still be built at 10, where
-    /// DoubleBoss has nothing to change.
+    /// The highest level a RUN can be played at: <c>AscensionManager.maxAscensionAllowed</c>.
+    /// DoubleBoss gives the last act a second boss (`RunManager.GenerateRooms`), which the run
+    /// engine models -- see <c>RunMapGenerator.SelectActAndGenerateRooms</c>.
     /// </summary>
-    public const int MaxRunLevel = DeadlyEnemies;
+    public const int MaxRunLevel = DoubleBoss;
 
     /// <summary>
     /// <c>AscensionHelper.PovertyAscensionGoldMultiplier</c>: what Poverty leaves of a gold

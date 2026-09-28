@@ -109,13 +109,18 @@ public enum SelectionReturn
     Rest,
 }
 
+/// <param name="SecondBossEncounterId">
+/// The act's second boss, or 0: `RoomSet.SecondBoss`, which only DoubleBoss (A10) sets, and
+/// only on the last act (`RunManager.GenerateRooms`).
+/// </param>
 public sealed record ActRooms(
     int Act,
     int[] Events,
     int[] NormalEncounters,
     int[] EliteEncounters,
     int BossEncounterId,
-    string Ancient
+    string Ancient,
+    int SecondBossEncounterId = 0
 )
 {
     /// <summary>Stands in before a run has been generated.</summary>
@@ -468,6 +473,16 @@ public sealed class RunState
     {
         get => CurrentAct.BossEncounterId;
         set => CurrentAct = CurrentAct with { BossEncounterId = value };
+    }
+
+    /// <summary>
+    /// The act's second boss, 0 for none: A10's DoubleBoss gives the last act one, fought on
+    /// the map point one row above the first boss.
+    /// </summary>
+    public int SecondBossEncounterId
+    {
+        get => CurrentAct.SecondBossEncounterId;
+        set => CurrentAct = CurrentAct with { SecondBossEncounterId = value };
     }
 
     /// <summary>The ancient this act opens on — Neow in act 1, one of Hive's three after.</summary>
