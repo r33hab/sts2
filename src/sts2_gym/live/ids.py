@@ -105,6 +105,22 @@ def id_map_family(family: str) -> dict[str, int]:
     return _id_map()[family]
 
 
+# Monster classes that EXTEND a modelled monster and declare no move machine of their own,
+# by the class they extend. The emulator has no id for them because it needs none: the
+# Decimillipede's three segments are `DecimillipedeSegment` plus a scene ("All logic lives
+# in the DecimillipedeSegment", decompiled DecimillipedeSegmentFront.cs), and the Mysterious
+# Knight is a `FlailKnight` whose AfterAddedToRoom adds Strength and Plating -- powers the
+# snapshot carries anyway (MysteriousKnight.cs; CombatFactory.CreateMysteriousKnight builds
+# it the same way). The live snapshot names the subclass, so the lookup takes it here.
+# Checked against the decompiled classes by test_live_convert.py.
+MONSTER_SUBCLASSES = {
+    "DecimillipedeSegmentBack": "DecimillipedeSegment",
+    "DecimillipedeSegmentFront": "DecimillipedeSegment",
+    "DecimillipedeSegmentMiddle": "DecimillipedeSegment",
+    "MysteriousKnight": "FlailKnight",
+}
+
+
 @cache
 def _entries_by_class_name(family: str) -> dict[str, int]:
     """One `id_map.json` family keyed by entry: `camel_to_replay_id` and the game's slug.
@@ -118,8 +134,13 @@ def _entries_by_class_name(family: str) -> dict[str, int]:
             silently pick one of them.
 
     """
+    names_to_ids = dict(_id_map()[family])
+    if family == "enemies":
+        names_to_ids |= {
+            sub: names_to_ids[base] for sub, base in MONSTER_SUBCLASSES.items()
+        }
     table: dict[str, int] = {}
-    for name, id_ in _id_map()[family].items():
+    for name, id_ in names_to_ids.items():
         for entry in (camel_to_replay_id(name), game_entry(name)):
             if table.setdefault(entry, id_) != id_:
                 raise RuntimeError(f"{family}: {entry!r} names two ids")
@@ -163,7 +184,8 @@ def enemy_def_id(entity_id: str) -> int:
     Substituting a stand-in enemy would be quietly wrong: def id selects the enemy's own
     hooks, so a capture rebuilt against the wrong monster can pass while the emulator
     models the real one incorrectly -- so an enemy absent from `data/id_map.json` is
-    refused, as a `ConversionError`. Moved here from
+    refused, as a `ConversionError`, unless it is one of the `MONSTER_SUBCLASSES`, which
+    ARE the monster they extend. Moved here from
     `scripts/generate_card_capture_tests.py`, which still imports it.
     """
     return enemy_id(re.sub(r"_\d+$", "", entity_id), path=entity_id)

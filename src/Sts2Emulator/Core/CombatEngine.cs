@@ -725,6 +725,21 @@ public static class CombatEngine
 
         // ── End of player turn ────────────────────────────────────────────────
 
+        // ── AutoPostPlay ──────────────────────────────────────────────────────
+        // `CombatManager.EndPlayerTurnPhaseOneInternal` runs the whole of
+        // `Hook.AfterAutoPostPlayPhaseEntered` the moment the player ends the turn --
+        // before `BeforeTurnEnd`, before the hand flush and before the enemies act. Both
+        // of these are that hook, so they come ahead of every turn-end hook below: Paels
+        // Eye's exhaust has not taken the hand, Plating's block is not there for Body
+        // Slam, and the player's Ritual (`AfterSideTurnEnd`) has not paid its Strength.
+        AutoPlayStampedeAttacks(state, rng);
+        AutoPlayHowlsFromExhaust(state, rng);
+
+        // `Orichalcum.BeforeSideTurnEndVeryEarly` (and the fake's) reads the block before
+        // any turn-end hook grants some, and pays in `BeforeSideTurnEnd`: Plating's
+        // `BeforeSideTurnEndEarly` block in between does not rob it of the trigger.
+        bool heldNoBlock = state.PlayerBlock == 0;
+
         // `PaelsEye.BeforeSideTurnEndEarly` exhausts the whole hand -- EARLY, so it lands
         // before the end-of-turn effects a card in hand would otherwise see. It is the
         // price of the extra turn granted at the enemy-side seam below, and its guard is
@@ -786,17 +801,7 @@ public static class CombatEngine
             Effects.CardEffects.EvokeLastOrb(state, rng);
         }
 
-        // ── AutoPostPlay ──────────────────────────────────────────────────────
-        // `CombatManager.EndPlayerTurnPhaseOneInternal` runs the whole of
-        // `Hook.AfterAutoPostPlayPhaseEntered` the moment the player ends the turn --
-        // before `BeforeTurnEnd`, before the hand flush and before the enemies act. Both
-        // of these are that hook, so they sit ahead of the `AfterSideTurnEnd` work below
-        // (Shadowmeld, DoubleDamage, TemporaryStrength) that would otherwise be gone
-        // before their damage was rolled.
-        AutoPlayStampedeAttacks(state, rng);
-        AutoPlayHowlsFromExhaust(state, rng);
-
-        Effects.RelicEffects.ApplyEndOfPlayerTurn(state, rng);
+        Effects.RelicEffects.ApplyEndOfPlayerTurn(state, rng, heldNoBlock);
         Effects.RelicEffects.ApplyBeforeEndOfPlayerTurnShared(state, rng);
 
         // `DoubleDamagePower.AfterSideTurnEnd` DECREMENTS -- so a stack bought by one
@@ -811,11 +816,19 @@ public static class CombatEngine
         // for the turn it was played and no part of the next one.
         BuffSystem.Remove(state.PlayerBuffs, BuffId.Shadowmeld);
 
+        // `BurstPower.AfterSideTurnEnd` removes itself too: "this turn", and a Burst no
+        // Skill spent does not carry into the next.
+        BuffSystem.Remove(state.PlayerBuffs, BuffId.Burst);
+
         // TangledPower.AfterSideTurnEnd removes itself when its OWNER's side turn ends —
         // the player's. Removing it at the start of the player turn instead meant the Vine
         // Shambler applied it during the enemy turn and it was gone before a single card
         // could be taxed, which made the debuff do nothing at all.
         BuffSystem.Remove(state.PlayerBuffs, BuffId.Tangled);
+
+        // `PanachePower.AfterSideTurnEnd` puts `CardsLeft` back to five: the count towards
+        // its burst is per turn, and three cards one turn and two the next are not five.
+        state.CardsPlayedSincePanacheProc = 0;
 
         // `TenderPower.AfterSideTurnEnd` returns the whole turn's tax at once. The power
         // itself stays -- it is a Counter that lasts the combat, and only what it took
@@ -2157,7 +2170,7 @@ public static class CombatEngine
                 // DealDamageToPlayer, which spends block first, so a blocking player paid
                 // the enchantment's price out of their block and a Body Slam played off it
                 // then hit for less. LoseHp is the unblockable-unpowered path.
-                Effects.CardEffects.LoseHp(state, 2);
+                Effects.CardEffects.LoseHp(state, 2, fromPlayedCard: true);
                 break;
             case Enchantment.Adroit:
                 // `RecalculateValues` sets a BlockVar from the amount, so the block IS the
@@ -3730,9 +3743,13 @@ public static class CombatEngine
         // ever gained, and announced damage the game never deals.
         enemy.Buffs.RemoveAll(buff => buff.Id is not (BuffId.Reattach or BuffId.Reviving));
 
-        // TWO, not one: the phase it dies in is not the phase it reattaches in. See the
-        // revive loop in EndTurn.
-        BuffSystem.Apply(enemy.Buffs, BuffId.Reviving, 2);
+        // TWO, not one, for a death on the player's turn: the phase it dies in is not the
+        // phase it reattaches in. See the revive loop in EndTurn. A death on the ENEMY turn
+        // (Thorns as it swings, poison as its turn starts) takes ONE: the game's roll at
+        // the next player turn leaves the forced DEAD_MOVE at once -- it carries no
+        // MustPerformOnce -- so REATTACH shows that turn and heals in the next enemy phase.
+        // Either way the loop does not visit this segment again in the phase it died in.
+        BuffSystem.Apply(enemy.Buffs, BuffId.Reviving, state.PlayerTurn ? 2 : 1);
         // A HealIntent, so the readout says what the turn is spent on.
         enemy.CurrentIntent = new Intent(IntentType.Buff, 0);
         enemy.Block = 0;
@@ -4557,6 +4574,46 @@ public static class CombatEngine
         }
     }
 
+    /// <summary>
+    /// <c>CurlUpPower.AfterCardPlayed</c>: the card that hit the creature has finished, so
+    /// it gains the power's amount as Unpowered block and the power goes (decompiled
+    /// CurlUpPower.cs). Armed by <c>CardEffects.DealDamageToEnemy</c>.
+    /// </summary>
+    private static void PayCurlUp(CombatState state)
+    {
+        foreach (var enemy in state.Enemies)
+        {
+            if (!enemy.CurlUpArmed)
+            {
+                continue;
+            }
+
+            enemy.CurlUpArmed = false;
+            int curlUp = BuffSystem.Get(enemy.Buffs, BuffId.CurlUp);
+            if (curlUp > 0 && enemy.Hp > 0)
+            {
+                enemy.Block += curlUp;
+                BuffSystem.Remove(enemy.Buffs, BuffId.CurlUp);
+            }
+        }
+    }
+
+    /// <summary>
+    /// `RupturePower.AfterCardPlayed`: the Strength banked for HP the card cost while it
+    /// was being played, paid now that it has finished (decompiled RupturePower.cs).
+    /// </summary>
+    private static void PayRupture(CombatState state)
+    {
+        if (state.RuptureOwed <= 0)
+        {
+            return;
+        }
+
+        int owed = state.RuptureOwed;
+        state.RuptureOwed = 0;
+        Effects.RelicEffects.GainPlayerStrength(state, owed);
+    }
+
     private static void ApplyAfterCardPlayedPowers(
         CombatState state,
         CardDef def,
@@ -4565,6 +4622,9 @@ public static class CombatEngine
     )
     {
         Effects.RelicEffects.ApplyAfterCardPlayed(state, def, rng, energySpent);
+        PayCurlUp(state);
+        PayRupture(state);
+        Effects.RelicEffects.FinishBlockDoublingCard(state);
 
         // `TenderPower.AfterCardPlayed`: every card the player plays costs 1 Strength and
         // 1 Dexterity, applied `silent: true` -- so it does not go through

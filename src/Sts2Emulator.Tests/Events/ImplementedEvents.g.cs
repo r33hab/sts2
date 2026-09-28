@@ -51,6 +51,7 @@ internal static class ImplementedEvents
         "Symbiote",
         "TabletOfTruth",
         "TeaMaster",
+        "TheArchitect",
         "TheFutureOfPotions",
         "TheLanternKey",
         "TheLegendsWereTrue",

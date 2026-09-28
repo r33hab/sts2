@@ -54,7 +54,14 @@ BUFF = {name: ordinal for ordinal, name in names.buffs().items()}
 INTENT = {name: ordinal for ordinal, name in names.intents().items()}
 COMPANIONS = frozenset(
     BUFF[name]
-    for name in ("Stunned", "Reviving", "SummonCooldown", "BackupCount", "TerrorQueued")
+    for name in (
+        "Stunned",
+        "Reviving",
+        "SummonCooldown",
+        "BackupCount",
+        "TerrorQueued",
+        "WitherIntensity",
+    )
 )
 MODEL_BY_ENTRY = {model.entry: model for model in enemy_ai.MONSTERS.values()}
 STRIKE = 472  # Cards.g.cs StrikeIronclad
@@ -89,7 +96,35 @@ NO_ACT1_CORPUS = frozenset(
         "SLUMBERING_BEETLE",
         "BOWLBUG_ROCK",
         "TEST_SUBJECT",
-    }
+        "LOUSE_PROGENITOR",
+        "ENTOMANCER",
+        "EXOSKELETON",
+        "DECIMILLIPEDE_SEGMENT",
+        "BOWLBUG_EGG",
+        "BOWLBUG_NECTAR",
+        "CHOMPER",
+        "MYTE",
+        "SPINY_TOAD",
+        "OVICOPTER",
+        "TOUGH_EGG",
+        "HUNTER_KILLER",
+        "INFESTED_PRISM",
+        "THE_INSATIABLE",
+        "SLIMED_BERSERKER",
+        "TURRET_OPERATOR",
+        "AEONGLASS",
+        "GUARDBOT",
+        "NOISEBOT",
+        "STABBOT",
+        "ZAPBOT",
+        "TORCH_HEAD_AMALGAM",
+        "FABRICATOR",
+        "LIVING_SHIELD",
+        "SOUL_NEXUS",
+        "FROG_KNIGHT",
+        "QUEEN",
+        "KNOWLEDGE_DEMON",
+    },
 )
 
 # Act 2-3 encounters whose every creature has a model, played the way the Act 1 corpus is
@@ -101,6 +136,30 @@ ACT23_ENCOUNTERS = (
     "scrolls-weak",
     "slumbering-beetle",
     "test-subject",
+    "louse-progenitor",
+    "entomancer",
+    "exoskeletons-normal",
+    "decimillipede",
+    # A Flail Knight given Strength and Plating as it arrives (ids.MONSTER_SUBCLASSES).
+    "mysterious-knight",
+    # A Rock with an Egg or a Nectar; the normal fight adds the Silk.
+    "bowlbugs-weak",
+    "bowlbugs",
+    "tunneler-and-chomper",
+    "mytes",
+    "spiny-toad",
+    "ovicopter",
+    "hunter-killer",
+    "infested-prisms",
+    "insatiable",
+    "slimed-berserker",
+    "turret-operator",
+    "aeonglass",
+    "fabricator",
+    "frog-knight",
+    "soul-nexus",
+    "queen",
+    "construct-menagerie",
 )
 
 # The Test Subject killed once, early and late: AdaptablePower keeps the corpse, and it
@@ -108,6 +167,20 @@ ACT23_ENCOUNTERS = (
 ACT23_HITS = (
     ("test-subject", "TEST_SUBJECT", 1, 0),
     ("test-subject", "TEST_SUBJECT", 1, 2),
+    # A segment killed while the others stand: DEAD_MOVE (forced), then REATTACH_MOVE,
+    # then a roll (decompiled ReattachPower.cs, DecimillipedeSegment.cs). On turn 0 it
+    # dies before it has made any move at all.
+    ("decimillipede", "DECIMILLIPEDE_SEGMENT", 1, 0),
+    ("decimillipede", "DECIMILLIPEDE_SEGMENT", 1, 1),
+    ("decimillipede", "DECIMILLIPEDE_SEGMENT", 1, 3),
+    # The Queen's amalgam dies before she burns bright: she swings the axe instead
+    # (decompiled Queen.cs's YOURE_MINE_NOW branch). Killed while she shows BURN_BRIGHT,
+    # `Queen.AfterDeath` forces ENRAGE unlogged, which `enemy_ai.Queen` leaves generic.
+    ("queen", "TORCH_HEAD_AMALGAM", 1, 0),
+    # The Turret Operator dies: the Living Shield, alone, smashes.
+    ("turret-operator", "TURRET_OPERATOR", 1, 1),
+    # The Frog Knight below half health charges once (HALF_HEALTH).
+    ("frog-knight", "FROG_KNIGHT", 40, 0),
 )
 
 # Moves that ending turns cannot reach: the Rock's DIZZY needs a headbutt blocked whole,
@@ -219,7 +292,13 @@ REVIVED_GIANT_MAX_HP = 999_999_999
 
 # `TestSubject.RespawnMove` raises its max HP to the next form's (CombatEngine.cs
 # RespawnTestSubject): the same creature, respawned.
-RESPAWNING_DEF_IDS = frozenset({ids.enemy_id("TEST_SUBJECT")})
+RESPAWNING_DEF_IDS = frozenset(
+    {
+        ids.enemy_id("TEST_SUBJECT"),
+        # `ToughEgg.Hatch` rolls the hatchling's HP onto the same creature.
+        ids.enemy_id("TOUGH_EGG"),
+    },
+)
 
 
 # ── The emulator side ────────────────────────────────────────────────────────
@@ -748,6 +827,33 @@ class Act23SelfConsistencyTests(_Rebuilds):
         "SPECTRAL_KNIGHT",
         "SCROLL_OF_BITING",
         "SLUMBERING_BEETLE",
+        "LOUSE_PROGENITOR",
+        "ENTOMANCER",
+        "EXOSKELETON",
+        "DECIMILLIPEDE_SEGMENT",
+        "BOWLBUG_EGG",
+        "BOWLBUG_NECTAR",
+        "CHOMPER",
+        "MYTE",
+        "SPINY_TOAD",
+        "OVICOPTER",
+        "TOUGH_EGG",
+        "HUNTER_KILLER",
+        "INFESTED_PRISM",
+        "THE_INSATIABLE",
+        "SLIMED_BERSERKER",
+        "TURRET_OPERATOR",
+        "AEONGLASS",
+        "GUARDBOT",
+        "NOISEBOT",
+        "STABBOT",
+        "ZAPBOT",
+        "TORCH_HEAD_AMALGAM",
+        "FABRICATOR",
+        "LIVING_SHIELD",
+        "SOUL_NEXUS",
+        "FROG_KNIGHT",
+        "QUEEN",
     }
 
     def test_every_act23_fight_rebuilds_every_turn(self) -> None:
@@ -898,8 +1004,11 @@ def machine(entry: str) -> Any:
 def first_intent(written: tuple[str, ...]) -> str:
     """Map a move's first intent, as the parser wrote it, to the live `IntentType`.
 
-    `DebuffIntent(strong: true)` reads DebuffStrong (decompiled DebuffIntent.cs).
+    `DebuffIntent(strong: true)` reads DebuffStrong (decompiled DebuffIntent.cs). A move
+    declaring none (a Decimillipede segment's DEAD_MOVE) shows none: NONE.
     """
+    if not written:
+        return "NONE"
     kind, _, args = written[0].partition("(")
     if kind == "DebuffIntent":
         return "DEBUFF_STRONG" if "strong: true" in args else "DEBUFF"
@@ -1574,6 +1683,181 @@ class Act23ToAiTests(unittest.TestCase):
         self.assertEqual(len(warnings), 1)
         self.assertIn("not a walk", warnings[0])
 
+    def test_a_fallen_segment_shows_dead_then_reattach_then_a_roll(self) -> None:
+        # Session 2026-09-26 01:06, floor 25 (A2): the front segment falls on round 3
+        # showing BULK, shows DEAD_MOVE (forced, unlogged) and then REATTACH_MOVE at 0 HP
+        # with `revive.in_turns` 2 and 1, and comes back on 25 rolling BULK.
+        reattach = [{"id": "REATTACH_POWER", "amount": 25}]
+        ring = ["WRITHE_MOVE", "CONSTRICT_MOVE", "BULK_MOVE"]
+        dead = enemy(
+            "DECIMILLIPEDE_SEGMENT_FRONT",
+            ring,
+            "DEAD_MOVE",
+            intents=[],
+            powers_=reattach,
+            hp=0,
+        )
+        ai, intent, warnings, buffs = to_ai(dead, 2, ascension=2)
+        self.assertEqual(warnings, [])
+        # BULK's ring position: the move it fell showing, never made.
+        self.assertEqual(ai["move_index"], 2)
+        self.assertEqual(intent, emu_intent("Buff", 0))
+        self.assertIn({"id": BUFF["Reviving"], "amount": 2}, buffs)
+
+        waiting = enemy(
+            "DECIMILLIPEDE_SEGMENT_FRONT",
+            [*ring, "REATTACH_MOVE"],
+            "REATTACH_MOVE",
+            intents=[other_intent("HEAL")],
+            powers_=reattach,
+            hp=0,
+        )
+        ai, intent, warnings, buffs = to_ai(waiting, 3, ascension=2)
+        self.assertEqual(warnings, [])
+        self.assertEqual(ai["move_index"], 2)
+        self.assertEqual(intent, emu_intent("Buff", 0))
+        self.assertIn({"id": BUFF["Reviving"], "amount": 1}, buffs)
+
+        back = enemy(
+            "DECIMILLIPEDE_SEGMENT_FRONT",
+            [*ring, "REATTACH_MOVE", "BULK_MOVE"],
+            "BULK_MOVE",
+            intents=[attack_intent(6), other_intent("BUFF")],
+            powers_=reattach,
+            hp=25,
+        )
+        ai, intent, warnings, buffs = to_ai(back, 4, ascension=2)
+        self.assertEqual(warnings, [])
+        # RollsNextMove wrote the rolled ring position into MoveIndex.
+        self.assertEqual(ai["move_index"], 2)
+        self.assertEqual(intent, emu_intent("Attack", 6))
+        self.assertNotIn(BUFF["Reviving"], {item["id"] for item in buffs})
+
+    def test_a_reattached_segment_rolls_even_its_last_move(self) -> None:
+        # RAND's branches are CannotRepeat against REATTACH, the last logged move, so the
+        # move a segment fell showing can come straight back: the same session's front
+        # segment fell showing BULK and rolled BULK; the ring then walks on from it.
+        log = [
+            "WRITHE_MOVE",
+            "CONSTRICT_MOVE",
+            "BULK_MOVE",
+            "REATTACH_MOVE",
+            "BULK_MOVE",
+            "REATTACH_MOVE",
+            "BULK_MOVE",
+            "WRITHE_MOVE",
+        ]
+        ai, intent, warnings, _ = to_ai(
+            enemy(
+                "DECIMILLIPEDE_SEGMENT_FRONT",
+                log,
+                "WRITHE_MOVE",
+                intents=[attack_intent(5, 2)],
+                powers_=[{"id": "REATTACH_POWER", "amount": 25}],
+            ),
+            7,
+            ascension=2,
+        )
+        self.assertEqual(warnings, [])
+        self.assertEqual(ai["move_index"], 3)
+        self.assertEqual(intent, emu_intent("Attack", 5, 2))
+        # Off the ring without a reattach in between is a walk the machine cannot make.
+        _, _, warnings, _ = to_ai(
+            enemy(
+                "DECIMILLIPEDE_SEGMENT_MIDDLE",
+                ["BULK_MOVE", "CONSTRICT_MOVE"],
+                "CONSTRICT_MOVE",
+                intents=[attack_intent(8)],
+            ),
+            1,
+            ascension=2,
+        )
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("not a walk", warnings[0])
+
+    def test_a_bowlbug_egg_bites_every_turn(self) -> None:
+        # Session 2026-09-28 19:05, Act 2's first fight (A10): the egg's log is BITE and
+        # only BITE, at BiteDamage 8 from A9 up. MoveIndex counts the bites.
+        ai, intent, warnings, _ = to_ai(
+            enemy(
+                "BOWLBUG_EGG",
+                ["BITE_MOVE", "BITE_MOVE", "BITE_MOVE"],
+                "BITE_MOVE",
+                intents=[attack_intent(8), other_intent("DEFEND")],
+            ),
+            2,
+            ascension=10,
+        )
+        self.assertEqual(warnings, [])
+        self.assertEqual(ai["move_index"], 2)
+        self.assertEqual(intent, emu_intent("Attack", 8))
+
+    def test_the_knowledge_demon_stops_cursing_after_three(self) -> None:
+        # KnowledgeDemonPhase (EnemyAI.cs): CURSE, SLAP, KNOWLEDGE_OVERWHELMING, PONDER three
+        # times, then the three without the curse. Its CURSE opens a choice the Act 2-3
+        # corpus cannot answer by ending turns, so the walk is pinned here instead.
+        cycle = [
+            "CURSE_OF_KNOWLEDGE_MOVE",
+            "SLAP_MOVE",
+            "KNOWLEDGE_OVERWHELMING_MOVE",
+            "PONDER_MOVE",
+        ]
+        ai, intent, warnings, _ = to_ai(
+            enemy(
+                "KNOWLEDGE_DEMON",
+                [*cycle * 3, "SLAP_MOVE"],
+                "SLAP_MOVE",
+                intents=[attack_intent(18)],
+            ),
+            12,
+            ascension=10,
+        )
+        self.assertEqual(warnings, [])
+        self.assertEqual(ai["move_index"], 12)
+        self.assertEqual(intent, emu_intent("Attack", 18))
+        _, _, warnings, _ = to_ai(
+            enemy(
+                "KNOWLEDGE_DEMON",
+                [*cycle * 3, "CURSE_OF_KNOWLEDGE_MOVE"],
+                "CURSE_OF_KNOWLEDGE_MOVE",
+                intents=[other_intent("DEBUFF")],
+            ),
+            12,
+            ascension=10,
+        )
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("not a walk", warnings[0])
+
+    def test_an_exoskeleton_follows_mandibles_with_enrage(self) -> None:
+        # Session 2026-09-26 01:06, floor 18: the second slot opens on MANDIBLES, which
+        # ENRAGE follows outright, and nothing else can.
+        ai, intent, warnings, _ = to_ai(
+            enemy(
+                "EXOSKELETON",
+                ["MANDIBLES_MOVE", "ENRAGE_MOVE"],
+                "ENRAGE_MOVE",
+                intents=[other_intent("BUFF")],
+                slot=1,
+            ),
+            1,
+            ascension=2,
+        )
+        self.assertEqual(warnings, [])
+        self.assertEqual(ai["move_index"], 1)
+        self.assertEqual(intent, emu_intent("Buff", 0))
+        _, _, warnings, _ = to_ai(
+            enemy(
+                "EXOSKELETON",
+                ["MANDIBLES_MOVE", "SKITTER_MOVE"],
+                "SKITTER_MOVE",
+                intents=[attack_intent(1, 3)],
+            ),
+            1,
+            ascension=2,
+        )
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("not a walk", warnings[0])
+
     def test_a_dizzy_rock_has_spent_its_off_balance(self) -> None:
         # SelectIntent clears OffBalance as it announces DIZZY (EnemyAI.cs:1399-1408).
         ai, intent, warnings, _ = to_ai(
@@ -1962,15 +2246,15 @@ class FallbackTests(unittest.TestCase):
         self.assertIn("round 2", warnings[0])
 
     def test_an_unsupported_monster_gets_the_generic_block_and_a_warning(self) -> None:
-        # The Chomper is Hive's (Act 2), outside the tables.
+        # The Adversary Mk One is an event fight's, outside the tables.
         live = enemy(
-            "CHOMPER",
-            ["CLAMP_MOVE", "SCREECH_MOVE"],
-            "SCREECH_MOVE",
+            "THE_ADVERSARY_MK_ONE",
+            ["SMASH_MOVE", "BEAM_MOVE"],
+            "BEAM_MOVE",
             intents=[other_intent("DEBUFF")],
         )
         ai, intent, warnings, buffs = to_ai(live, turn=1)
-        self.assertNotIn(ids.enemy_id("CHOMPER"), enemy_ai.SUPPORTED)
+        self.assertNotIn(ids.enemy_id("THE_ADVERSARY_MK_ONE"), enemy_ai.SUPPORTED)
         self.assertEqual(ai, {**enemy_ai.ai_defaults(), "move_index": 1})
         self.assertEqual(intent, emu_intent("Debuff", 0))
         self.assertEqual((len(warnings), buffs), (1, []))
@@ -1978,9 +2262,9 @@ class FallbackTests(unittest.TestCase):
 
     def test_an_unsupported_attack_with_no_numbers_warns(self) -> None:
         live = enemy(
-            "CHOMPER",
-            ["CLAMP_MOVE"],
-            "CLAMP_MOVE",
+            "THE_ADVERSARY_MK_ONE",
+            ["SMASH_MOVE"],
+            "SMASH_MOVE",
             intents=[attack_intent(None, 2)],
         )
         _, intent, warnings, _ = to_ai(live, turn=0)

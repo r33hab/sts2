@@ -384,6 +384,12 @@ public static class RunConstants
     public const int EventTrial = 57;
     public const int EventTinkerTime = 58;
 
+    /// <summary>
+    /// <c>TheArchitect</c>: not drawn from any pool. <c>RunManager.EnterNextAct</c> in the
+    /// last act enters it instead of ending the run, and its PROCEED is the victory.
+    /// </summary>
+    public const int EventTheArchitect = 59;
+
     public const int SlimesWeakEncounterId = 3;
     public const int SlimesNormalEncounterId = 16;
     public const int FlyconidNormalEncounterId = 17;

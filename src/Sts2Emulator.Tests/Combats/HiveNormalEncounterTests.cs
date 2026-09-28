@@ -219,6 +219,53 @@ public class LouseProgenitorTests
         Assert.Equal(0, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.Frail));
     }
 
+    /// <summary>
+    /// <c>CurlUpPower.AfterDamageReceived</c> only REMEMBERS the card whose powered attack
+    /// hit the louse; the block comes in <c>AfterCardPlayed</c>, once that card has
+    /// finished (decompiled CurlUpPower.cs). So every hit of a multi-hit card lands before
+    /// the curl. A live Fight Me!+ (2026-09-26, floor 19) took the louse 136 -> 120 and
+    /// left it on 14 block; curling after the first hit let the second spend 8 of the block.
+    /// </summary>
+    [Fact]
+    public void CurlUpWaitsForTheWholeCard()
+    {
+        var fight = Fight
+            .Hand(TestDeck.Card(IC.TwinStrike))
+            .Energy(1)
+            .Enemy(hp: 136, defId: KE.LouseProgenitor, buffs: [new BuffState(BuffId.CurlUp, 14)]);
+
+        fight.Play();
+
+        var louse = fight.State.Enemies[0];
+        // TwinStrike: 5 twice, both into bare HP.
+        Assert.Equal(126, louse.Hp);
+        Assert.Equal(14, louse.Block);
+        Assert.Equal(0, BuffSystem.Get(louse.Buffs, BuffId.CurlUp));
+    }
+
+    /// <summary>
+    /// The hook reads no damage result, so a hit the louse blocks whole still curls it.
+    /// </summary>
+    [Fact]
+    public void ABlockedHitStillCurlsIt()
+    {
+        var fight = Fight
+            .Hand(TestDeck.Card(IC.StrikeIronclad))
+            .Energy(1)
+            .Enemy(
+                hp: 136,
+                block: 20,
+                defId: KE.LouseProgenitor,
+                buffs: [new BuffState(BuffId.CurlUp, 14)]
+            );
+
+        fight.Play();
+
+        var louse = fight.State.Enemies[0];
+        Assert.Equal(136, louse.Hp);
+        Assert.Equal(20 - 6 + 14, louse.Block);
+    }
+
     /// <summary>WEB -> CURL -> POUNCE, cycling. Curl's block is the TOUGH pair.</summary>
     [Fact]
     public void ItWebsCurlsAndPouncesInOrder()

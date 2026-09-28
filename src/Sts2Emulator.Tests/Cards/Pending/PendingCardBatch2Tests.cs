@@ -25,6 +25,27 @@ public class ExterminateTests
         Assert.Equal(before - per * 4, target.Hp);
     }
 
+    /// <summary>
+    /// `TargetType.AllEnemies` and `TargetingAllOpponents`: every hit lands on EVERY enemy
+    /// (decompiled Exterminate.cs). The arm hit the first enemy four times and left the
+    /// rest alone, which the single-enemy test above cannot see.
+    /// </summary>
+    [Fact]
+    public void EveryHitLandsOnEveryEnemy()
+    {
+        var fight = Fight
+            .Hand(new CardInstance(Exterminate, Upgraded: true))
+            .Energy(3)
+            .Enemy(hp: 400)
+            .Enemy(hp: 400)
+            .Enemy(hp: 400);
+
+        fight.Play();
+
+        // DamageVar(3) +1 upgraded, four hits each.
+        Assert.All(fight.State.Enemies, enemy => Assert.Equal(400 - 4 * 4, enemy.Hp));
+    }
+
     /// <summary>The repeat is fixed at four -- the upgrade raises DAMAGE, not the count.</summary>
     [Fact]
     public void TheUpgradeRaisesDamageNotTheCount()

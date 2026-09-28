@@ -151,6 +151,7 @@ EMU_AI_BOOLS = {
     "once_only_move_used",
     "starts_on_branch",
     "rolls_next_move",
+    "curl_up_armed",
     "off_balance",
     "nemesis_intangible_on",
     "escaped",
@@ -677,18 +678,18 @@ class EnemyFixtureTests(unittest.TestCase):
         self.assertTrue(self.result.reliable)
 
     def test_a_monster_without_a_table_is_flagged(self) -> None:
-        # The Chomper is Hive's (Act 2), outside the tables.
+        # The Adversary Mk One is an event fight's, outside the tables.
         doc = load("enemy")
         doc["enemies"][1].update(
-            id="CHOMPER",
-            entity_id="CHOMPER_1",
-            move_id="SCREECH_MOVE",
-            state_log=["CLAMP_MOVE", "SCREECH_MOVE"],
+            id="THE_ADVERSARY_MK_ONE",
+            entity_id="THE_ADVERSARY_MK_ONE_1",
+            move_id="BEAM_MOVE",
+            state_log=["SMASH_MOVE", "BEAM_MOVE"],
             ai_fields={},
         )
         result = convert.convert(doc)
         self.assertEqual(len(result.warnings), 1)
-        self.assertIn("CHOMPER", result.warnings[0])
+        self.assertIn("THE_ADVERSARY_MK_ONE", result.warnings[0])
         self.assertFalse(result.reliable)
         self.assertEqual(result.doc["enemies"][1]["ai"]["move_index"], 1)
 
@@ -955,10 +956,10 @@ class WarningTests(unittest.TestCase):
     ) -> None:
         doc = load("enemy")
         doc["enemies"][0].update(
-            id="CHOMPER",
-            entity_id="CHOMPER_0",
-            move_id="CLAMP_MOVE",
-            state_log=["CLAMP_MOVE"],
+            id="THE_ADVERSARY_MK_ONE",
+            entity_id="THE_ADVERSARY_MK_ONE_0",
+            move_id="SMASH_MOVE",
+            state_log=["SMASH_MOVE"],
             ai_fields={},
         )
         doc["enemies"][0]["intents"][0]["base_damage"] = None
@@ -1668,6 +1669,27 @@ class RelicTableTests(unittest.TestCase):
                 entry,
             )
 
+    def test_black_blood_and_touch_of_orobas_have_no_combat_state(self) -> None:
+        # BlackBlood.AfterCombatVictory heals 12 once the fight is won (the run pays it,
+        # RunRewardGenerator), and TouchOfOrobas acts only as it is obtained, refining the
+        # starter relic; neither keeps anything a combat reads. Both gated every Act 2
+        # check of the 2026-09-28 19:05 session.
+        for entry in ("BLACK_BLOOD", "TOUCH_OF_OROBAS"):
+            for counter in (None, 0, 1):
+                result = self.translate(entry, counter, {})
+                self.assertEqual(
+                    (result.relics[0]["counter"], result.warnings),
+                    (0, []),
+                    entry,
+                )
+
+    def test_radiant_pearl_has_no_combat_state(self) -> None:
+        # RadiantPearl.BeforeHandDraw fires on turn one and keeps nothing: it is 0 and
+        # quiet, where before it warned and gated every check of a run holding it.
+        for counter in (None, 0, 1):
+            result = self.translate("RADIANT_PEARL", counter, {})
+            self.assertEqual((result.relics[0]["counter"], result.warnings), (0, []))
+
     def test_paels_wing_has_no_combat_state(self) -> None:
         # PaelsWing.cs has no combat hook at all (its whole effect is a card-reward-screen
         # alternative), and RelicEffects.cs has no case for it, so nothing in combat reads
@@ -1851,6 +1873,22 @@ class IdTests(unittest.TestCase):
     def test_enemy_def_id_strips_the_entity_index(self) -> None:
         self.assertEqual(ids.enemy_def_id("TWO_TAILED_RAT_2"), TWO_TAILED_RAT)
 
+    def test_a_monster_subclass_is_the_monster_it_extends(self) -> None:
+        # The Decimillipede's three segments are DecimillipedeSegment and a scene
+        # (decompiled DecimillipedeSegmentFront.cs: "All logic lives in the
+        # DecimillipedeSegment"), and the Mysterious Knight is a Flail Knight given
+        # Strength and Plating as it arrives. The live snapshot names the subclass.
+        segment = ids.enemy_id("DECIMILLIPEDE_SEGMENT")
+        for part in ("FRONT", "MIDDLE", "BACK"):
+            self.assertEqual(
+                ids.enemy_def_id(f"DECIMILLIPEDE_SEGMENT_{part}_0"),
+                segment,
+            )
+        self.assertEqual(
+            ids.enemy_id("MYSTERIOUS_KNIGHT"),
+            ids.enemy_id("FLAIL_KNIGHT"),
+        )
+
 
 # ── Names the converter writes must exist in the emulator ────────────────────
 
@@ -1950,6 +1988,26 @@ class DecompiledConsistencyTests(unittest.TestCase):
             and "IsPositive => false" in text
         }
         self.assertEqual(down, powers.STRENGTH_DOWN_VARIANTS)
+
+    def test_the_monster_subclasses(self) -> None:
+        # Every alias names a class that extends its target and declares no move machine
+        # of its own, so it cannot behave differently from what it stands for; and every
+        # monster that extends another modelled one without its own machine is aliased.
+        folder = DECOMPILED / "MegaCrit.Sts2.Core.Models.Monsters"
+        modelled = set(ids.id_map_family("enemies"))
+        found = {}
+        for path in folder.glob("*.cs"):
+            text = path.read_text(encoding="utf-8")
+            base = re.search(rf"class {path.stem} : (\w+)", text)
+            if (
+                base
+                and base.group(1) != "MonsterModel"
+                and "GenerateMoveStateMachine" not in text
+                and path.stem not in modelled
+            ):
+                found[path.stem] = base.group(1)
+        self.assertEqual(found, ids.MONSTER_SUBCLASSES)
+        self.assertLessEqual(set(found.values()), modelled)
 
     def test_the_branch_state_ids(self) -> None:
         folder = DECOMPILED / "MegaCrit.Sts2.Core.Models.Monsters"
@@ -2151,7 +2209,7 @@ class LoaderShapeTests(unittest.TestCase):
         fields = loader_fields()
         for kind in (*LOADER_REQUIRED, "potion", "pile", "draw", "incoming", "ai"):
             self.assertIn(kind, fields)
-        self.assertEqual(len(fields["ai"]), 19)
+        self.assertEqual(len(fields["ai"]), 20)
         self.assertEqual(len(fields["card"]), 23)
         self.assertGreater(len(fields["counter"]), 60)
 

@@ -48,6 +48,21 @@ public class BurstTests
         Assert.Equal(60 - 6, fight.Enemy0.Hp);
         Assert.Equal(1, fight.PlayerBuffAmount(BuffId.Burst));
     }
+
+    /// <summary>
+    /// "This turn": `BurstPower.AfterSideTurnEnd` removes itself at its owner's turn end
+    /// (decompiled BurstPower.cs), so a Burst no Skill spent does not wait for next turn's.
+    /// </summary>
+    [Fact]
+    public void AnUnspentBurstEndsWithTheTurn()
+    {
+        var fight = Fight.Hand(Card(SI.Burst)).Energy(9).PlayerHp(999).Enemy(hp: 60);
+        fight.Play();
+
+        fight.EndTurn();
+
+        Assert.Equal(0, fight.PlayerBuffAmount(BuffId.Burst));
+    }
 }
 
 public class MasterPlannerTests

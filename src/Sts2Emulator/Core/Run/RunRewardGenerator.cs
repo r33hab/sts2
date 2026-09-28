@@ -330,8 +330,18 @@ public static class RunRewardGenerator
         if (Effects.RelicEffects.WongosTicketPaysOut(state))
         {
             Effects.RelicEffects.RetireWongosTicket(state);
-            state.PendingRelicReward = true;
-            for (int i = 0; i < Effects.RelicEffects.WongosTicketRelics; i++)
+            // Its three are RelicRewards added to the room's own. In a room that pays no
+            // relic of its own (a monster room), the screen's relic slot is the first of
+            // the three, so only two queue behind it -- the shape Lava Rock's two already
+            // have. Queuing all three AND filling the slot paid four.
+            int owed = Effects.RelicEffects.WongosTicketRelics;
+            if (!state.PendingRelicReward)
+            {
+                state.PendingRelicReward = true;
+                owed--;
+            }
+
+            for (int i = 0; i < owed; i++)
             {
                 state.PendingBonusRelicRewards.Add(NextRelic(state));
             }

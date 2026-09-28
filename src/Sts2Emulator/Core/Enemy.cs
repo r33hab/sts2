@@ -136,6 +136,15 @@ public sealed class EnemyState
     public bool RollsNextMove;
 
     /// <summary>
+    /// <c>CurlUpPower</c>'s remembered card: a powered attack from a card has hit this
+    /// creature during the current play, so the curl's block is owed once that card has
+    /// finished (<c>AfterDamageReceived</c> stores the card, <c>AfterCardPlayed</c> pays).
+    /// Only ever true inside one card's play -- which can pause on a selection, so it is
+    /// state the clone has to carry.
+    /// </summary>
+    public bool CurlUpArmed;
+
+    /// <summary>
     /// <c>NemesisPower</c>'s private flip bool: false, then true, then false, once per
     /// enemy side turn. True means the power applied Intangible on this flip.
     /// </summary>
