@@ -21,12 +21,23 @@ for _path in (ROOT, ROOT / "rl", ROOT / "src"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
+import torch  # noqa: E402
 import train_combat  # noqa: E402
+from combat_mcts import run_search  # noqa: E402
+from combat_net import CombatNet, collate  # noqa: E402
+from combat_tokens import (  # noqa: E402
+    F_ENDTURN_DEATH,
+    F_ENDTURN_KNOWN,
+    F_ENDTURN_MEAN,
+    F_ENDTURN_WORST,
+    VOCAB,
+)
 
-from rl.prior_loop import cli, loop, real_fights  # noqa: E402
+from rl.prior_loop import cli, generate, loop, real_fights  # noqa: E402
 
 # The frozen set's own hash. Changing fight_set.json changes this; it must not change.
 FIGHT_SET_SHA256 = "8acde2f68b456b80e6dc05aca6544415f179a3617961749af0aba46021e3c124"
+REAL_SET_SHA256 = "8365dd42a35fbd1459fa646b1699484a602cf07ebd8e7d52f6a68a524cbe9d72"
 
 
 def fake_blob(
@@ -143,8 +154,9 @@ class PriorLoopTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name) / "prior"
         self.export = Path(self.tmp.name) / "export"
-        self.config = loop.PriorConfig(ascension=10)
+        self.config = loop.PriorConfig(ascension=10, source="synthetic")
         self.fights = loop.load_fight_set()
+        self.real = real_fights.load_real_set()[:40]
         nice = mock.patch.object(loop, "ensure_nice")
         nice.start()
         self.addCleanup(nice.stop)
@@ -156,6 +168,7 @@ class PriorLoopTest(unittest.TestCase):
             self.config,
             evaluate_fn=evaluate,
             fight_set=self.fights,
+            real_set=self.real,
             export_dest=self.export if export else None,
         )
 
@@ -358,8 +371,15 @@ class PriorLoopTest(unittest.TestCase):
         self.assertEqual(model["train_flags"]["value_lambda"], 0.3)
         self.assertEqual((self.export / "combat_policy.pt").read_bytes(), b"policy")
         manifest = json.loads((self.root / "iter_0000" / loop.MANIFEST).read_text())
-        self.assertEqual(manifest["comparison"]["overgrowth_weak_normal"]["n"], 96)
-        self.assertEqual(manifest["comparison"]["elite_boss"]["n"], 72)
+        self.assertEqual(manifest["gate"], "real")
+        self.assertEqual(manifest["comparison"]["all"]["n"], 40)
+        self.assertIn("potions", manifest["comparison"])
+        design = manifest["sets"]["design"]["comparison"]
+        self.assertEqual(design["overgrowth_weak_normal"]["n"], 96)
+        self.assertEqual(design["elite_boss"]["n"], 72)
+        equal_time = manifest["sets"]["real"]["equal_time"]
+        self.assertGreaterEqual(equal_time["no_prior_sims"], 1)
+        self.assertEqual(equal_time["comparison"]["all"]["n"], 40)
         self.assertEqual(manifest["trained"]["report"]["best_val_policy"], 0.9876)
 
     def test_the_champion_is_replayed_when_the_api_version_changes(self):
@@ -367,13 +387,16 @@ class PriorLoopTest(unittest.TestCase):
         evaluate = FakeEval()
         with trainer.patch():
             self.assertTrue(self.make(evaluate).run(1))
-        self.assertEqual([policy for policy, _ in evaluate.calls].count(None), 1)
+        # The search without a prior on the gate set, again at equal time, and on the
+        # design set (the champion, stored).
+        self.assertEqual([policy for policy, _ in evaluate.calls].count(None), 3)
         stored = json.loads((self.root / loop.CHAMPION_EVAL).read_text())
-        stored["meta"]["native_api_version"] -= 1
+        stored["sets"]["design"]["meta"]["native_api_version"] -= 1
         (self.root / loop.CHAMPION_EVAL).write_text(json.dumps(stored))
         with trainer.patch():
             self.assertTrue(self.make(evaluate).run(2))
-        self.assertEqual([policy for policy, _ in evaluate.calls].count(None), 2)
+        # The gate set is replayed for its timing anyway; the stale design result too.
+        self.assertEqual([policy for policy, _ in evaluate.calls].count(None), 6)
 
     def test_a_restart_may_change_workers_only(self):
         self.assertEqual(loop.resolve_config(self.root, {"workers": 4}).workers, 4)
@@ -402,42 +425,176 @@ class PriorLoopTest(unittest.TestCase):
 
 
 class RealPipelineTest(unittest.TestCase):
-    """One iteration end to end with the real generate, train and fight set player."""
+    """One iteration end to end: real generation, training and both sets' play."""
 
-    def test_one_small_iteration(self):
+    def test_one_small_iteration_on_real_fights(self):
+        gate = real_fights.load_real_set()
+        training = [
+            {**fight, "index": i, "seed": 900 + i}
+            for i, fight in enumerate(gate[240:242])
+        ]
         with (
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.object(loop, "ensure_nice"),
+            mock.patch.object(real_fights, "training_fights", return_value=training),
         ):
             config = loop.PriorConfig(
                 ascension=10,
-                fights=2,
                 sims=4,
                 workers=1,
-                encounters=(8,),
+                train_fights=2,
                 epochs=1,
                 eval_sims=4,
                 torch_threads=1,
+                prior_min_visits=2,
             )
-            fights = loop.load_fight_set()[:2]
-            prior_loop = loop.PriorLoop(Path(tmp), config, fight_set=fights)
+            prior_loop = loop.PriorLoop(
+                Path(tmp),
+                config,
+                fight_set=loop.load_fight_set()[:2],
+                real_set=gate[:2],
+            )
             self.assertTrue(prior_loop.run(1))
-            manifest = json.loads((Path(tmp) / "iter_0000" / loop.MANIFEST).read_text())
+            it0 = Path(tmp) / "iter_0000"
+            manifest = json.loads((it0 / loop.MANIFEST).read_text())
+            self.assertEqual(manifest["generated"]["source"], "real")
             self.assertEqual(manifest["generated"]["fights"], 2)
+            self.assertTrue(manifest["trained"]["flags"]["ablate_endturn"])
+            self.assertEqual(manifest["gate"], "real")
             self.assertEqual(manifest["comparison"]["all"]["n"], 2)
-            results = json.loads((Path(tmp) / "iter_0000" / loop.EVAL).read_text())
-            for side in ("champion", "challenger"):
-                self.assertEqual(
-                    [r["seed"] for r in results[side]["results"]],
-                    [400, 401],
+            report = json.loads((it0 / loop.EVAL).read_text())
+            real = report["sets"]["real"]
+            self.assertEqual(
+                [r["seed"] for r in real["challenger"]["results"]],
+                [5000, 5001],
+            )
+            # The plain search is deterministic: the gate's replay matches the stored one.
+            self.assertEqual(real["plain"]["results"], real["champion"]["results"])
+            self.assertEqual(len(report["sets"]["design"]["challenger"]["results"]), 2)
+
+
+class GenerateTest(unittest.TestCase):
+    """`generate.py`: parts, resuming, and a fight that kills its process."""
+
+    def test_a_crashing_fight_is_quarantined_and_the_rest_kept(self):
+        gate = real_fights.load_real_set()
+        fights = [{**fight, "index": i} for i, fight in enumerate(gate[:3])]
+        broken = dict(fights[1])
+        del broken["max_potion_slots"]  # dealing it raises in the worker: exit code 1
+        fights[1] = broken
+        settings = {"ascension": 10, "sims": 3, "c": 0.1, "c_puct": 0.2, "workers": 2}
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "generated.npz"
+            summary = generate.generate(fights, settings, out, part_size=3)
+            self.assertEqual((summary["fights"], summary["quarantined"]), (2, 1))
+            quarantine = json.loads(
+                (Path(tmp) / "generated_parts" / "quarantine.json").read_text(),
+            )
+            self.assertEqual([q["fight"] for q in quarantine], [1])
+            with np.load(out) as blob:
+                self.assertEqual(set(blob["fights"].tolist()), {0, 2})
+            # A restart finds every fight done or quarantined and plays nothing.
+            again = generate.generate(fights, settings, out, part_size=3)
+            self.assertEqual((again["fights"], again["crashes"]), (2, 0))
+
+
+class PriorSpeedTest(unittest.TestCase):
+    """The play-time prior: the packed forward, the probe-free encode, the lazy prior."""
+
+    def test_the_fast_prior_matches_the_network(self):
+        torch.manual_seed(0)
+        model = CombatNet(VOCAB, 19).eval()
+        gate = real_fights.load_real_set()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "policy.pt"
+            torch.save(
+                {
+                    "model": model.state_dict(),
+                    "n_buckets": 19,
+                    "width": 5,
+                    "max_hp": 80,
+                },
+                path,
+            )
+            prior = loop.load_policy(path)
+            combats = [loop.open_fight(fight, 10) for fight in gate[:6]]
+            try:
+                fast = prior.batch(combats)
+                self.assertEqual(prior.calls, len(combats))
+                tokens = [loop.encode(c.handle, c.obs, c.encounter_id) for c in combats]
+                with torch.inference_mode():
+                    _, logits = model(**collate(tokens, torch.device("cpu")))
+                for combat, answer, row in zip(combats, fast, logits, strict=True):
+                    legal = combat.legal()
+                    expected = torch.softmax(row[legal], dim=0).numpy()
+                    got = np.array([answer[a] for a in legal])
+                    np.testing.assert_allclose(got, expected, atol=1e-5)
+            finally:
+                for combat in combats:
+                    combat.close()
+
+    def test_encode_without_the_probe_zeroes_only_its_channels(self):
+        combat = loop.open_fight(real_fights.load_real_set()[0], 10)
+        try:
+            full = loop.encode(combat.handle, combat.obs, combat.encounter_id)
+            quick = loop.encode(
+                combat.handle,
+                combat.obs,
+                combat.encounter_id,
+                probe=False,
+            )
+        finally:
+            combat.close()
+        probe = [F_ENDTURN_MEAN, F_ENDTURN_WORST, F_ENDTURN_DEATH, F_ENDTURN_KNOWN]
+        self.assertTrue(full.feats[0, F_ENDTURN_KNOWN] > 0)
+        self.assertTrue((quick.feats[:, probe] == 0).all())
+        others = [c for c in range(full.feats.shape[1]) if c not in probe]
+        np.testing.assert_array_equal(full.feats[:, others], quick.feats[:, others])
+        np.testing.assert_array_equal(full.types, quick.types)
+
+    def test_a_lazy_prior_asks_less_and_only_where_visited(self):
+        fight = real_fights.load_real_set()[0]
+        calls = {}
+        for min_visits in (0, 3, 10_000):
+            combat = loop.open_fight(fight, 10)
+            asked = []
+
+            def prior(world, asked=asked):
+                asked.append(1)
+                return loop.heuristic_prior(world)
+
+            try:
+                run_search(
+                    combat,
+                    combat.legal(),
+                    60,
+                    np.random.default_rng(0),
+                    0.1,
+                    0,
+                    prior_fn=prior,
+                    prior_min_visits=min_visits,
                 )
-            # The champion (no prior) is deterministic: replaying a fight gives the same end.
-            again = loop.evaluate_fights(fights[:1], None, prior_loop.eval_settings())
-            self.assertEqual(again[0], results["champion"]["results"][0])
+            finally:
+                combat.close()
+            calls[min_visits] = len(asked)
+        self.assertEqual(calls[10_000], 1)  # the root only
+        self.assertLess(calls[3], calls[0])
+        self.assertGreater(calls[3], 1)
 
 
 class RealFightsTest(unittest.TestCase):
     """`real_fights.py` deals a recorded stage-2 fight start as that position."""
+
+    def test_the_gate_set_is_frozen_and_held_out(self):
+        fights = real_fights.load_real_set()
+        self.assertEqual(loop.fight_set_sha256(fights), REAL_SET_SHA256)
+        self.assertEqual(len(fights), 600)
+        for fight in fights:
+            shard = Path(fight["source"].split(":")[0])
+            self.assertTrue(real_fights.held_out(shard), fight["source"])
+        self.assertGreater(sum(1 for f in fights if f["potions"]), 150)
+        self.assertTrue(real_fights.held_out(Path("r0005.jsonl.gz")))
+        self.assertFalse(real_fights.held_out(Path("r0006.jsonl.gz")))
 
     def test_a_recorded_fight_is_dealt_as_recorded(self):
         state = {
@@ -462,19 +619,19 @@ class RealFightsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with gzip.open(Path(tmp) / "r0000.jsonl.gz", "wt") as shard:
                 shard.write(
-                    json.dumps({"fights": [fight, {**fight, "node_type": 7}]}) + "\n"
+                    json.dumps({"fights": [fight, {**fight, "node_type": 7}]}) + "\n",
                 )
             fights = real_fights.load_real_fights(Path(tmp), {2: 5})
         self.assertEqual(len(fights), 1)  # the event fight (7) is not asked for
         dealt = fights[0]
         self.assertEqual(dealt["deck"], [472, -131, 30, 472])
-        self.assertEqual(dealt["enchantments"], [(0, 0), (0, 0), (0, 0), (5, 1)])
+        self.assertEqual(dealt["enchantments"], [[0, 0], [0, 0], [0, 0], [5, 1]])
         self.assertEqual(real_fights.with_budget(fights, "120/500")[0]["sims"], 500)
-        combat = loop.open_fight(dealt, ascension=0)
+        combat = loop.open_fight(dealt, ascension=10)  # the loop's, not the recorded 9
         try:
             self.assertEqual((combat.hp(), combat.max_hp()), (51, 83))
             state_json = loop.native.get_state_json(combat.handle)
-            self.assertEqual(state_json["ascension"], 9)
+            self.assertEqual(state_json["ascension"], 10)
             self.assertEqual(state_json["encounter_id"], 62)
         finally:
             combat.close()

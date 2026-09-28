@@ -56,11 +56,12 @@ from combat_mcts import (  # noqa: E402
     best_action,
     drive,
     drive_batched,
+    heuristic_prior,
     run_search_gen,
     sample_extra_cards,
     sample_relics,
 )
-from combat_tokens import VOCAB  # noqa: E402
+from combat_tokens import VOCAB, encode  # noqa: E402
 
 from sts2_gym import native  # noqa: E402
 
@@ -85,6 +86,7 @@ CHAMPION = "champion.json"
 CHAMPION_EVAL = "champion_eval.json"
 GENERATED = "generated.npz"
 GENERATED_DONE = "generated.json"
+TRAINING_FIGHTS = "training_fights.json"
 TRAIN_NPZ = "train.npz"
 NET = "combat_net.pt"
 POLICY = "combat_policy.pt"
@@ -316,6 +318,21 @@ class PriorConfig:
     eval_sims: int = 60
     eval_batch_fights: int = 16
     encounters: tuple[int, ...] = ()  # empty: every act-1 id (`act_one_pool`)
+    # Where training fights come from: "synthetic" is 6.1's `train_combat.generate()`
+    # (starter deck plus sampled cards); "real" samples recorded fight starts from the
+    # full-run and stage-2 jobs (`real_fights.training_fights`). Iterations merge only
+    # with iterations of the same source.
+    source: str = "real"
+    train_fights: int = 10_000
+    full_share: float = 0.7
+    stage2_generations: tuple[int, ...] = tuple(range(12, 30))
+    # The set the gate reads: "real" (`real_fight_set.json`) or "design" (6.3's set).
+    gate: str = "real"
+    # PUCT asks for a node's prior once the node has this many visits (combat_mcts).
+    prior_min_visits: int = 0
+    # Train without the end-turn probe channels, and play without computing them.
+    ablate_endturn: bool = True
+    device: str = ""  # training device; "" is train_combat's own choice
 
     def encounter_ids(self) -> list[int]:
         return list(self.encounters) or [encounter for encounter, _ in act_one_pool()]
@@ -323,17 +340,20 @@ class PriorConfig:
     def to_json(self) -> dict[str, Any]:
         data = dataclasses.asdict(self)
         data["encounters"] = list(self.encounters)
+        data["stage2_generations"] = list(self.stage2_generations)
         return data
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> PriorConfig:
         known = {field.name for field in dataclasses.fields(cls)}
         values = {key: value for key, value in data.items() if key in known}
-        values["encounters"] = tuple(values.get("encounters", ()))
+        for name in ("encounters", "stage2_generations"):
+            if name in values:
+                values[name] = tuple(values[name])
         return cls(**values)
 
 
-RUNTIME_FIELDS = frozenset({"workers"})
+RUNTIME_FIELDS = frozenset({"workers", "device"})
 
 
 def resolve_config(root: Path, overrides: dict[str, Any]) -> PriorConfig:
@@ -417,7 +437,7 @@ def open_fight(fight: dict[str, Any], ascension: int) -> Combat:
     A fixed-set fight is `Combat.opening` with its sampled cards and relics, as
     `play_net.py` deals it. A fight with a `deck` is a recorded run position
     (`real_fights.py`): its deck with upgrades and enchantments, relics, potions, HP,
-    belt, floor and its own ascension, through the arena entry point.
+    belt and floor, through the arena entry point. Both are dealt at `ascension`.
     """
     seed, encounter = int(fight["seed"]), int(fight["encounter"])
     if "deck" not in fight:
@@ -435,14 +455,18 @@ def open_fight(fight: dict[str, Any], ascension: int) -> Combat:
         combat.handle,
         list(fight["deck"]),
         combat.obs,
-        enchantments=fight.get("enchantments"),
+        enchantments=(
+            [tuple(e) for e in fight["enchantments"]]
+            if fight.get("enchantments")
+            else None
+        ),
         encounter_id=encounter,
         relic_ids=list(fight["relics"]),
         potion_ids=list(fight["potions"]),
         player_hp=int(fight["hp"]),
         player_max_hp=int(fight["max_hp"]),
         player_gold=int(fight.get("gold", 0)),
-        ascension=int(fight["ascension"]),
+        ascension=ascension,
         total_floor=int(fight["floor"]),
         max_potion_slots=int(fight["max_potion_slots"]),
     )
@@ -484,6 +508,7 @@ def play_gen(fight: dict[str, Any], settings: dict[str, Any], *, use_prior: bool
                 None,
                 use_prior=use_prior,
                 c_puct=float(settings["c_puct"]),
+                prior_min_visits=int(settings.get("prior_min_visits", 0)),
             )
             combat.step(best_action(root, legal, rng))
             decisions += 1
@@ -504,6 +529,93 @@ def play_gen(fight: dict[str, Any], settings: dict[str, Any], *, use_prior: bool
         combat.close()
 
 
+class FastPrior:
+    """Give PUCT the policy head's prior, for one worker process.
+
+    `play_net.PolicyPrior` with the per-call overhead taken out.
+
+    The checkpoint is loaded to the CPU whatever device trained it, torch runs on one
+    thread under `inference_mode`, the end-turn probe is skipped when the network was
+    trained without it (`probe=False`), and the softmax over each position's legal
+    actions is one numpy call instead of a Python loop over tensor elements.
+    """
+
+    def __init__(self, checkpoint: Path, *, probe: bool = True):
+        import torch  # noqa: PLC0415 -- torch only in workers that play with a prior
+        from combat_net import CombatNet, collate  # noqa: PLC0415
+
+        torch.set_num_threads(1)
+        blob = torch.load(checkpoint, map_location="cpu", weights_only=True)
+        self.model = CombatNet(
+            VOCAB,
+            blob["n_buckets"],
+            d_model=blob.get("d_model", 128),
+            layers=blob.get("layers", 4),
+            heads=blob.get("heads", 4),
+        )
+        self.model.load_state_dict(blob["model"])
+        self.model.eval()
+        self.probe = probe
+        self.calls = 0
+        self._torch = torch
+        self._collate = collate
+
+    def batch(self, worlds: list[Combat]) -> list[dict[int, float]]:
+        self.calls += len(worlds)
+        legals = [world.legal() for world in worlds]
+        tokens = [
+            encode(world.handle, world.obs, world.encounter_id, probe=self.probe)
+            for world in worlds
+        ]
+        with self._torch.inference_mode():
+            _, logits = self.model(**self._collate(tokens, self._torch.device("cpu")))
+        rows = logits.numpy()
+        out = []
+        for row, legal in zip(rows, legals, strict=True):
+            scores = row[legal]
+            finite = np.isfinite(scores)
+            if not finite.any():
+                out.append(dict.fromkeys(legal, 1.0 / len(legal)))
+                continue
+            scores = np.where(finite, scores, -np.inf)
+            weights = np.exp(scores - scores[finite].max())
+            weights /= weights.sum()
+            out.append(dict(zip(legal, weights.tolist(), strict=True)))
+        return out
+
+    def __call__(self, world: Combat) -> dict[int, float]:
+        return self.batch([world])[0]
+
+
+class HeuristicPrior:
+    """The tempo rollout's weights as the prior at every node: PUCT with no network.
+
+    The control for any learned prior. A lazy learned prior (`prior_min_visits`) already
+    reads these weights at its rarely visited nodes, so a gain it shows is only the
+    network's if it beats this.
+    """
+
+    calls = 0
+
+    def batch(self, worlds: list[Combat]) -> list[dict[int, float]]:
+        self.calls += len(worlds)
+        return [heuristic_prior(world) for world in worlds]
+
+
+HEURISTIC = "heuristic"
+
+
+def load_policy(
+    checkpoint: Path | str,
+    *,
+    probe: bool = True,
+) -> FastPrior | HeuristicPrior:
+    """Load the prior a worker plays with: a checkpoint, or `HEURISTIC` for the control."""
+    if str(checkpoint) == HEURISTIC:
+        return HeuristicPrior()
+    return FastPrior(Path(checkpoint), probe=probe)
+
+
 def _evaluate_slice(payload: tuple) -> list[tuple[int, dict[str, Any]]]:
     """Play a slice of the fight set in one process: the unit of work for a worker."""
     jobs, policy, settings = payload
@@ -512,10 +624,7 @@ def _evaluate_slice(payload: tuple) -> list[tuple[int, dict[str, Any]]]:
         for index, fight in jobs:
             out.append((index, drive(play_gen(fight, settings, use_prior=False), None)))
         return out
-    # Torch is imported only by workers that play with a prior.
-    from selfplay import load_prior  # noqa: PLC0415
-
-    prior = load_prior(policy)
+    prior = load_policy(policy, probe=bool(settings.get("probe", True)))
     batch = max(1, int(settings["batch_fights"]))
     for start in range(0, len(jobs), batch):
         chunk = jobs[start : start + batch]
@@ -630,6 +739,26 @@ def compare_subsets(
     return out
 
 
+def compare_groups(
+    fights: Sequence[dict[str, Any]],
+    champion: Sequence[dict[str, Any]],
+    challenger: Sequence[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Compare two players overall, by room kind, on potion fights and on Act 2+."""
+    groups: dict[str, list[int]] = {"all": list(range(len(fights)))}
+    for i, fight in enumerate(fights):
+        groups.setdefault(fight["group"], []).append(i)
+        if fight.get("potions"):
+            groups.setdefault("potions", []).append(i)
+        if fight.get("act", 0) > 0:
+            groups.setdefault("act2+", []).append(i)
+    return {
+        name: compare([champion[i] for i in rows], [challenger[i] for i in rows])
+        for name, rows in groups.items()
+        if len(rows) > 1
+    }
+
+
 def decide(
     champion: Sequence[dict[str, Any]],
     challenger: Sequence[dict[str, Any]],
@@ -684,6 +813,7 @@ class PriorLoop:
         trainer: Any = train_combat,
         evaluate_fn: Evaluate | None = None,
         fight_set: Sequence[dict[str, Any]] | None = None,
+        real_set: Sequence[dict[str, Any]] | None = None,
         export_dest: Path | None = None,
     ):
         self.root = Path(root)
@@ -691,6 +821,13 @@ class PriorLoop:
         self.trainer = trainer
         self.evaluate_fn = evaluate_fn or evaluate_fights
         self.fights = list(fight_set) if fight_set is not None else load_fight_set()
+        if real_set is None:
+            from .real_fights import REAL_SET, load_real_set  # noqa: PLC0415
+
+            real_set = load_real_set() if REAL_SET.exists() else []
+        self.real_fights = list(real_set)
+        if config.gate == "real" and not self.real_fights:
+            raise ValueError("the gate reads the real set, and there is none")
         self.export_dest = None if export_dest is None else Path(export_dest)
         self.root.mkdir(parents=True, exist_ok=True)
         if not (self.root / CHAMPION).exists():
@@ -734,16 +871,23 @@ class PriorLoop:
 
     # ---- running ----------------------------------------------------------------------------
 
-    def run(self, iterations: int | None = None) -> bool:
+    def run(
+        self,
+        iterations: int | None = None,
+        stop_before: str | None = None,
+    ) -> bool:
         """Run phases until `iterations` iterations are complete (forever if None).
 
-        Returns False if a phase failed. The failure is logged and written to
-        `status.json`, and the next start resumes at that phase.
+        `stop_before` returns as soon as the next phase to run is that one. Returns False
+        if a phase failed. The failure is logged and written to `status.json`, and the next
+        start resumes at that phase.
         """
         ensure_nice()
         while iterations is None or self.completed() < iterations:
             k = self.current()
             phase = self.next_phase(k)
+            if phase == stop_before:
+                break
             self.iter_dir(k).mkdir(parents=True, exist_ok=True)
             self.write_status(k, phase, "running")
             log.info("iteration %d: %s", k, phase)
@@ -884,19 +1028,48 @@ class PriorLoop:
             heads=4,
             value_lambda=cfg.value_lambda,
             seed=k,
-            ablate_endturn=False,
+            ablate_endturn=cfg.ablate_endturn if self.source_of(k) == "real" else False,
             plain_cards=False,
             fraction=1.0,
+            device=cfg.device,
         )
 
     # ---- the phases -------------------------------------------------------------------------
 
+    def source_of(self, k: int) -> str:
+        """Which kind of fights iteration `k` generated; "synthetic" before sources existed."""
+        done = read_json(self.iter_dir(k) / GENERATED_DONE) or {}
+        return done.get("source", "synthetic")
+
+    def probe_of(self, iteration: int | None) -> bool:
+        """Whether iteration `iteration`'s network reads the end-turn probe channels."""
+        if iteration is None:
+            return True
+        trained = read_json(self.iter_dir(iteration) / TRAINED) or {}
+        return not trained.get("flags", {}).get("ablate_endturn", False)
+
+    def play_settings(self, sims: int, *, generation: bool = False) -> dict[str, Any]:
+        cfg = self.config
+        return {
+            "ascension": cfg.ascension,
+            "sims": sims,
+            "c": cfg.c,
+            "c_puct": cfg.c_puct,
+            "root_noise": cfg.root_noise if generation else 0.0,
+            "batch_fights": cfg.batch_fights if generation else cfg.eval_batch_fights,
+            "workers": cfg.workers,
+            "prior_min_visits": cfg.prior_min_visits,
+        }
+
     def _generate(self, k: int) -> None:
         it = self.iter_dir(k)
         for stale in (it / GENERATED, it / GENERATED_DONE):
-            stale.unlink(missing_ok=True)
+            stale.unlink(missing_ok=True)  # the parts of a real generation are kept
         champion = self.champion()
         policy = self.root / champion["policy"] if champion["policy"] else None
+        if self.config.source == "real":
+            self._generate_real(k, champion, policy)
+            return
         args = self.args(k, prior=policy is not None)
         start = time.perf_counter()
         with (
@@ -927,13 +1100,63 @@ class PriorLoop:
             },
         )
 
+    def _generate_real(
+        self,
+        k: int,
+        champion: dict[str, Any],
+        policy: Path | None,
+    ) -> None:
+        from . import generate, real_fights  # noqa: PLC0415 -- they import this module
+
+        cfg = self.config
+        it = self.iter_dir(k)
+        start = time.perf_counter()
+        # Sampled once and kept: the jobs keep writing shards, and a restart must replay
+        # the same fights for the finished parts to count.
+        chosen = it / TRAINING_FIGHTS
+        if chosen.exists():
+            fights = read_json(chosen)
+        else:
+            fights = real_fights.training_fights(
+                cfg.train_fights,
+                k,
+                full_share=cfg.full_share,
+                stage2_generations=cfg.stage2_generations,
+            )
+            write_json(chosen, fights)
+        settings = {
+            **self.play_settings(cfg.sims, generation=True),
+            "probe": self.probe_of(champion["iteration"]),
+        }
+        summary = generate.generate(fights, settings, it / GENERATED, policy=policy)
+        write_json(
+            it / GENERATED_DONE,
+            {
+                **summary,
+                "source": "real",
+                "prior_from_iteration": champion["iteration"] if policy else None,
+                "sims": cfg.sims,
+                "ascension": cfg.ascension,
+                "sources_sha256": real_fights.sources_sha256(fights),
+                "by_group": {
+                    group: sum(1 for f in fights if f["group"] == group)
+                    for group in ("hallway", "elite", "boss")
+                },
+                "with_potions": sum(1 for f in fights if f["potions"]),
+                "act2_plus": sum(1 for f in fights if f.get("act", 0) > 0),
+                "seconds": round(time.perf_counter() - start, 1),
+            },
+        )
+
     def _merge(self, k: int) -> None:
         it = self.iter_dir(k)
         first = max(0, k - self.config.window + 1)
+        source = self.source_of(k)
         sources = [
             (j, self.iter_dir(j) / GENERATED)
             for j in range(first, k + 1)
             if (self.iter_dir(j) / GENERATED_DONE).exists()
+            and self.source_of(j) == source
         ]
         merged = merge_datasets(sources)
         tmp = it / "train.tmp.npz"
@@ -966,10 +1189,16 @@ class PriorLoop:
         missing = [name for name in (NET, POLICY) if not (it / name).exists()]
         if missing:
             raise RuntimeError(f"train() returned without saving {missing}")
+        if args.device not in ("", "cpu"):  # CPU tensors, whatever device trained them
+            for name in (NET, POLICY):
+                blob = torch.load(it / name, map_location="cpu", weights_only=True)
+                torch.save(blob, it / f".{name}.tmp")
+                Path(it / f".{name}.tmp").replace(it / name)
         write_json(
             it / TRAINED,
             {
                 "flags": train_flags(args),
+                "device": args.device or "default",
                 "report": parse_train_report(captured.getvalue()),
                 "seconds": round(time.perf_counter() - start, 1),
                 "policy_sha256": sha256_file(it / POLICY),
@@ -977,81 +1206,145 @@ class PriorLoop:
             },
         )
 
-    def eval_settings(self) -> dict[str, Any]:
-        cfg = self.config
-        return {
-            "ascension": cfg.ascension,
-            "sims": cfg.eval_sims,
-            "c": cfg.c,
-            "c_puct": cfg.c_puct,
-            "batch_fights": cfg.eval_batch_fights,
-            "workers": cfg.workers,
-        }
+    def eval_settings(self, sims: int | None = None) -> dict[str, Any]:
+        return self.play_settings(self.config.eval_sims if sims is None else sims)
 
-    def eval_meta(self) -> dict[str, Any]:
+    def sets(self) -> dict[str, list[dict[str, Any]]]:
+        """Return the fight sets every challenger plays: 6.3's design set and the real set."""
+        return {"design": self.fights, "real": self.real_fights}
+
+    def eval_meta(self, name: str = "design") -> dict[str, Any]:
         """Return what an evaluation depends on; the champion is replayed when it changes."""
         cfg = self.config
         return {
+            "set": name,
             "ascension": cfg.ascension,
             "native_api_version": native_api_version(),
             "sims": cfg.eval_sims,
             "c": cfg.c,
             "c_puct": cfg.c_puct,
-            "fight_set_sha256": fight_set_sha256(self.fights),
+            "prior_min_visits": cfg.prior_min_visits,
+            "fight_set_sha256": fight_set_sha256(self.sets()[name]),
         }
 
-    def _play(self, policy: Path | None) -> tuple[list[dict[str, Any]], float]:
+    def _play(
+        self,
+        policy: Path | None,
+        name: str = "design",
+        *,
+        probe: bool = True,
+        sims: int | None = None,
+    ) -> tuple[list[dict[str, Any]], float]:
+        settings = {**self.eval_settings(sims), "probe": probe}
         start = time.perf_counter()
-        results = self.evaluate_fn(self.fights, policy, self.eval_settings())
+        results = self.evaluate_fn(self.sets()[name], policy, settings)
         return list(results), round(time.perf_counter() - start, 1)
 
-    def champion_results(self, meta: dict[str, Any]) -> list[dict[str, Any]]:
-        """Return the champion's fixed-set results: stored if nothing changed, else replayed."""
+    def _champion_policy(self) -> tuple[Path | None, bool]:
         champion = self.champion()
-        stored = read_json(self.root / CHAMPION_EVAL)
+        policy = self.root / champion["policy"] if champion["policy"] else None
+        return policy, self.probe_of(champion["iteration"])
+
+    def champion_results(self, meta: dict[str, Any]) -> list[dict[str, Any]]:
+        """Return the champion's results on `meta["set"]`: stored if nothing changed."""
+        name = meta.get("set", "design")
+        champion = self.champion()
+        stored = (read_json(self.root / CHAMPION_EVAL) or {}).get("sets", {}).get(name)
         if (
             stored
             and stored["meta"] == meta
             and stored["iteration"] == champion["iteration"]
-            and len(stored["results"]) == len(self.fights)
+            and len(stored["results"]) == len(self.sets()[name])
         ):
             return stored["results"]
         if stored:
-            log.info("re-evaluating the champion: its stored evaluation is stale")
-        policy = self.root / champion["policy"] if champion["policy"] else None
-        results, seconds = self._play(policy)
-        write_json(
-            self.root / CHAMPION_EVAL,
-            {
-                "iteration": champion["iteration"],
-                "meta": meta,
-                "summary": summarize(results),
-                "seconds": seconds,
-                "results": results,
-            },
-        )
+            log.info(
+                "re-evaluating the champion on %s: its stored evaluation is stale",
+                name,
+            )
+        policy, probe = self._champion_policy()
+        results, seconds = self._play(policy, name, probe=probe)
+        self._store_champion(name, champion["iteration"], meta, results, seconds)
         return results
 
+    def _store_champion(
+        self,
+        name: str,
+        iteration: int | None,
+        meta: dict[str, Any],
+        results: list[dict[str, Any]],
+        seconds: float,
+    ) -> None:
+        stored = read_json(self.root / CHAMPION_EVAL) or {}
+        sets = stored.get("sets", {})
+        sets[name] = {
+            "iteration": iteration,
+            "meta": meta,
+            "summary": summarize(results),
+            "seconds": seconds,
+            "results": results,
+        }
+        write_json(self.root / CHAMPION_EVAL, {"sets": sets})
+
     def _evaluate(self, k: int) -> None:
+        """Play the challenger on both sets; gate on `config.gate`; time it (equal time).
+
+        On the gate set the search without a prior is replayed right before the
+        challenger, so the two timings share the machine's load. Their ratio sets the
+        simulations the search without a prior gets for the equal-time comparison.
+        """
         it = self.iter_dir(k)
-        meta = self.eval_meta()
         champion = self.champion()
-        base = self.champion_results(meta)
-        challenger, seconds = self._play(it / POLICY)
-        write_json(
-            it / EVAL,
-            {
-                "meta": meta,
-                "champion": {"iteration": champion["iteration"], "results": base},
-                "challenger": {
-                    "iteration": k,
-                    "seconds": seconds,
-                    "results": challenger,
-                },
-                "comparison": compare_subsets(self.fights, base, challenger),
-                "decision": decide(base, challenger),
-            },
-        )
+        probe = self.probe_of(k)
+        report: dict[str, Any] = {"sets": {}}
+        for name in (
+            self.config.gate,
+            *[n for n in self.sets() if n != self.config.gate],
+        ):
+            if not self.sets()[name]:
+                continue
+            meta = self.eval_meta(name)
+            entry: dict[str, Any] = {"meta": meta}
+            if name == self.config.gate:
+                plain, plain_seconds = self._play(None, name)
+                if champion["iteration"] is None:
+                    self._store_champion(name, None, meta, plain, plain_seconds)
+            challenger, seconds = self._play(it / POLICY, name, probe=probe)
+            base = self.champion_results(meta)
+            entry.update(
+                champion={"iteration": champion["iteration"], "results": base},
+                challenger={"iteration": k, "seconds": seconds, "results": challenger},
+                comparison=(
+                    compare_groups(self.sets()[name], base, challenger)
+                    if name == "real"
+                    else compare_subsets(self.sets()[name], base, challenger)
+                ),
+            )
+            if name == self.config.gate:
+                ratio = seconds / max(plain_seconds, 1e-9)
+                sims = max(1, round(self.config.eval_sims * ratio))
+                equal, equal_seconds = self._play(None, name, sims=sims)
+                entry["equal_time"] = {
+                    "no_prior_seconds_at_eval_sims": plain_seconds,
+                    "prior_seconds": seconds,
+                    "time_ratio": round(ratio, 3),
+                    "no_prior_sims": sims,
+                    "no_prior_seconds": equal_seconds,
+                    "comparison": (
+                        compare_groups(self.sets()[name], equal, challenger)
+                        if name == "real"
+                        else compare_subsets(self.sets()[name], equal, challenger)
+                    ),
+                    "results": equal,
+                }
+                entry["plain"] = {"seconds": plain_seconds, "results": plain}
+                report["decision"] = decide(base, challenger)
+                report["gate"] = name
+            report["sets"][name] = entry
+        report["meta"] = report["sets"][self.config.gate]["meta"]
+        report["comparison"] = report["sets"][self.config.gate]["comparison"]
+        report["challenger"] = report["sets"][self.config.gate]["challenger"]
+        write_json(it / EVAL, report)
 
     def _promote(self, k: int) -> None:
         it = self.iter_dir(k)
@@ -1060,16 +1353,14 @@ class PriorLoop:
         promote = bool(decision["promote"])
         before = self.champion()
         if promote and before["iteration"] != k:
-            write_json(
-                self.root / CHAMPION_EVAL,
-                {
-                    "iteration": k,
-                    "meta": report["meta"],
-                    "summary": summarize(report["challenger"]["results"]),
-                    "seconds": report["challenger"]["seconds"],
-                    "results": report["challenger"]["results"],
-                },
-            )
+            for name, entry in report.get("sets", {}).items():
+                self._store_champion(
+                    name,
+                    k,
+                    entry["meta"],
+                    entry["challenger"]["results"],
+                    entry["challenger"]["seconds"],
+                )
             write_json(
                 self.root / CHAMPION,
                 {
@@ -1095,7 +1386,25 @@ class PriorLoop:
                 "champion_before": before["iteration"],
                 "champion_after": self.champion()["iteration"],
                 "decision": decision,
+                "gate": report.get("gate", "design"),
                 "comparison": report["comparison"],
+                "sets": {
+                    name: {
+                        "comparison": entry["comparison"],
+                        **(
+                            {
+                                "equal_time": {
+                                    k2: v
+                                    for k2, v in entry["equal_time"].items()
+                                    if k2 != "results"
+                                },
+                            }
+                            if "equal_time" in entry
+                            else {}
+                        ),
+                    }
+                    for name, entry in report.get("sets", {}).items()
+                },
                 "generated": read_json(it / GENERATED_DONE),
                 "trained": read_json(it / TRAINED),
                 "timings": read_json(it / TIMINGS) or {},
@@ -1140,7 +1449,13 @@ class PriorLoop:
                 "eval_meta": report["meta"],
                 "policy_sha256": sha256_file(dest / POLICY),
                 "net_sha256": sha256_file(dest / NET),
-                "search": {"c": self.config.c, "c_puct": self.config.c_puct},
+                "search": {
+                    "c": self.config.c,
+                    "c_puct": self.config.c_puct,
+                    "prior_min_visits": self.config.prior_min_visits,
+                },
+                # False: encode positions with `combat_tokens.encode(..., probe=False)`.
+                "probe": self.probe_of(k),
                 "exported": now(),
             },
         )
@@ -1162,8 +1477,9 @@ def train_flags(args: argparse.Namespace) -> dict[str, Any]:
         "ablate_endturn",
         "plain_cards",
         "fraction",
+        "device",
     )
-    return {key: getattr(args, key) for key in keys}
+    return {key: getattr(args, key, None) for key in keys}
 
 
 _REPORT_PATTERNS = {

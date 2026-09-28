@@ -35,6 +35,13 @@ def build_parser() -> argparse.ArgumentParser:
     run = commands.add_parser("run", help="run the loop in the foreground")
     run.add_argument("--root", type=Path, default=loop.DEFAULT_ROOT)
     run.add_argument("--iterations", type=int, default=None)
+    run.add_argument(
+        "--stop-before",
+        choices=[phase for phase, _ in loop.PHASES],
+        default=None,
+        help="return when this phase is next (e.g. merge: generate only)",
+    )
+    run.add_argument("--device", default=None, help="training device (mps, cpu, cuda)")
     run.add_argument("--workers", type=int, default=None)
     run.add_argument("--ascension", type=int, default=None)
     run.add_argument(
@@ -130,7 +137,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     overrides = {
         name: value
-        for name, value in (("workers", args.workers), ("ascension", args.ascension))
+        for name, value in (
+            ("workers", args.workers),
+            ("ascension", args.ascension),
+            ("device", args.device),
+        )
         if value is not None
     }
     config = loop.resolve_config(args.root, overrides)
@@ -139,4 +150,4 @@ def main(argv: Sequence[str] | None = None) -> int:
         config,
         export_dest=None if args.no_export else args.export_dir,
     )
-    return 0 if prior_loop.run(args.iterations) else 1
+    return 0 if prior_loop.run(args.iterations, stop_before=args.stop_before) else 1
