@@ -21,6 +21,7 @@ import importlib
 import json
 import logging
 import math
+import os
 import re
 import sys
 from collections.abc import Callable, Iterable, Mapping
@@ -30,8 +31,13 @@ from typing import Any, SupportsFloat
 
 from sts2_gym import names
 
-MODEL_DIR = (
-    Path.home() / "Documents" / "git" / "spire-coach" / "data" / "models" / "strategy"
+# The coach's own Act 1 champion by default. A caller that wants a different export --
+# the autopilot's full-run champion, say (`coach.engine.EngineClient`'s `extra_env`) --
+# sets STS2_STRATEGY_MODEL_DIR in the service's environment rather than this constant,
+# so the coach's own `coach` command keeps using its Act 1 model unchanged.
+MODEL_DIR = Path(
+    os.environ.get("STS2_STRATEGY_MODEL_DIR")
+    or (Path.home() / "Documents" / "git" / "spire-coach" / "data" / "models" / "strategy")
 )
 # The params of the service's `strategy` method.
 PARAMS = ("live_run", "decision")
