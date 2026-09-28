@@ -641,12 +641,7 @@ public static class RunRewardGenerator
     {
         var offer = state.PendingCardOffers[0];
         state.PendingCardOffers.RemoveAt(0);
-        Array.Clear(state.RewardCards);
-        Array.Clear(state.RewardUpgraded);
-        for (int i = 0; i < state.RewardCards.Length && i < offer.Length; i++)
-        {
-            state.RewardCards[i] = offer[i];
-        }
+        offer.ShowOn(state);
     }
 
     /// <summary>
@@ -668,7 +663,7 @@ public static class RunRewardGenerator
     /// <c>AdvanceRewardRngForNeowRelic</c> used to burn. That is the tell that the count
     /// was right and only the CARDS were missing.
     /// </remarks>
-    public static int[] GenerateOtherSourceCardOffer(
+    public static CardOffer GenerateOtherSourceCardOffer(
         RunState state,
         ReadOnlySpan<int> pool,
         int count
@@ -677,6 +672,7 @@ public static class RunRewardGenerator
         var poolCards = pool.ToArray();
         var blacklist = new List<int>();
         var offer = new int[count];
+        var upgraded = new bool[count];
         for (int i = 0; i < count; i++)
         {
             int rarity = RollCardRarity(
@@ -688,10 +684,10 @@ public static class RunRewardGenerator
             );
             offer[i] = ChooseCardWithRarity(poolCards, rarity, blacklist, state.PlayerRng.Rewards);
             blacklist.Add(offer[i]);
-            RollCardUpgrade(state, offer[i], state.PlayerRng.Rewards);
+            upgraded[i] = RollCardUpgrade(state, offer[i], state.PlayerRng.Rewards);
         }
 
-        return offer;
+        return new CardOffer(offer, upgraded);
     }
 
     /// <summary>
@@ -727,14 +723,19 @@ public static class RunRewardGenerator
     /// screen <c>card_select</c>, not <c>card_reward</c>. The two are different screens
     /// and the difference is visible in every capture.
     /// </summary>
-    public static void OfferPreRolledCards(RunState state, int[] offer)
+    public static void OfferPreRolledCards(RunState state, int[] offer) =>
+        OfferPreRolledCards(state, CardOffer.Plain(offer));
+
+    /// <summary>As above, with the upgrades the offer rolled.</summary>
+    public static void OfferPreRolledCards(RunState state, CardOffer offer)
     {
-        state.PendingOfferCards = offer;
+        state.PendingOfferCards = offer.Cards;
+        state.PendingOfferUpgraded = offer.Upgraded;
         state.PendingOfferPicks = 1;
         state.Phase = RunPhase.TransformSelect;
     }
 
-    public static int[] GenerateFixedRarityCardOffer(
+    public static CardOffer GenerateFixedRarityCardOffer(
         RunState state,
         int count,
         CardRarity rarity,
@@ -744,7 +745,7 @@ public static class RunRewardGenerator
     /// <summary>
     /// As above, over a NAMED pool — Sea Glass draws from another character's.
     /// </summary>
-    public static int[] GenerateFixedRarityCardOffer(
+    public static CardOffer GenerateFixedRarityCardOffer(
         RunState state,
         int count,
         CardRarity rarity,
@@ -760,14 +761,15 @@ public static class RunRewardGenerator
         };
         var blacklist = new List<int>();
         var offer = new int[count];
+        var upgraded = new bool[count];
         for (int i = 0; i < count; i++)
         {
             offer[i] = ChooseCardWithRarity(pool, rarityValue, blacklist, rng);
             blacklist.Add(offer[i]);
-            RollCardUpgrade(state, offer[i], rng);
+            upgraded[i] = RollCardUpgrade(state, offer[i], rng);
         }
 
-        return offer;
+        return new CardOffer(offer, upgraded);
     }
 
     /// <summary>
@@ -843,15 +845,14 @@ public static class RunRewardGenerator
     /// choice and an upgrade roll off `PlayerRng.Rewards`, in that order, and an offer
     /// that skipped any of them would shift every reward the run generated afterwards.
     ///
-    /// `PendingCardOffers` carries ids only, so the upgrade flag an option rolled is lost
-    /// when the offer is shown — a limitation of that mechanism rather than of this
-    /// caller, and the same one every other pending offer already has. The roll is still
-    /// made, so the STREAM is right even where the flag is dropped.
+    /// The offer carries what each option's upgrade roll gave, so an act-2 option that
+    /// landed its roll is shown upgraded.
     /// </remarks>
-    private static int[] RollExtraCardOffer(RunState state)
+    private static CardOffer RollExtraCardOffer(RunState state)
     {
         var blacklist = new List<int>();
         var offer = new int[3];
+        var upgraded = new bool[offer.Length];
         for (int i = 0; i < offer.Length; i++)
         {
             int rarity = RollRewardCardRarity(state);
@@ -863,10 +864,10 @@ public static class RunRewardGenerator
             );
             offer[i] = cardId;
             blacklist.Add(cardId);
-            RollCardUpgrade(state, cardId, state.PlayerRng.Rewards);
+            upgraded[i] = RollCardUpgrade(state, cardId, state.PlayerRng.Rewards);
         }
 
-        return offer;
+        return new CardOffer(offer, upgraded);
     }
 
     internal static void PopulateCardReward(RunState state, bool isReroll = false)
@@ -1128,6 +1129,7 @@ public static class RunRewardGenerator
 
         state.Phase = RunPhase.Shop;
         Array.Clear(state.ShopCards);
+        Array.Clear(state.ShopCardUpgraded);
         Array.Clear(state.ShopRelics);
         Array.Clear(state.ShopPotions);
         Array.Clear(state.ShopCosts);
@@ -1256,6 +1258,28 @@ public static class RunRewardGenerator
         {
             state.ParasolSweepPending = true;
             ContinueLordsParasolSweep(state);
+        }
+
+        UpgradeShopCardsByEggs(state);
+    }
+
+    /// <summary>
+    /// <c>Hook.ModifyMerchantCardCreationResults</c>: each egg upgrades the upgradable
+    /// shop cards of its type (<c>EggRelicHelper.UpgradeValidCards</c>). Called when the
+    /// shop is stocked and again when its entries update, as the game does.
+    /// </summary>
+    public static void UpgradeShopCardsByEggs(RunState state)
+    {
+        for (int slot = 0; slot < state.ShopCards.Length; slot++)
+        {
+            if (state.ShopCards[slot] == 0)
+            {
+                continue;
+            }
+
+            state.ShopCardUpgraded[slot] |= RunNonCombatEffects
+                .UpgradedByEggs(state, new CardInstance(state.ShopCards[slot], Upgraded: false))
+                .Upgraded;
         }
     }
 

@@ -112,6 +112,36 @@ public class ShopStockTests
         }
     }
 
+    /// <summary>
+    /// <c>ToxicEgg.ModifyMerchantCardCreationResults</c> (and Molten and Frozen Egg for
+    /// their types) upgrades every upgradable card of its type as the merchant stocks it,
+    /// through <c>EggRelicHelper.UpgradeValidCards</c>. A real A2 run holding Toxic Egg saw
+    /// Havoc+, Taunt+ and Restlessness+ on the floor-14 shelf, and the emulator showed all
+    /// three plain (spire-coach `20260926-220853.jsonl`).
+    /// </summary>
+    [Fact]
+    public void AnEggUpgradesTheMerchantsCardsOfItsType()
+    {
+        var engine = new RunEngine();
+        engine.Reset("QEY9JXP3KR", 2);
+        var state = engine.State;
+        state.Relics.Add(new Core.RelicInstance(RunConstants.RelicToxicEgg));
+
+        RunRewardGenerator.EnterShop(state);
+
+        for (int slot = 0; slot < state.ShopCards.Length; slot++)
+        {
+            var card = new Core.CardInstance(state.ShopCards[slot], Upgraded: false);
+            bool skill = GeneratedData.Cards.Get(card.DefId).Type == Core.CardType.Skill;
+            Assert.Equal(
+                skill && RunConstants.IsRunCardUpgradable(card),
+                state.ShopCardUpgraded[slot]
+            );
+        }
+
+        Assert.Contains(true, state.ShopCardUpgraded);
+    }
+
     [Fact]
     public void TheCardsOnOfferAreTheCardsTheMerchantHad()
     {

@@ -416,6 +416,7 @@ public static class StateCloning
             MapNodeTypes = (int[])state.MapNodeTypes.Clone(),
             MapChoices = (int[])state.MapChoices.Clone(),
             ShopCards = (int[])state.ShopCards.Clone(),
+            ShopCardUpgraded = (bool[])state.ShopCardUpgraded.Clone(),
             ShopRelics = (int[])state.ShopRelics.Clone(),
             ShopPotions = (int[])state.ShopPotions.Clone(),
             ShopCosts = (int[])state.ShopCosts.Clone(),
@@ -460,6 +461,7 @@ public static class StateCloning
             PendingSelectionArg = state.PendingSelectionArg,
             PendingSelectionCount = state.PendingSelectionCount,
             PendingOfferCards = (int[])state.PendingOfferCards.Clone(),
+            PendingOfferUpgraded = (bool[])state.PendingOfferUpgraded.Clone(),
             BundleOffer = (int[])state.BundleOffer.Clone(),
             SelectedBundle = state.SelectedBundle,
             PendingOfferPicks = state.PendingOfferPicks,
@@ -475,7 +477,13 @@ public static class StateCloning
             VisitedEventIds = [.. state.VisitedEventIds],
             PendingSelectionEventEntry = state.PendingSelectionEventEntry,
             PendingGoldRewards = [.. state.PendingGoldRewards],
-            PendingCardOffers = [.. state.PendingCardOffers.Select(offer => (int[])offer.Clone())],
+            PendingCardOffers =
+            [
+                .. state.PendingCardOffers.Select(offer => new CardOffer(
+                    (int[])offer.Cards.Clone(),
+                    (bool[])offer.Upgraded.Clone()
+                )),
+            ],
             PendingSelectionFollowUpCard = state.PendingSelectionFollowUpCard,
             PendingSelectionFollowUpCount = state.PendingSelectionFollowUpCount,
             PendingSelectionFollowUpHpLoss = state.PendingSelectionFollowUpHpLoss,

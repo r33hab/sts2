@@ -163,7 +163,7 @@ public class CrystalSphereTests
 
         offers.AddRange(
             state.PendingCardOffers.Select(offer =>
-                offer.Select(id => GeneratedData.Cards.Get(id).Entry).ToList()
+                offer.Cards.Select(id => GeneratedData.Cards.Get(id).Entry).ToList()
             )
         );
         return offers;

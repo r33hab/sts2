@@ -2364,8 +2364,12 @@ public sealed class RunEngine
             // `MawBank.AfterItemPurchased`: any merchant purchase with
             // `goldSpent > 0` closes the bank for the rest of the run.
             RunNonCombatEffects.CloseMawBank(State, cost);
-            RunNonCombatEffects.AddCardToDeck(State, new CardInstance(cardId, Upgraded: false));
+            RunNonCombatEffects.AddCardToDeck(
+                State,
+                new CardInstance(cardId, Upgraded: State.ShopCardUpgraded[action])
+            );
             State.ShopCards[action] = 0;
+            State.ShopCardUpgraded[action] = false;
         }
         else if (7 <= action && action < 10)
         {
@@ -2390,6 +2394,9 @@ public sealed class RunEngine
                 relicId,
                 SelectionReturn.Shop
             );
+            // `MerchantCardEntry.UpdateEntry` re-runs the merchant hook on what is still
+            // stocked, so an egg bought here upgrades the shelf it was bought from.
+            RunRewardGenerator.UpgradeShopCardsByEggs(State);
             if (followUp == RunFollowUp.TransformSelect)
             {
                 State.Phase = RunPhase.TransformSelect;
@@ -2909,6 +2916,8 @@ public sealed class RunEngine
                         RunConstants.BrainLeechCardChoices,
                         RunRewardGenerator.IroncladRewardPool
                     );
+                    // ForNonCombatWithDefaultOdds carries NoUpgradeRoll: nothing is upgraded.
+                    State.PendingOfferUpgraded = new bool[State.PendingOfferCards.Length];
                     State.PendingOfferPicks = 1;
                     State.Phase = RunPhase.TransformSelect;
                     return 0;
@@ -3756,6 +3765,7 @@ public sealed class RunEngine
                         RunRewardGenerator.IroncladRewardPool,
                         CardRarity.Common
                     );
+                    State.PendingOfferUpgraded = new bool[State.PendingOfferCards.Length];
                     State.PendingOfferPicks = RunConstants.GorgeCardsKept;
                     State.Phase = RunPhase.TransformSelect;
                     return 0;
@@ -4837,11 +4847,17 @@ public sealed class RunEngine
             return -1;
         }
 
+        bool upgraded =
+            action < State.PendingOfferUpgraded.Length && State.PendingOfferUpgraded[action];
         RunNonCombatEffects.AddCardToDeck(
             State,
-            new CardInstance(State.PendingOfferCards[action], Upgraded: false)
+            new CardInstance(State.PendingOfferCards[action], upgraded)
         );
         State.PendingOfferCards = [.. State.PendingOfferCards.Where((_, index) => index != action)];
+        State.PendingOfferUpgraded =
+        [
+            .. State.PendingOfferUpgraded.Where((_, index) => index != action),
+        ];
         State.PendingOfferPicks--;
 
         if (State.PendingOfferPicks > 0 && State.PendingOfferCards.Length > 0)
@@ -4856,6 +4872,7 @@ public sealed class RunEngine
     private int CloseOfferGrid()
     {
         State.PendingOfferCards = [];
+        State.PendingOfferUpgraded = [];
         State.PendingOfferPicks = 0;
         State.PendingOfferOptional = false;
 
@@ -5031,7 +5048,7 @@ public sealed class RunEngine
         // there is a range -- and that draw sits between the piles and the card offers.
         var golds = new List<int>();
         int relic = 0;
-        var offers = new List<int[]>();
+        var offers = new List<CardOffer>();
         foreach (var item in revealed)
         {
             switch (item.Kind)
@@ -5073,13 +5090,7 @@ public sealed class RunEngine
         State.RelicReward = relic;
         if (offers.Count > 0)
         {
-            Array.Clear(State.RewardCards);
-            Array.Clear(State.RewardUpgraded);
-            for (int i = 0; i < State.RewardCards.Length && i < offers[0].Length; i++)
-            {
-                State.RewardCards[i] = offers[0][i];
-            }
-
+            offers[0].ShowOn(State);
             State.RewardCardPending = true;
             State.PendingCardOffers.AddRange(offers.Skip(1));
         }
@@ -5427,7 +5438,7 @@ public sealed class RunEngine
                 }
 
                 State.RewardCardPending = true;
-                State.PendingCardOffers.Add(second);
+                State.PendingCardOffers.Add(CardOffer.Plain(second));
                 State.Phase = RunPhase.CardReward;
                 return 0;
             }
@@ -5568,11 +5579,7 @@ public sealed class RunEngine
                 )
             )
             .ToList();
-        for (int i = 0; i < State.RewardCards.Length && i < offers[0].Length; i++)
-        {
-            State.RewardCards[i] = offers[0][i];
-        }
-
+        offers[0].ShowOn(State);
         State.RewardCardPending = true;
         State.PendingCardOffers.AddRange(offers.Skip(1));
         State.Phase = RunPhase.CardReward;

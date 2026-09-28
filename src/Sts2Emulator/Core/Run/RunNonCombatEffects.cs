@@ -857,21 +857,19 @@ public static class RunNonCombatEffects
                 // player may take any number of the fifteen, including none. That is what
                 // `PendingOfferOptional` is -- every other grid names one number and
                 // closes itself when the picks run out. Closes O16.
-                state.PendingOfferCards =
-                [
-                    .. new[] { CardRarity.Common, CardRarity.Uncommon, CardRarity.Rare }.SelectMany(
-                        rarity =>
-                            RunRewardGenerator.GenerateFixedRarityCardOffer(
-                                state,
-                                5,
-                                rarity,
-                                state.PlayerRng.Rewards,
-                                RunConstants.OtherCharacterPoolFor(
-                                    Math.Max(0, state.SeaGlassCharacter)
-                                )
-                            )
-                    ),
-                ];
+                var seaGlass = new[] { CardRarity.Common, CardRarity.Uncommon, CardRarity.Rare }
+                    .Select(rarity =>
+                        RunRewardGenerator.GenerateFixedRarityCardOffer(
+                            state,
+                            5,
+                            rarity,
+                            state.PlayerRng.Rewards,
+                            RunConstants.OtherCharacterPoolFor(Math.Max(0, state.SeaGlassCharacter))
+                        )
+                    )
+                    .ToList();
+                state.PendingOfferCards = [.. seaGlass.SelectMany(offer => offer.Cards)];
+                state.PendingOfferUpgraded = [.. seaGlass.SelectMany(offer => offer.Upgraded)];
                 state.PendingOfferPicks = state.PendingOfferCards.Length;
                 state.PendingOfferOptional = true;
                 return RunFollowUp.PreRolledCardReward;

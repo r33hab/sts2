@@ -18,7 +18,8 @@ public static class RunNativeExports
     // v20: Sts2Run_Reset takes the run's ascension level, which the engine no longer
     // hardcodes at 8.
     // v21: Sts2Run_DebugResolveCombat and Sts2Run_DebugSetPlayer, the two hooks a real
-    // run's run layer is replayed through (scripts/replay_real_run.py).
+    // run's run layer is replayed through (scripts/replay_real_run.py); state lists 22
+    // (shop cards shown upgraded) and 23 (an offer grid's upgrades).
     public const int RUN_NATIVE_API_VERSION = 21;
     private static readonly RunEngine?[] _pool = new RunEngine?[256];
 
@@ -364,6 +365,10 @@ public static class RunNativeExports
                 [run.State.CurrentMapCoord.Col, run.State.CurrentMapCoord.Row],
                 output
             ),
+            // v21: which shop cards the merchant shows upgraded (an egg's doing), and which
+            // cards on an open offer grid rolled an upgrade.
+            22 => WriteBoolArray(run.State.ShopCardUpgraded, output),
+            23 => WriteBoolArray(run.State.PendingOfferUpgraded, output),
             _ => -3,
         };
     }
