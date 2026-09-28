@@ -2193,7 +2193,7 @@ class LoaderShapeTests(unittest.TestCase):
         fields = loader_fields()
         for kind in (*LOADER_REQUIRED, "potion", "pile", "draw", "incoming", "ai"):
             self.assertIn(kind, fields)
-        self.assertEqual(len(fields["ai"]), 19)
+        self.assertEqual(len(fields["ai"]), 20)
         self.assertEqual(len(fields["card"]), 23)
         self.assertGreater(len(fields["counter"]), 60)
 
