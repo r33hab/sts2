@@ -175,7 +175,12 @@ public class DoubleBossTests
 
         Assert.Equal(RunPhase.RelicReward, state.Phase);
         Assert.False(RunRewardGenerator.HasPendingRewards(state));
+        // The empty screen leads to The Architect, and only its PROCEED wins the run.
         Assert.Equal(0, engine.Step(RunConstants.RewardSkipAction, -1, out _, out terminal, out _));
+        Assert.False(terminal);
+        Assert.Equal(RunPhase.Event, state.Phase);
+        Assert.Equal(RunConstants.EventTheArchitect, state.EventId);
+        engine.Step(0, -1, out _, out terminal, out _);
         Assert.True(terminal);
         Assert.Equal(RunPhase.Complete, state.Phase);
         Assert.True(state.LastPlayerWon);

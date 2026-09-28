@@ -116,6 +116,11 @@ public class FinalActBossTests
             engine.Step(RunConstants.RewardSkipAction, -1, out _, out bool terminal, out _)
         );
 
+        // The empty screen leads to The Architect, and only its PROCEED wins the run.
+        Assert.False(terminal);
+        Assert.Equal(RunPhase.Event, engine.State.Phase);
+        Assert.Equal(RunConstants.EventTheArchitect, engine.State.EventId);
+        engine.Step(0, -1, out _, out terminal, out _);
         Assert.True(terminal);
         Assert.Equal(RunPhase.Complete, engine.State.Phase);
         Assert.True(engine.State.LastPlayerWon);
