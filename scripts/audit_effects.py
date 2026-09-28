@@ -109,7 +109,7 @@ UPGRADE = re.compile(
 
 # Vars whose value no arm should restate: the table carries Damage and Block, and the
 # calculated ones are formulas evaluated at play time.
-TABLE_VARS = frozenset({"Damage", "Block"})
+TABLE_VARS = frozenset({"Damage", "Block", "OstyDamage"})
 FORMULA_KINDS = frozenset(
     {
         "Calculated",
@@ -187,7 +187,9 @@ EMULATOR_STEPS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(r"\bDeal(?!Unpowered|DamageToPlayer)\w*Damage\w*\(|DealOmnislice\("),
     ),
     ("block", re.compile(r"\bGain\w*Block\(")),
-    ("power", re.compile(r"BuffId\.(\w+)")),
+    # An application, not a read: `BuffSystem.Get(..., BuffId.Hang)` before the attack
+    # is Hang's arm working out its amount, not Hang landing first.
+    ("power", re.compile(r"\b(?:Apply|Gain)\w*\([^;()]*?BuffId\.(\w+)")),
     ("draw", re.compile(r"\bDraw(?:Cards|Card)\(")),
     ("energy", re.compile(r"\bGainEnergy\(")),
     ("exhaust", re.compile(r"\bExhaustCard\(")),
@@ -284,7 +286,10 @@ def emulator_aim(text: str) -> set[str]:
         text,
     ):
         aims.add("single")
-    if re.search(r"\bDealDamageToAll\w*\(|DealOmnislice\(", text):
+    if re.search(
+        r"\bDealDamageToAll\w*\(|DealOmnislice\(|foreach \(var \w+ in state\.Enemies",
+        text,
+    ):
         aims.add("all")
     if re.search(r"RandomLivingEnemy|DealDamageToRandom\w*\(|RandomEnemies", text):
         aims.add("random")
@@ -327,8 +332,10 @@ def literals(text: str) -> set[int]:
     `x++` states a 1. A percentage is often a division or a decimal: 50% is `/ 2` or `0.5`,
     25% is `/ 4`, 20% `0.2m` -- so each of those states its percentage too.
     """
+    # A power taken OFF is written as a negative amount: `Focus, -3` states Hyperbeam's 3.
     values = {
-        int(value) for value in re.findall(r"(?<![\w.])(-?\d+)[mfdLu]?(?![\w.])", text)
+        abs(int(value))
+        for value in re.findall(r"(?<![\w.])(-?\d+)[mfdLu]?(?![\w.])", text)
     }
     table = constants()
     for name in re.findall(r"\b([A-Z]\w+)\b", text):
@@ -1585,6 +1592,64 @@ VERIFIED: dict[str, dict[str, tuple[str, dict[str, str]]]] = {
         ),
     },
     "cards": {
+        "DanseMacabre": (
+            "e3b74ef84e78",
+            {
+                "numbers": "EnergyVar(2) is the power's threshold, a card played at a resolved cost of 2 or more, which DanseMacabre's handler checks",
+            },
+        ),
+        "DeathsDoor": (
+            "750b97269b17",
+            {
+                "numbers": "Repeat 2: `DoomAppliedThisTurn ? 3 : 1` block gains is the one plus RepeatVar(2)",
+            },
+        ),
+        "DodgeAndRoll": (
+            "9183d4f16d12",
+            {
+                "order": "the block is gained INSIDE the Apply's argument, so it lands first, as the source's does",
+            },
+        ),
+        "GeneticAlgorithm": (
+            "c999162e2c15",
+            {
+                "hooks": "AfterDowngraded recomputes the grown block; it rides CardInstance.BonusBlock, which a downgrade leaves alone",
+            },
+        ),
+        "MakeItSo": (
+            "fb0443fd2995",
+            {
+                "numbers": "Cards 3 is CombatEngine's `SkillCardsPlayedThisTurn % 3 == 0` guard around ReturnMakeItSosToHand",
+            },
+        ),
+        "Nightmare": (
+            "5139b098892c",
+            {
+                "powers": "NightmarePower is modelled as the QueueHandCardCopies selection, whose three copies arrive before the next hand draw",
+            },
+        ),
+        "PaleBlueDot": (
+            "6ba3a59c3d3c",
+            {
+                "numbers": "CardPlay 5 is the power's `CardPlaysLastTurn >= 5` guard in the turn's hand-draw sum",
+            },
+        ),
+        "RightHandHand": (
+            "26071a3c2b74",
+            {
+                "numbers": "EnergyVar(2) is the resolved-cost threshold for its return from the discard, checked where it is fetched",
+            },
+        ),
+        "ShadowStep": (
+            "2bd5f4b1329a",
+            {"numbers": "CardsVar(3) is text only: OnPlay discards the whole hand"},
+        ),
+        "TheScythe": (
+            "6ea9eeb90a40",
+            {
+                "hooks": "AfterDowngraded recomputes the grown damage; it rides CardInstance.BonusDamage, which a downgrade leaves alone",
+            },
+        ),
         "Rampage": (
             "ab14eff6ab3f",
             {
