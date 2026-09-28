@@ -1398,20 +1398,31 @@ public static class RunRewardGenerator
         return relicId.Value;
     }
 
-    /// <summary>Shops pull the same queues from the BACK.</summary>
+    /// <summary>
+    /// Shops pull the same queues from the BACK, and only what the merchant may sell:
+    /// <c>MerchantRelicEntry.FillSlot</c> is <c>PullNextRelicFromBack(player, rarity,
+    /// r =&gt; ... &amp;&amp; r.IsAllowedInShops)</c>. A relic that fails is passed over and
+    /// stays in the bag for a chest or an elite.
+    /// </summary>
     public static int NextShopRelic(RunState state, RelicRarity rarity = RelicRarity.Shop) =>
-        PullRelic(state, fromFront: false, rarity);
+        PullRelic(
+            state,
+            fromFront: false,
+            rarity,
+            filter: relicId => GeneratedData.Relics.Get(relicId).IsAllowedInShops
+        );
 
     private static int PullRelic(
         RunState state,
         bool fromFront,
         RelicRarity? rarity = null,
-        GameRng? rngOverride = null
+        GameRng? rngOverride = null,
+        Func<int, bool>? filter = null
     )
     {
         var rolled = rarity ?? RelicGrabBag.RollRarity(rngOverride ?? state.PlayerRng.Rewards);
         var allowed = RelicGrabBag.AllowedInSoloRun(state.Floor);
-        int? relicId = state.RelicBag.Pull(rolled, fromFront, allowed);
+        int? relicId = state.RelicBag.Pull(rolled, fromFront, allowed, filter);
         if (relicId is null)
         {
             // RelicFactory falls back to a fixed relic when the bag has nothing left.

@@ -81,6 +81,37 @@ public class ShopStockTests
             .Select(item => item.GetProperty("price").GetInt32())
             .ToArray();
 
+    /// <summary>
+    /// <c>MerchantRelicEntry.FillSlot</c> pulls from the back with
+    /// <c>r =&gt; ... &amp;&amp; r.IsAllowedInShops</c>, so a relic the merchant may not sell
+    /// is passed over -- and left in the bag, since <c>PullFromBack</c> only removes what it
+    /// returns. Five relics fail it (Amethyst Aubergine, Bowler Hat, Lucky Fysh, Old Coin,
+    /// The Courier), and a replay of every committed capture's shops caught four of them on
+    /// the shelf: `Y75EFT6EDV`'s floor-3 merchant sold Red Skull where the emulator put the
+    /// Aubergine sitting behind it.
+    /// </summary>
+    [Fact]
+    public void AShopPassesOverARelicTheMerchantMayNotSell()
+    {
+        var engine = new RunEngine();
+        engine.Reset("Y75EFT6EDV");
+        var state = engine.State;
+        const int aubergine = 3; // AmethystAubergine, Common, IsAllowedInShops => false
+        const int puzzle = 43; // CentennialPuzzle, Common
+        foreach (int order in new[] { 0, 1 })
+        {
+            state.RelicBag = new RelicGrabBag();
+            state.RelicBag.Populate(
+                order == 0 ? [aubergine, puzzle] : [puzzle, aubergine],
+                new Core.Rng.GameRng(1u, "test"),
+                filterRarities: true
+            );
+
+            Assert.Equal(puzzle, RunRewardGenerator.NextShopRelic(state, Core.RelicRarity.Common));
+            Assert.Contains(aubergine, state.RelicBag.Remaining);
+        }
+    }
+
     [Fact]
     public void TheCardsOnOfferAreTheCardsTheMerchantHad()
     {
