@@ -288,13 +288,12 @@ public class RunAscensionTests
     }
 
     /// <summary>
-    /// DoubleBoss gives the last act a second boss -- and `RunManager.GenerateRooms` spends
-    /// an UpFront draw on it at run start, which every later UpFront draw sits behind. The
-    /// run engine models neither, so it refuses the level rather than run it wrong.
+    /// `AscensionManager.maxAscensionAllowed` is 10 (DoubleBoss, see DoubleBossTests); a level
+    /// outside 0-10 is refused rather than run as something it is not.
     /// </summary>
     [Theory]
     [InlineData(-1)]
-    [InlineData(10)]
+    [InlineData(11)]
     public void ALevelTheRunEngineDoesNotModelIsRefused(int ascension)
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new RunEngine().Reset(Seed, ascension));

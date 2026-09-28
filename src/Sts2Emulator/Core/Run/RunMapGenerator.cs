@@ -106,6 +106,17 @@ public static class RunMapGenerator
             state.Acts.Add(GenerateRoomsForAct(acts[index], upFront, subset));
         }
 
+        // `i == State.Acts.Count - 1 && AscensionManager.HasLevel(DoubleBoss)`: the LAST
+        // act, after its rooms, takes a second boss that is not its first --
+        // `NextItem(act.AllBossEncounters.Where(e => e.Id != act.BossEncounter.Id))`. It is
+        // the last UpFront draw of run start, so every act's rooms stand where A9's do.
+        if (Ascension.Has(state.AscensionLevel, Ascension.DoubleBoss))
+        {
+            var last = state.Acts[^1];
+            int[] others = [.. BossPoolFor(last.Act).Where(boss => boss != last.BossEncounterId)];
+            state.Acts[^1] = last with { SecondBossEncounterId = upFront.NextItem(others) };
+        }
+
         state.EventSequenceIndex = 0;
     }
 
@@ -484,25 +495,28 @@ public static class RunMapGenerator
     ];
 
     /// <summary>
-    /// The row this map puts its boss on. The standard map's is
-    /// <see cref="RunConstants.MapBossRow"/>; the golden path is one taller.
+    /// The row this map puts its last boss on. The standard map's is
+    /// <see cref="RunConstants.MapBossRow"/>; the golden path is one taller, and A10's
+    /// second boss stands one row above the first.
     /// </summary>
     /// <remarks>
     /// Read off the generated nodes rather than computed, so it answers for whatever map
     /// the run is actually standing on. The fallback is the constant, for a state whose
-    /// map has not been generated yet.
+    /// map has not been generated yet. The LAST boss, because walking off the first boss
+    /// of a double-boss act is not walking off the map.
     /// </remarks>
     public static int BossRow(RunState state)
     {
+        int row = -1;
         foreach (var node in state.MapNodes.Values)
         {
             if (node.NodeType == RunConstants.NodeBoss)
             {
-                return node.Row;
+                row = Math.Max(row, node.Row);
             }
         }
 
-        return RunConstants.MapBossRow;
+        return row >= 0 ? row : RunConstants.MapBossRow;
     }
 
     /// <summary>
@@ -612,6 +626,7 @@ public static class RunMapGenerator
         SpreadAdjacentMapPoints(state);
         StraightenPaths(state);
         AssignEncounterIds(state);
+        AddSecondBoss(state);
 
         // StandardActMap stamps the starting point LAST — `BossMapPoint.PointType =
         // Boss; StartingMapPoint.PointType = Ancient;` come after every other assignment,
@@ -625,6 +640,44 @@ public static class RunMapGenerator
         MarkRoomsForFurCoat(state);
         RefreshMapOptions(state);
     }
+
+    /// <summary>
+    /// `StandardActMap`'s <c>SecondBossMapPoint</c>, for an act with a second boss: at
+    /// <c>(GetColumnCount() / 2, GetRowCount() + 1)</c>, one row above the boss, and the boss
+    /// point's only child (<c>BossMapPoint.AddChildPoint(SecondBossMapPoint)</c>).
+    /// </summary>
+    /// <remarks>
+    /// It is not a grid point: it draws nothing off the map stream and no pass moves it, so
+    /// adding it after the grid is settled is the game's map exactly. Only the standard map
+    /// has one -- `ActMap.SecondBossMapPoint` is null for every other map, Golden Compass's
+    /// golden path included.
+    /// </remarks>
+    private static void AddSecondBoss(RunState state)
+    {
+        if (state.SecondBossEncounterId == 0)
+        {
+            return;
+        }
+
+        var boss = state.MapNodes.Values.Single(node => node.NodeType == RunConstants.NodeBoss);
+        var second = GetOrCreate(state, boss.Col, boss.Row + 1);
+        second.NodeType = RunConstants.NodeBoss;
+        second.CanBeModified = false;
+        second.EncounterId = state.SecondBossEncounterId;
+        AddEdge(state, (boss.Col, boss.Row), (second.Col, second.Row));
+    }
+
+    /// <summary>
+    /// Whether this is the act's SECOND boss point: a boss behind a boss. `RoomSet`'s
+    /// <c>NextBossEncounter</c> hands out <c>SecondBoss</c> once a boss has been visited,
+    /// and the only way onto this point is through the first.
+    /// </summary>
+    public static bool IsSecondBoss(RunState state, RunMapNode node) =>
+        node.NodeType == RunConstants.NodeBoss
+        && node.Parents.Any(parent =>
+            state.MapNodes.TryGetValue(parent, out var above)
+            && above.NodeType == RunConstants.NodeBoss
+        );
 
     /// <summary>
     /// `FurCoat.AddMarkedRooms`, called from both `AfterObtained` and
@@ -1363,7 +1416,9 @@ public static class RunMapGenerator
                 RunConstants.NodeElite => state.EliteEncounterSequence[
                     state.EliteEncountersVisited % state.EliteEncounterSequence.Length
                 ],
-                RunConstants.NodeBoss => state.BossEncounterId,
+                RunConstants.NodeBoss => IsSecondBoss(state, node)
+                    ? state.SecondBossEncounterId
+                    : state.BossEncounterId,
                 _ => node.EncounterId,
             };
             state.MapOptionCoords[i] = options[i];
