@@ -2905,6 +2905,25 @@ is what self-play will need. Captures record `profile.all_act1_bosses_seen` and
 test fails if a fixture came from a fresher account, because such a capture encodes
 different rules and is not comparable.
 
+### Replaying a real run's run layer (`scripts/replay_real_run.py`)
+
+`replay_real_run.py SESSION.jsonl ...` replays the coach's session logs (spire-coach
+`data/runs`, `data/captures`); `--fixtures` replays the committed captures. The seed of a
+real session is read from the game's own run history
+(`<SlayTheSpire2>/steam/<id>/[modded/]profileN/saves/history/<start_time>.run`, matched
+by start time and ascension, read only). Fights are resolved with
+`Sts2Run_DebugResolveCombat` and the holdings reset with `Sts2Run_DebugSetPlayer`, so
+the numbers are the run layer's alone, per category: Neow and ancients, map, encounter,
+unknown room, event, card reward, gold, potion, relic, treasure, shop, card offer, rest,
+outcome. `check_run_traces.py` runs it over every fixture and fails on any difference.
+
+**A session played with content mods cannot be replayed seed-exactly**, and the tool says
+so (`modded` on its report, left out of the totals). The first real sessions all ran
+with Workshop mods (Watcher and The Shape characters, Multiplayer Expanded's extra cards,
+BaseLib, Unlock The Spire): the character screen lists two extra characters and a
+101-card Ironclad pool, and every roll drawn over a pool moves -- the relic bags on
+run start first, then the rooms, events and bosses. Capture with content mods off.
+
 ## One-shot smoke test (verify the whole stack works)
 
 ```bash
