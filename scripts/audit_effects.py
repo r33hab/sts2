@@ -1050,6 +1050,86 @@ def check_relic_hooks(entry: Entry) -> list[str]:
     return rows
 
 
+# A relic's combat hooks by when they act, and the emulator hooks that act then: a relic
+# overriding one needs combat code, in a method so named, that names it. The same check
+# the powers' timing is (it caught Curl Up and Rupture paying mid-card).
+RELIC_TIMINGS: dict[str, tuple[frozenset[str], re.Pattern[str]]] = {
+    "after a card": (
+        frozenset(
+            {
+                "AfterCardPlayed",
+                "BeforeCardPlayed",
+                "ModifyCardPlayCount",
+                "AfterCardPlayedLate",
+            },
+        ),
+        re.compile(
+            r"CardPlayed|PlayCard|EachPlay|BeforeCard|MusicBox|ModifyXValue|Play|Cost|Free",
+        ),
+    ),
+    "at the hand draw": (
+        frozenset({"BeforeHandDraw", "ModifyHandDraw", "ModifyHandDrawLate"}),
+        re.compile(
+            r"HandDraw|OpeningHand|Toolbox|Pollinous|CombatStart|StartOfPlayerTurn|Draw",
+        ),
+    ),
+    "at a turn's start": (
+        frozenset(
+            {
+                "AfterSideTurnStart",
+                "BeforeSideTurnStart",
+                "AfterPlayerTurnStart",
+                "AfterPlayerTurnStartLate",
+                "AfterEnergyReset",
+                "AfterEnergyResetLate",
+                "AfterBlockCleared",
+            },
+        ),
+        re.compile(
+            r"StartOfPlayerTurn|CombatStart|TurnStart|OpeningHand|HandDraw|MaxEnergy|"
+            r"BlockCleared|GamblingChip|ChoicesParadox|Energy",
+        ),
+    ),
+    "at a turn's end": (
+        frozenset(
+            {
+                "BeforeSideTurnEnd",
+                "BeforeSideTurnEndEarly",
+                "BeforeSideTurnEndVeryEarly",
+                "AfterSideTurnEnd",
+            },
+        ),
+        re.compile(r"EndOfPlayerTurn|TurnEnd|Joss|Exhaust|EndTurn"),
+    ),
+    "on damage": (
+        frozenset(
+            {
+                "AfterDamageReceived",
+                "ModifyHpLostAfterOsty",
+                "ModifyHpLostAfterOstyLate",
+                "AfterCurrentHpChanged",
+            },
+        ),
+        re.compile(r"Damage|HpLost|HpChanged|Unblocked|Hp"),
+    ),
+    "on an exhaust": (frozenset({"AfterCardExhausted"}), re.compile(r"Exhaust")),
+}
+
+
+def check_relic_timing(entry: Entry) -> list[str]:
+    hooks = overrides(entry.source)
+    methods = sorted({ref.method for ref in entry.refs if not ref.run_side})
+    rows = []
+    for when, (hook_names, where) in RELIC_TIMINGS.items():
+        declared = sorted(hooks & hook_names)
+        if declared and not any(where.search(method) for method in methods):
+            rows.append(
+                f"acts {when} ({', '.join(declared)}); combat code names it only in "
+                f"{', '.join(methods[:4]) or 'no method'}",
+            )
+    return rows
+
+
 def check_unpowered(entry: Entry) -> list[str]:
     rows = []
     for kind, verb in (("Block", "Block"), ("Damage", "Damage")):
@@ -1097,6 +1177,7 @@ def relics() -> Iterable[Entry]:
 
 RELIC_CHECKS: dict[str, Check] = {
     "hooks": check_relic_hooks,
+    "timing": check_relic_timing,
     "numbers": check_numbers,
     "unpowered": check_unpowered,
 }
@@ -1537,15 +1618,59 @@ VERIFIED: dict[str, dict[str, tuple[str, dict[str, str]]]] = {
         ),
     },
     "relics": {
+        "ArtOfWar": (
+            "303dbc5e5ffc",
+            {
+                "timing": "AfterSideTurnEnd's roll-over is AttackCardsPlayedThisTurn, read at the next turn's start (ApplyStartOfPlayerTurn) before CombatEngine resets it",
+            },
+        ),
+        "BeatingRemnant": (
+            "aa6495f6372a",
+            {
+                "timing": "BeforeSideTurnStart's reset is PlayerHpLostThisTurn = 0 at the player's turn start",
+            },
+        ),
+        "BrilliantScarf": (
+            "54c7473d65eb",
+            {
+                "timing": "BeforeSideTurnStart's reset is CardsPlayedThisTurn = 0 at the player's turn start",
+            },
+        ),
+        "BurningSticks": (
+            "8efcca27323e",
+            {
+                "timing": "AfterCardExhausted is ApplyBurningSticks, called from CardEffects.ExhaustCard",
+            },
+        ),
         "CallingBell": (
             "9982cefa5124",
             {
                 "numbers": "Relics 3: three NextShopRelicOfRarity adds, Common/Uncommon/Rare",
             },
         ),
+        "FakeOrichalcum": (
+            "9c965b39a59a",
+            {
+                "timing": "BeforeSideTurnStart clears the ShouldTrigger latch; the emulator's is EndTurn's heldNoBlock, read before Plating pays",
+            },
+        ),
+        "Kusarigama": (
+            "252cf8780705",
+            {
+                "timing": "AfterSideTurnEnd's reset is the PerTurnCounters reset at the player's turn start",
+            },
+        ),
         "LargeCapsule": (
             "688308c9451d",
-            {"numbers": "Relics 2: two ApplyRelicPickup(NextRelic) calls"},
+            {
+                "numbers": "Relics 2: two ApplyRelicPickup(NextRelic) calls",
+            },
+        ),
+        "LavaLamp": (
+            "0944b2c5e9d1",
+            {
+                "timing": "run-side: AfterDamageReceived is RunEngine's TookUnblockedDamageThisCombat latch, which the reward half reads",
+            },
         ),
         "LavaRock": (
             "352376859b0d",
@@ -1553,32 +1678,95 @@ VERIFIED: dict[str, dict[str, tuple[str, dict[str, str]]]] = {
                 "numbers": "Relics 2: the screen's relic slot plus one queued bonus relic",
             },
         ),
+        "MeatOnTheBone": (
+            "fb0ca3c6cb2f",
+            {
+                "timing": "AfterCurrentHpChanged only sets Status; the heal is AfterCombatVictoryEarly, run-side in RunRewardGenerator",
+            },
+        ),
+        "MusicBox": (
+            "d88008fb61ec",
+            {
+                "timing": "BeforeSideTurnStart's reset is MusicBoxUsedThisTurn = false in ApplyStartOfPlayerTurn",
+            },
+        ),
+        "Orichalcum": (
+            "b6e299b5a34f",
+            {
+                "timing": "BeforeSideTurnStart clears the ShouldTrigger latch; the emulator's is EndTurn's heldNoBlock, read before Plating pays",
+            },
+        ),
         "PaelsClaw": (
             "f1ed6942bcb7",
             {
-                "numbers": "CardsVar(3) is text only: AfterObtained enchants EVERY card Goopy "
-                "can enchant, which is EnchantEveryCard",
+                "numbers": "CardsVar(3) is text only: AfterObtained enchants EVERY card Goopy can enchant, which is EnchantEveryCard",
+            },
+        ),
+        "PaelsEye": (
+            "a2510e4286ed",
+            {
+                "timing": "BeforeCardPlayed and AfterSideTurnStart only set Status and WasOwnerPartOfLastPlayerTurn; the guard reads CardsPlayedThisTurn, which counts hand plays only (!IsAutoPlay)",
             },
         ),
         "PaelsLegion": (
             "d49f6d41af40",
             {
-                "numbers": "Turns 2 is PaelsLegionCooldownTurns, set by the block path in "
-                "CardEffects, a statement that does not name the relic",
+                "numbers": "Turns 2 is PaelsLegionCooldownTurns, set by the block path in CardEffects, a statement that does not name the relic",
+                "timing": "AfterCardPlayed is FinishBlockDoublingCard, in ApplyAfterCardPlayedPowers; AfterSideTurnStart's tick is TickPaelsLegionCooldown at the player's turn start",
             },
         ),
         "PhialHolster": (
             "ed1dae6532d1",
-            {"numbers": "Potions 2: two AddPotion calls after the extra slot"},
+            {
+                "numbers": "Potions 2: two AddPotion calls after the extra slot",
+            },
+        ),
+        "RainbowRing": (
+            "677974f0289f",
+            {
+                "timing": "BeforeSideTurnStart's reset is the RainbowRing counters cleared at the player's turn start",
+            },
+        ),
+        "RippleBasin": (
+            "7e421cd1d9c4",
+            {
+                "timing": "BeforeSideTurnStart only sets Status",
+            },
         ),
         "SeaGlass": (
             "a2272bfcbdda",
-            {"numbers": "Cards 15: five of each of three rarities"},
+            {
+                "numbers": "Cards 15: five of each of three rarities",
+            },
+        ),
+        "StoneCalendar": (
+            "69c969da7579",
+            {
+                "timing": "AfterSideTurnStart only sets Status on the damage turn",
+            },
         ),
         "TheBoot": (
             "63c501f4f569",
             {
                 "numbers": "DamageThreshold 4: hpLost < BootDamageMinimum (5) is hpLost <= 4",
+            },
+        ),
+        "UnsettlingLamp": (
+            "6aebd3ca86d4",
+            {
+                "timing": "AfterCardPlayed is FinishUnsettlingLampCard, after the play",
+            },
+        ),
+        "Vambrace": (
+            "a5328ac2d813",
+            {
+                "timing": "AfterCardPlayed is FinishBlockDoublingCard, in ApplyAfterCardPlayedPowers",
+            },
+        ),
+        "VelvetChoker": (
+            "358f72db277f",
+            {
+                "timing": "BeforeSideTurnStart's reset is CardsPlayedThisTurn = 0 at the player's turn start",
             },
         ),
     },
