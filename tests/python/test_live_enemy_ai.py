@@ -93,6 +93,8 @@ NO_ACT1_CORPUS = frozenset(
         "ENTOMANCER",
         "EXOSKELETON",
         "DECIMILLIPEDE_SEGMENT",
+        "BOWLBUG_EGG",
+        "BOWLBUG_NECTAR",
     },
 )
 
@@ -111,6 +113,9 @@ ACT23_ENCOUNTERS = (
     "decimillipede",
     # A Flail Knight given Strength and Plating as it arrives (ids.MONSTER_SUBCLASSES).
     "mysterious-knight",
+    # A Rock with an Egg or a Nectar; the normal fight adds the Silk.
+    "bowlbugs-weak",
+    "bowlbugs",
 )
 
 # The Test Subject killed once, early and late: AdaptablePower keeps the corpse, and it
@@ -768,6 +773,8 @@ class Act23SelfConsistencyTests(_Rebuilds):
         "ENTOMANCER",
         "EXOSKELETON",
         "DECIMILLIPEDE_SEGMENT",
+        "BOWLBUG_EGG",
+        "BOWLBUG_NECTAR",
     }
 
     def test_every_act23_fight_rebuilds_every_turn(self) -> None:
@@ -1673,6 +1680,23 @@ class Act23ToAiTests(unittest.TestCase):
         )
         self.assertEqual(len(warnings), 1)
         self.assertIn("not a walk", warnings[0])
+
+    def test_a_bowlbug_egg_bites_every_turn(self) -> None:
+        # Session 2026-09-28 19:05, Act 2's first fight (A10): the egg's log is BITE and
+        # only BITE, at BiteDamage 8 from A9 up. MoveIndex counts the bites.
+        ai, intent, warnings, _ = to_ai(
+            enemy(
+                "BOWLBUG_EGG",
+                ["BITE_MOVE", "BITE_MOVE", "BITE_MOVE"],
+                "BITE_MOVE",
+                intents=[attack_intent(8), other_intent("DEFEND")],
+            ),
+            2,
+            ascension=10,
+        )
+        self.assertEqual(warnings, [])
+        self.assertEqual(ai["move_index"], 2)
+        self.assertEqual(intent, emu_intent("Attack", 8))
 
     def test_an_exoskeleton_follows_mandibles_with_enrage(self) -> None:
         # Session 2026-09-26 01:06, floor 18: the second slot opens on MANDIBLES, which

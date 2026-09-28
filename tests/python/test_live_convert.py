@@ -1653,6 +1653,20 @@ class RelicTableTests(unittest.TestCase):
                 entry,
             )
 
+    def test_black_blood_and_touch_of_orobas_have_no_combat_state(self) -> None:
+        # BlackBlood.AfterCombatVictory heals 12 once the fight is won (the run pays it,
+        # RunRewardGenerator), and TouchOfOrobas acts only as it is obtained, refining the
+        # starter relic; neither keeps anything a combat reads. Both gated every Act 2
+        # check of the 2026-09-28 19:05 session.
+        for entry in ("BLACK_BLOOD", "TOUCH_OF_OROBAS"):
+            for counter in (None, 0, 1):
+                result = self.translate(entry, counter, {})
+                self.assertEqual(
+                    (result.relics[0]["counter"], result.warnings),
+                    (0, []),
+                    entry,
+                )
+
     def test_radiant_pearl_has_no_combat_state(self) -> None:
         # RadiantPearl.BeforeHandDraw fires on turn one and keeps nothing: it is 0 and
         # quiet, where before it warned and gated every check of a run holding it.

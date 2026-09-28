@@ -2359,6 +2359,27 @@ _MODELS: tuple[Monster, ...] = (
         },
         branches=("REVIVE_BRANCH",),
     ),
+    # Act 2. EnemyAI.cs, case KE.BowlbugEgg: BITE_MOVE forever, its follow-up itself
+    # (decompiled BowlbugEgg.cs). BITE declares its attack first; its ProtectBlock rides
+    # beside it (EnemyAI.cs, the egg's block rider).
+    Cycle(
+        "BOWLBUG_EGG",
+        {"BITE_MOVE": attack(deadly(8, 7))},
+        loop=("BITE_MOVE",),
+    ),
+    # Act 2. EnemyAI.cs, case KE.BowlbugNectar: THRASH, BUFF, then THRASH2, which follows
+    # up to itself (decompiled BowlbugNectar.cs). ThrashDamage is a flat 3; the Buff's
+    # magnitude is BuffStrengthGain, which ExecuteIntent reads.
+    Cycle(
+        "BOWLBUG_NECTAR",
+        {
+            "THRASH_MOVE": attack(3),
+            "BUFF_MOVE": buff(deadly(16, 15)),
+            "THRASH2_MOVE": attack(3),
+        },
+        prefix=("THRASH_MOVE", "BUFF_MOVE"),
+        loop=("THRASH2_MOVE",),
+    ),
     # Act 2. EnemyAI.cs, case KE.LouseProgenitor: WEB_CANNON -> CURL_AND_GROW -> POUNCE, a
     # plain ring (decompiled LouseProgenitor.cs). CURL_AND_GROW declares its DefendIntent
     # first; the block is CurlBlock, the Tough pair, and its Strength 5 rides beside it.
