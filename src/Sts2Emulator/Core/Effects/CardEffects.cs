@@ -4727,6 +4727,16 @@ public static class CardEffects
             BuffSystem.Apply(target.Buffs, BuffId.Slippery, -1);
         }
         target.Hp = Math.Max(0, target.Hp - hpLoss);
+
+        // `CurlUpPower.AfterDamageReceived` reads no damage result -- a hit the louse
+        // blocks whole counts too -- and only REMEMBERS the card; the block comes when
+        // that card has finished (`CombatEngine.PayCurlUp`). Curling here, mid-card, let
+        // a multi-hit card's later hits spend the block the game hands out after them.
+        if (BuffSystem.Get(target.Buffs, BuffId.CurlUp) > 0)
+        {
+            target.CurlUpArmed = true;
+        }
+
         if (hpLoss > 0)
         {
             EnemyAI.TriggerShriekIfWounded(target);
@@ -4842,13 +4852,6 @@ public static class CardEffects
                     personalHive,
                     state.ShuffleRng ?? new Random(0)
                 );
-            }
-
-            int curlUp = BuffSystem.Get(target.Buffs, BuffId.CurlUp);
-            if (curlUp > 0)
-            {
-                target.Block += curlUp;
-                BuffSystem.Remove(target.Buffs, BuffId.CurlUp);
             }
 
             // SkittishPower.AfterAttack: the FIRST card each turn to land unblocked

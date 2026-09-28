@@ -113,6 +113,7 @@ public static class StateCloning
             MoveHistory = [.. enemy.MoveHistory],
             StartsOnBranch = enemy.StartsOnBranch,
             RollsNextMove = enemy.RollsNextMove,
+            CurlUpArmed = enemy.CurlUpArmed,
             NemesisIntangibleOn = enemy.NemesisIntangibleOn,
             StarterMove = enemy.StarterMove,
             Slot = enemy.Slot,

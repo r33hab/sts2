@@ -4557,6 +4557,30 @@ public static class CombatEngine
         }
     }
 
+    /// <summary>
+    /// <c>CurlUpPower.AfterCardPlayed</c>: the card that hit the creature has finished, so
+    /// it gains the power's amount as Unpowered block and the power goes (decompiled
+    /// CurlUpPower.cs). Armed by <c>CardEffects.DealDamageToEnemy</c>.
+    /// </summary>
+    private static void PayCurlUp(CombatState state)
+    {
+        foreach (var enemy in state.Enemies)
+        {
+            if (!enemy.CurlUpArmed)
+            {
+                continue;
+            }
+
+            enemy.CurlUpArmed = false;
+            int curlUp = BuffSystem.Get(enemy.Buffs, BuffId.CurlUp);
+            if (curlUp > 0 && enemy.Hp > 0)
+            {
+                enemy.Block += curlUp;
+                BuffSystem.Remove(enemy.Buffs, BuffId.CurlUp);
+            }
+        }
+    }
+
     private static void ApplyAfterCardPlayedPowers(
         CombatState state,
         CardDef def,
@@ -4565,6 +4589,7 @@ public static class CombatEngine
     )
     {
         Effects.RelicEffects.ApplyAfterCardPlayed(state, def, rng, energySpent);
+        PayCurlUp(state);
 
         // `TenderPower.AfterCardPlayed`: every card the player plays costs 1 Strength and
         // 1 Dexterity, applied `silent: true` -- so it does not go through
