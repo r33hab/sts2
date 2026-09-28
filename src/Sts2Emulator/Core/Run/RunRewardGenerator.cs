@@ -189,9 +189,15 @@ public static class RunRewardGenerator
         // `RoyaltiesPower.AfterCombatEnd` hangs a `GoldReward(Amount)` on the room. Through
         // `GainGold` like the fight's own gold, so Ectoplasm still zeroes it and Bowler Hat
         // still raises it -- the power pays out through the run's chokepoint, not past it.
+        // It is one of the room's `ExtraRewards`, which the last act's boss room never
+        // offers (see OpenLastActBossRewardScreen).
         if (state.RoyaltiesGoldOwed > 0)
         {
-            RunNonCombatEffects.GainGold(state, state.RoyaltiesGoldOwed);
+            if (!finalActBoss)
+            {
+                RunNonCombatEffects.GainGold(state, state.RoyaltiesGoldOwed);
+            }
+
             state.RoyaltiesGoldOwed = 0;
         }
 
@@ -219,6 +225,12 @@ public static class RunRewardGenerator
             state.PlayerHp = Math.Min(state.PlayerMaxHp, state.PlayerHp + 12);
         }
 
+        if (finalActBoss)
+        {
+            OpenLastActBossRewardScreen(state);
+            return;
+        }
+
         bool hasPotionReward = CheckPotionRoll(state, state.PlayerRng.Rewards.NextDouble());
         ClearRewardScreen(state);
         state.RewardGold = GoldRewardForCurrentNode(state);
@@ -230,18 +242,7 @@ public static class RunRewardGenerator
             state.ActiveCombat.StolenBackGold = 0;
         }
 
-        // `SwipePower.BeforeDeath` calls `runState.AddCard` -- the card goes straight back
-        // into the DECK, and the reward row beside it only says so. So this restores the
-        // card rather than offering it, and a Hopper that escaped never got here.
-        if (state.ActiveCombat is { StolenBackCards.Count: > 0 } combat)
-        {
-            foreach (var card in combat.StolenBackCards)
-            {
-                RunNonCombatEffects.AddCardToDeck(state, card);
-            }
-
-            combat.StolenBackCards.Clear();
-        }
+        ReturnStolenCards(state);
 
         // `RoyaltiesPower.AfterCombatEnd` adds a GoldReward the same way, so it is another
         // row rather than more gold on the fight's own.
@@ -350,6 +351,64 @@ public static class RunRewardGenerator
 
         state.RewardCardPending = true;
         state.Phase = RunPhase.RelicReward;
+    }
+
+    /// <summary>
+    /// The last act's boss room: `RewardsSet.WithRewardsFromRoom` returns before it builds
+    /// anything when <c>room.RoomType == Boss &amp;&amp; CurrentActIndex &gt;= Acts.Count - 1</c>.
+    /// </summary>
+    /// <remarks>
+    /// No gold, no card reward and no <c>ExtraRewards</c>, and no potion roll either:
+    /// <c>RollForPotionAndAddTo</c> lives inside the skipped <c>GenerateRewardsFor</c>, so the
+    /// Rewards stream is not drawn and the potion odds do not move. The screen still opens --
+    /// <c>RewardsSet.Offer</c> shows an empty one for any combat room -- and its Proceed is
+    /// the next action: back to the map for A10's second boss, or on to the win.
+    /// <c>Hook.ModifyRewards</c> still runs on the empty list, and of the reward hooks only
+    /// Wongo's ticket has no room-type gate (Amethyst Aubergine refuses this room by name,
+    /// Lava Rock wants act 1, the others a Monster or Elite room).
+    /// </remarks>
+    private static void OpenLastActBossRewardScreen(RunState state)
+    {
+        ClearRewardScreen(state);
+        Array.Clear(state.RewardCards);
+        Array.Clear(state.RewardUpgraded);
+        state.LastingCandyRewardCard = 0;
+        state.LastingCandyRewardUpgraded = false;
+        ReturnStolenCards(state);
+        state.PendingRelicReward = false;
+        if (Effects.RelicEffects.WongosTicketPaysOut(state))
+        {
+            // Its three RelicRewards are the whole list here, so they populate in order:
+            // the first is the one on screen and the other two wait behind it.
+            Effects.RelicEffects.RetireWongosTicket(state);
+            state.PendingRelicReward = true;
+            state.RelicReward = NextRelic(state);
+            for (int i = 1; i < Effects.RelicEffects.WongosTicketRelics; i++)
+            {
+                state.PendingBonusRelicRewards.Add(NextRelic(state));
+            }
+        }
+
+        state.RewardCardPending = false;
+        state.Phase = RunPhase.RelicReward;
+    }
+
+    /// <summary>
+    /// `SwipePower.BeforeDeath` calls `runState.AddCard` -- the card goes straight back into
+    /// the DECK, and the reward row beside it only says so. So this restores the card rather
+    /// than offering it, and a Hopper that escaped never got here.
+    /// </summary>
+    private static void ReturnStolenCards(RunState state)
+    {
+        if (state.ActiveCombat is { StolenBackCards.Count: > 0 } combat)
+        {
+            foreach (var card in combat.StolenBackCards)
+            {
+                RunNonCombatEffects.AddCardToDeck(state, card);
+            }
+
+            combat.StolenBackCards.Clear();
+        }
     }
 
     public static void EnterCardReward(RunState state)
@@ -1692,11 +1751,41 @@ public static class RunRewardGenerator
     public static bool IsAllowedSolo(int cardId) =>
         !GeneratedData.Cards.Get(cardId).MultiplayerOnly;
 
-    private static bool RollCardUpgrade(RunState state, int cardId, GameRng rng)
+    /// <summary>
+    /// `CardFactory.RollForUpgrade` with a reward's <c>baseChance</c> of 0: the float is
+    /// drawn first, whatever the card; an upgradable card that is not Rare then adds
+    /// <c>CurrentActIndex * UpgradedCardOddScaling</c>, and <c>num &lt;= odds</c> upgrades it.
+    /// </summary>
+    /// <remarks>
+    /// Act 1 never upgrades (odds 0, and <c>NextFloat</c> is never below it), act 2 a quarter
+    /// of non-Rare options, act 3 half -- each halved from Scarcity. The comparison is the
+    /// game's own, decimal against <c>(decimal)NextFloat()</c>, so a roll ON the line
+    /// upgrades. No model overrides <c>ModifyCardRewardUpgradeOdds</c>.
+    /// </remarks>
+    internal static bool RollCardUpgrade(RunState state, int cardId, GameRng rng)
     {
-        _ = rng.NextDouble();
-        return false;
+        decimal roll = (decimal)rng.NextFloat();
+        var card = GeneratedData.Cards.Get(cardId);
+        if (!card.Upgradable)
+        {
+            return false;
+        }
+
+        decimal odds = 0m;
+        if (card.Rarity != CardRarity.Rare)
+        {
+            odds += state.CurrentActIndex * UpgradedCardOddScaling(state);
+        }
+
+        return roll <= odds;
     }
+
+    /// <summary>
+    /// `CardFactory.UpgradedCardOddScaling`: <c>GetValueIfAscension(Scarcity, 0.125m, 0.25m)</c>,
+    /// the upgrade chance each act after the first adds to a non-Rare reward card.
+    /// </summary>
+    private static decimal UpgradedCardOddScaling(RunState state) =>
+        Scarcity(state) ? 0.125m : 0.25m;
 
     private static bool CheckPotionRoll(RunState state, double roll)
     {

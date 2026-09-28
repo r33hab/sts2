@@ -1274,7 +1274,7 @@ def run_reset(
 
     Returns:
         0 on success, -1 for an unknown handle, -2 for a level the run engine does not
-        model (anything outside 0-9: DoubleBoss is not modelled).
+        model (anything outside the game's 0-10).
 
     """
     seed_bytes = seed.encode("utf-8")
