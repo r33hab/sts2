@@ -100,9 +100,8 @@ public class DingyRugTests
 public class WingCharmTests
 {
     /// <summary>
-    /// Finds a seed whose reward screen holds at least one card Swift can go on. Swift is
-    /// POWERS ONLY, and a three-card reward often has none — which is not a failure of the
-    /// relic but the `if (list.Count == 0) return false` in its own body.
+    /// Finds a seed whose reward screen holds at least one Power -- a screen the relic
+    /// enchants whether Swift is read as Powers-only or as the game's base rule.
     /// </summary>
     private static RunEngine ScreenWithAPower(bool withCharm)
     {
@@ -146,7 +145,7 @@ public class WingCharmTests
         Assert.Equal(-1, engine.State.RewardEnchantIndex);
     }
 
-    /// <summary>Swift is Powers-only, so the pick is filtered to a card that can take it.</summary>
+    /// <summary>The pick is filtered to a card Swift can go on (`canonicalSwift.CanEnchant`).</summary>
     [Fact]
     public void ItPicksACardThatCanTakeSwift()
     {
@@ -157,9 +156,14 @@ public class WingCharmTests
         Assert.True(Enchantments.CanEnchant(chosen, Enchantment.Swift));
     }
 
-    /// <summary>A screen with no Power on it gets nothing — and that is the relic, not a gap.</summary>
+    /// <summary>
+    /// A screen with no Power on it is enchanted all the same. `WingCharm` filters the
+    /// options through `canonicalSwift.CanEnchant`, and Swift overrides neither
+    /// `CanEnchantCardType` nor `CanEnchant` -- an Attack or a Skill takes it as readily
+    /// as a Power. The emulator used to read Swift as Powers-only and left these alone.
+    /// </summary>
     [Fact]
-    public void AScreenWithNoPowerIsLeftAlone()
+    public void AScreenWithNoPowerIsEnchantedAllTheSame()
     {
         for (int seed = 0; seed < 60; seed++)
         {
@@ -173,7 +177,12 @@ public class WingCharmTests
             );
             if (!hasPower)
             {
-                Assert.Equal(-1, engine.State.RewardEnchantIndex);
+                Assert.InRange(
+                    engine.State.RewardEnchantIndex,
+                    0,
+                    engine.State.RewardCards.Length - 1
+                );
+                Assert.Equal(Enchantment.Swift, engine.State.RewardEnchantment);
                 return;
             }
         }

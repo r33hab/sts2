@@ -25,6 +25,28 @@ public class StoneArmorTests
         Assert.Equal(3, BuffSystem.Get(state.PlayerBuffs, BuffId.Plating));
     }
 
+    /// <summary>
+    /// `PlatingPower.BeforeSideTurnEndEarly` gains its block with `ValueProp.Unpowered`, so
+    /// Dexterity does not raise it. A live capture: Plating 4 and a Speed Potion's
+    /// Dexterity 5 against an 18-damage attack took the player from 72 to 58 (4 block);
+    /// the emulator gave 9 block and predicted 63.
+    /// </summary>
+    [Fact]
+    public void PlatingBlockIgnoresDexterity()
+    {
+        var fight = Fight
+            .Hand()
+            .Energy(0)
+            .PlayerHp(72, 80)
+            .PlayerBuff(BuffId.Plating, 4)
+            .PlayerBuff(BuffId.Dexterity, 5)
+            .Enemy(hp: 200, intent: new Intent(IntentType.Attack, 18));
+
+        fight.EndTurn();
+
+        Assert.Equal(58, fight.State.PlayerHp);
+    }
+
     [Fact]
     public void Upgraded_Applies6Plating()
     {

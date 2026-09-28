@@ -1068,6 +1068,74 @@ public class CombatEngineTests
         Assert.Equal(IntentType.Defend, state.Enemies[0].CurrentIntent.Type);
     }
 
+    /// <summary>
+    /// `StockPower.AfterDeath` adds a NEW Axebot (`ModelDb.Monster&lt;Axebot&gt;().ToMutable()`)
+    /// whose only power is the stock it was built with -- the dead bot's Strength and the
+    /// Vulnerable the player put on it die with it. Seen live: a bot at Strength 1 and
+    /// Vulnerable 1 came back with Stock 1 and nothing else; the emulator kept both.
+    /// </summary>
+    [Fact]
+    public void Axebot_TheRespawnIsANewcomerWithOnlyItsStock()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [new CardInstance(IC.StrikeIronclad, false)];
+        state.DrawPile.Clear();
+        state.DiscardPile.Clear();
+        state.Energy = 3;
+        state.Enemies =
+        [
+            new EnemyState
+            {
+                DefId = KE.Axebot,
+                Hp = 1,
+                MaxHp = 76,
+                CurrentIntent = new Intent(IntentType.Attack, 14),
+                Buffs =
+                [
+                    new BuffState(BuffId.Stock, 2),
+                    new BuffState(BuffId.Strength, 1),
+                    new BuffState(BuffId.Vulnerable, 1),
+                ],
+                MoveIndex = 2,
+            },
+        ];
+
+        CombatEngine.Step(state, 0, new Random(0));
+
+        var bot = Assert.Single(state.Enemies);
+        Assert.Equal([new BuffState(BuffId.Stock, 1)], bot.Buffs);
+    }
+
+    /// <summary>The last bot's respawn is built with no stock, so it carries nothing.</summary>
+    [Fact]
+    public void Axebot_TheLastRespawnCarriesNoPowerAtAll()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [new CardInstance(IC.StrikeIronclad, false)];
+        state.Energy = 3;
+        state.Enemies =
+        [
+            new EnemyState
+            {
+                DefId = KE.Axebot,
+                Hp = 1,
+                MaxHp = 76,
+                CurrentIntent = new Intent(IntentType.Attack, 14),
+                Buffs =
+                [
+                    new BuffState(BuffId.Stock, 1),
+                    new BuffState(BuffId.Strength, 3),
+                    new BuffState(BuffId.Vulnerable, 1),
+                ],
+                MoveIndex = 2,
+            },
+        ];
+
+        CombatEngine.Step(state, 0, new Random(0));
+
+        Assert.Empty(Assert.Single(state.Enemies).Buffs);
+    }
+
     [Fact]
     public void PhrogParasite_InfestedSpawnsWrigglersBeforeCombatCanEnd()
     {

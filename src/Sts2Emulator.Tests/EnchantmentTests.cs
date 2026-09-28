@@ -143,6 +143,12 @@ public class EnchantmentTests
     [InlineData(IC.DefendIronclad, Enchantment.Spiral, true)]
     [InlineData(IC.Bash, Enchantment.Spiral, false)]
     [InlineData(IC.StrikeIronclad, Enchantment.Steady, true)]
+    // `Swift` overrides neither `CanEnchantCardType` nor `CanEnchant`: the base rule is
+    // the whole rule, so an Attack or a Skill takes it as readily as a Power. Only
+    // Self-Help Book narrows it to Powers, with a filter of its own.
+    [InlineData(IC.StrikeIronclad, Enchantment.Swift, true)]
+    [InlineData(IC.DefendIronclad, Enchantment.Swift, true)]
+    [InlineData(IC.Bash, Enchantment.Swift, true)]
     public void CanEnchant_MatchesTheEnchantmentsOwnRestriction(
         int cardId,
         Enchantment enchantment,

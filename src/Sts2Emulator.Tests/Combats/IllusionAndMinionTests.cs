@@ -59,6 +59,31 @@ public class IllusionAndMinionTests
         Assert.Equal(1, BuffSystem.Get(Eye(fight).Buffs, BuffId.Reviving));
     }
 
+    /// <summary>
+    /// The corpse keeps its BUFFS and loses its DEBUFFS: `Creature` strips every power
+    /// `Hook.ShouldPowerBeRemovedOnDeath` does not veto, and `IllusionPower` vetoes only
+    /// buffs and temporary debuffs (`power.Type == Debuff` returns
+    /// `!(power is ITemporaryPower)`). Seen live: a Parafright killed at Vulnerable 1 lay
+    /// reviving with Illusion and Minion alone; the emulator kept the Vulnerable.
+    /// </summary>
+    [Fact]
+    public void AKilledIllusionShedsItsDebuffsAndKeepsItsBuffs()
+    {
+        var fight = FogmogAndEye();
+        Eye(fight).Hp = 1;
+        Eye(fight).Buffs.Add(new BuffState(BuffId.Vulnerable, 1));
+        Eye(fight).Buffs.Add(new BuffState(BuffId.Weak, 2));
+        Eye(fight).Buffs.Add(new BuffState(BuffId.Strength, 2));
+
+        fight.Play(0, target: 1);
+
+        Assert.Equal(0, Eye(fight).Hp);
+        Assert.Equal(0, BuffSystem.Get(Eye(fight).Buffs, BuffId.Vulnerable));
+        Assert.Equal(0, BuffSystem.Get(Eye(fight).Buffs, BuffId.Weak));
+        Assert.Equal(2, BuffSystem.Get(Eye(fight).Buffs, BuffId.Strength));
+        Assert.Equal(1, BuffSystem.Get(Eye(fight).Buffs, BuffId.Illusion));
+    }
+
     [Fact]
     public void AndComesBackAtFullHealth()
     {
