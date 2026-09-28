@@ -1310,7 +1310,6 @@ public static class RunNonCombatEffects
         // cursor is walked forward while the candidate is disallowed OR already seen.
         // The sequence WRAPS -- it is a ring, not a list that runs out -- and the game
         // only gives up after a full lap, logging "all unique events exhausted".
-        List<int> eventPool = [];
         if (state.EventSequence.Length > 0)
         {
             for (int i = 0; i < state.EventSequence.Length; i++)
@@ -1331,84 +1330,18 @@ public static class RunNonCombatEffects
             }
         }
 
-        eventPool.Add(RunConstants.EventJungleMazeAdventure);
-        eventPool.Add(RunConstants.EventBrainLeech);
-        eventPool.Add(RunConstants.EventCrystalSphere);
-        eventPool.Add(RunConstants.EventDollRoom);
-        eventPool.Add(RunConstants.EventFakeMerchant);
-        eventPool.Add(RunConstants.EventPotionCourier);
-        eventPool.Add(RunConstants.EventRanwidTheElder);
-        eventPool.Add(RunConstants.EventRelicTrader);
-        eventPool.Add(RunConstants.EventRoomFullOfCheese);
-        eventPool.Add(RunConstants.EventSlipperyBridge);
-        eventPool.Add(RunConstants.EventStoneOfAllTime);
-        eventPool.Add(RunConstants.EventSymbiote);
-        eventPool.Add(RunConstants.EventTeaMaster);
-        eventPool.Add(RunConstants.EventTheFutureOfPotions);
-        eventPool.Add(RunConstants.EventThisOrThat);
-        eventPool.Add(RunConstants.EventWarHistorianRepy);
-        eventPool.Add(RunConstants.EventWelcomeToWongos);
-        eventPool.Add(RunConstants.EventDoorsOfLightAndDark);
-        eventPool.Add(RunConstants.EventSunkenTreasury);
-        eventPool.Add(RunConstants.EventSelfHelpBook);
-        if (state.Act == RunConstants.ActOvergrowth)
+        // A whole lap found nothing allowed and unseen: "All unique events exhausted,
+        // allowing repetition". The game then hands out `NextEvent` as it stands -- the
+        // event under the cursor, allowed or not -- with no roll of any kind. The lap
+        // above walked the cursor all the way round, so it is back where it started.
+        if (state.EventSequence.Length > 0)
         {
-            eventPool.Add(RunConstants.EventByrdonisNest);
-            eventPool.Add(RunConstants.EventDenseVegetation);
-            eventPool.Add(RunConstants.EventLuminousChoir);
-            eventPool.Add(RunConstants.EventSapphireSeed);
-            eventPool.Add(RunConstants.EventSunkenStatue);
-            eventPool.Add(RunConstants.EventTabletOfTruth);
-            eventPool.Add(RunConstants.EventWellspring);
-            eventPool.Add(RunConstants.EventWhisperingHollow);
-            eventPool.Add(RunConstants.EventWoodCarvings);
+            int repeated = state.EventSequence[
+                state.EventSequenceIndex % state.EventSequence.Length
+            ];
+            state.EventSequenceIndex++;
+            BeginEvent(state, repeated);
         }
-        else
-        {
-            eventPool.Add(RunConstants.EventAbyssalBaths);
-            eventPool.Add(RunConstants.EventDrowningBeacon);
-            eventPool.Add(RunConstants.EventEndlessConveyor);
-            eventPool.Add(RunConstants.EventPunchOff);
-            eventPool.Add(RunConstants.EventSpiralingWhirlpool);
-            eventPool.Add(RunConstants.EventSunkenStatue);
-            eventPool.Add(RunConstants.EventTrashHeap);
-            eventPool.Add(RunConstants.EventWaterloggedScriptorium);
-        }
-        if (
-            state.PlayerHp >= 10
-            && state.Deck.Any(card => card.DefId != RunConstants.SpoilsMapCard)
-        )
-        {
-            eventPool.Add(RunConstants.EventTheLegendsWereTrue);
-        }
-
-        if (state.Gold >= 100 && state.Deck.Count >= 2)
-        {
-            eventPool.Add(RunConstants.EventMorphicGrove);
-        }
-
-        if (state.PlayerHp <= (int)(state.PlayerMaxHp * 0.7))
-        {
-            eventPool.Add(RunConstants.EventUnrestSite);
-            eventPool.Add(RunConstants.EventAromaOfChaos);
-            eventPool.Add(RunConstants.EventSimpleReward);
-        }
-        else
-        {
-            eventPool.Add(RunConstants.EventAromaOfChaos);
-            eventPool.Add(RunConstants.EventSimpleReward);
-        }
-
-        // The fallback pool is hand-written and had no eligibility check of any kind, so
-        // it could hand out an event the run is not entitled to -- including the act-2
-        // ones it lists by name. Everything the sequence is filtered by applies here too.
-        var allowed = eventPool.Where(id => IsEventAllowed(state, id)).ToList();
-        BeginEvent(
-            state,
-            state.Rng.UpFront.NextItem(
-                allowed.Count > 0 ? allowed : [RunConstants.EventSimpleReward]
-            )
-        );
     }
 
     /// <summary>
@@ -1537,16 +1470,15 @@ public static class RunNonCombatEffects
             RunConstants.EventUnrestSite => state.PlayerHp <= state.PlayerMaxHp * 0.70m,
             // ByrdonisNest is `!HasEventPet()`. Pets are not modelled, and the sequence
             // offers each event at most once per act, so within an act it cannot matter.
-            // BrainLeech and RoomFullOfCheese are `CurrentActIndex < 2`, and Dense
-            // Vegetation only refuses in multiplayer. The emulator models a run's first
-            // act, single player, so all three are open -- transcribed rather than left
-            // to the default so the gate says so.
-            RunConstants.EventBrainLeech
-            or RunConstants.EventRoomFullOfCheese
-            or RunConstants.EventDenseVegetation
+            // BrainLeech and RoomFullOfCheese are `CurrentActIndex < 2`: shared events,
+            // dealt into every act's list, that the last act passes over.
+            RunConstants.EventBrainLeech or RunConstants.EventRoomFullOfCheese =>
+                state.CurrentActIndex < 2,
+            // Dense Vegetation only refuses in multiplayer, and the run is solo --
+            // transcribed rather than left to the default so the gate says so.
+            RunConstants.EventDenseVegetation
             or RunConstants.EventByrdonisNest
-            or RunConstants.EventAromaOfChaos
-            or RunConstants.EventSimpleReward => true,
+            or RunConstants.EventAromaOfChaos => true,
             // Colossal Flower's ladder costs 5 + 6 + 7 = 18 unblockable to walk to the
             // bottom of, and its gate is `CurrentHp >= 19` -- one more than the whole
             // climb, so the event can never be the thing that kills you.
@@ -3531,9 +3463,11 @@ public static class RunNonCombatEffects
                 && !RunConstants.TranscendenceCardNames.Contains(GeneratedData.Cards.Get(id).Name)
             )
             .ToArray();
-        return candidates.Length == 0
-            ? RandomRewardCard(state.Rng.UpFront)
-            : state.PlayerRng.Rewards.NextItem(candidates);
+        // `SetupForPlayer` is `PlayerRng.Rewards.NextItem(items)`; an empty list (no
+        // character's pool is) would still be a Rewards draw.
+        return state.PlayerRng.Rewards.NextItem(
+            candidates.Length > 0 ? candidates : RunRewardGenerator.IroncladRewardPool.ToArray()
+        );
     }
 
     private static void TransformAllMatching(RunState state, int cardId)

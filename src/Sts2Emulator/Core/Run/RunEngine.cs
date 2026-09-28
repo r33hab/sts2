@@ -4790,38 +4790,11 @@ public sealed class RunEngine
 
                 break;
             default:
-                if (action == 0)
-                {
-                    RunNonCombatEffects.GainGold(State, 50);
-                    RunRewardGenerator.AddPotion(State, 1);
-                }
-                else if (action == 1)
-                {
-                    if (State.PlayerHp >= State.PlayerMaxHp)
-                    {
-                        return -1;
-                    }
-
-                    State.PlayerHp = Math.Min(State.PlayerMaxHp, State.PlayerHp + 15);
-                }
-                else if (action == 2)
-                {
-                    RunNonCombatEffects.AddCardToDeck(
-                        State,
-                        new CardInstance(
-                            State.Rng.UpFront.NextItem(
-                                RunRewardGenerator.IroncladRewardPool.ToArray()
-                            ),
-                            Upgraded: false
-                        )
-                    );
-                }
-                else if (action != RunConstants.EventSkipAction)
-                {
-                    return -1;
-                }
-
-                break;
+                // Every event the game can deal has a case above. This used to be a
+                // generic stand-in -- gold and a potion, a heal, or a card off Rng.UpFront
+                // -- for an invented "simple reward" event only the old fallback pool
+                // could open; the fallback follows RoomSet.EnsureNextEventIsValid now.
+                return -1;
         }
 
         State.EventId = RunConstants.EventResultPending;
@@ -5539,11 +5512,6 @@ public sealed class RunEngine
         State.PlayerHp = Math.Min(State.PlayerMaxHp, State.PlayerHp + amount);
     }
 
-    private int EventGoldAmount(int baseAmount)
-    {
-        return Math.Max(0, baseAmount + State.Rng.UpFront.NextInt(-15, 16));
-    }
-
     /// <summary>The surviving pools, in option order. Rolled on entry, never here.</summary>
     private List<int[]> ColorfulPhilosopherPools()
     {
@@ -5594,17 +5562,6 @@ public sealed class RunEngine
         State.PlayerHp = Math.Max(
             0,
             State.PlayerHp - RunConstants.ColossalFlowerDigDamage[State.EventPage]
-        );
-    }
-
-    private void AddEventRewardCard(bool upgraded = false)
-    {
-        RunNonCombatEffects.AddCardToDeck(
-            State,
-            new CardInstance(
-                State.Rng.UpFront.NextItem(RunRewardGenerator.IroncladRewardPool.ToArray()),
-                upgraded
-            )
         );
     }
 

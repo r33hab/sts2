@@ -140,6 +140,13 @@ public class EventActGatingTests
     /// The sequence a run actually walks must not contain one either -- the gate is only
     /// worth anything at the point an event is chosen.
     /// </summary>
+    /// <remarks>
+    /// For as long as the act's ring still holds an allowed event the run has not seen.
+    /// Past that point <c>RoomSet.EnsureNextEventIsValid</c> gives up ("All unique events
+    /// exhausted, allowing repetition") and deals the event under the cursor whatever its
+    /// gate says -- which an act's worth of rooms never comes close to, and which the
+    /// emulator used to paper over with a hand-written pool rolled off Rng.UpFront.
+    /// </remarks>
     [Theory]
     [InlineData("ABCDEF")]
     [InlineData("AAB")]
@@ -152,6 +159,15 @@ public class EventActGatingTests
 
         for (int i = 0; i < 40; i++)
         {
+            bool anyLeft = state.EventSequence.Any(id =>
+                RunNonCombatEffects.IsEventAllowedForTests(state, id)
+                && !state.VisitedEventIds.Contains(id)
+            );
+            if (!anyLeft)
+            {
+                break;
+            }
+
             RunNonCombatEffects.EnterEvent(state);
             Assert.DoesNotContain(state.EventId, banned);
         }

@@ -293,7 +293,8 @@ public static class RunConstants
     public const int EventResultPending = -1;
     public const int EventUnrestSite = 1;
     public const int EventAromaOfChaos = 2;
-    public const int EventSimpleReward = 3;
+
+    // 3 was EventSimpleReward, an invented stand-in event; no game event has the id.
     public const int EventJungleMazeAdventure = 4;
     public const int EventMorphicGrove = 5;
     public const int EventBrainLeech = 6;
