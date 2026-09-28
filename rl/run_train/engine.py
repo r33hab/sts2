@@ -995,8 +995,9 @@ class RunSession:
     def won(self) -> bool:
         """Whether the run is won: complete, alive, on the last act's boss node.
 
-        `AdvanceAfterRelicReward` completes the run after the last act's boss reward; a
-        boss in any earlier act leads onto the next act's map instead.
+        `AdvanceAfterRelicReward` enters The Architect after the last act's boss reward,
+        and its PROCEED completes the run; a boss in any earlier act leads onto the next
+        act's map instead.
         """
         info = self.info
         return (

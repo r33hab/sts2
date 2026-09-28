@@ -2337,12 +2337,28 @@ public sealed class RunEngine
                 return 0;
             }
 
-            State.Phase = RunPhase.Complete;
-            State.LastPlayerWon = true;
-            terminal = true;
+            EnterTheArchitect();
+            terminal = false;
             return 0;
         }
         return AdvanceAfterNode(out terminal);
+    }
+
+    /// <summary>
+    /// The room a won run ends in: <c>RunManager.EnterNextAct</c> in the last act enters an
+    /// <c>EventRoom</c> holding <c>TheArchitect</c> (<c>AbstractRoom.IsVictoryRoom</c>), and
+    /// only its PROCEED ends the run.
+    /// </summary>
+    /// <remarks>
+    /// Its dialogue lines come first, but how many there are is picked from the profile's
+    /// win count (<c>LoadDialogue</c>), which a run does not carry, and none of them does
+    /// anything -- so the emulator's event is the PROCEED alone.
+    /// </remarks>
+    private void EnterTheArchitect()
+    {
+        State.EventId = RunConstants.EventTheArchitect;
+        State.EventPage = 0;
+        State.Phase = RunPhase.Event;
     }
 
     /// <summary>
@@ -2579,6 +2595,19 @@ public sealed class RunEngine
 
         switch (State.EventId)
         {
+            case RunConstants.EventTheArchitect:
+                // `WinRun`: the run ends, won. PROCEED is its one option and the only way
+                // out of the room, so leaving is the same step.
+                if (action is not (0 or RunConstants.EventSkipAction))
+                {
+                    return -1;
+                }
+
+                State.EventId = 0;
+                State.Phase = RunPhase.Complete;
+                State.LastPlayerWon = true;
+                terminal = true;
+                return 0;
             case RunConstants.EventUnrestSite:
                 if (action == 0)
                 {
@@ -5779,6 +5808,9 @@ public sealed class RunEngine
                 SetMask(mask, 3);
                 break;
             case RunConstants.EventResultPending:
+                SetMask(mask, 0);
+                break;
+            case RunConstants.EventTheArchitect:
                 SetMask(mask, 0);
                 break;
             case RunConstants.EventCrystalSphere:
