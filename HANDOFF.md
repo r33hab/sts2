@@ -2294,7 +2294,9 @@ What actually differs between A8 and A10, and nothing else does:
 - **`DoubleBoss` (10)** adds a second boss — but only to the _last_ act
   (`i == Acts.Count - 1` in `RunManager.GenerateRooms`), which act-1 generation never
   reaches. Verified in passing: an A10 capture's deck, enemy roster and HP all match an
-  A8-modelled emulator, because HP comes from `ToughEnemies` (live at both).
+  A8-modelled emulator, because HP comes from `ToughEnemies` (live at both). The run
+  engine models it (`DoubleBossTests`): one more UpFront draw after the last act's rooms,
+  a boss point one row above the first, and both last-act boss rooms pay nothing.
 - Player HP stays 64/80: the HP-affecting levels (TightBelt 4, AscendersBane 5) are both
   below 8.
 
