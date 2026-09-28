@@ -662,18 +662,18 @@ class EnemyFixtureTests(unittest.TestCase):
         self.assertTrue(self.result.reliable)
 
     def test_a_monster_without_a_table_is_flagged(self) -> None:
-        # The Chomper is Hive's (Act 2), outside the tables.
+        # The Adversary Mk One is an event fight's, outside the tables.
         doc = load("enemy")
         doc["enemies"][1].update(
-            id="CHOMPER",
-            entity_id="CHOMPER_1",
-            move_id="SCREECH_MOVE",
-            state_log=["CLAMP_MOVE", "SCREECH_MOVE"],
+            id="THE_ADVERSARY_MK_ONE",
+            entity_id="THE_ADVERSARY_MK_ONE_1",
+            move_id="BEAM_MOVE",
+            state_log=["SMASH_MOVE", "BEAM_MOVE"],
             ai_fields={},
         )
         result = convert.convert(doc)
         self.assertEqual(len(result.warnings), 1)
-        self.assertIn("CHOMPER", result.warnings[0])
+        self.assertIn("THE_ADVERSARY_MK_ONE", result.warnings[0])
         self.assertFalse(result.reliable)
         self.assertEqual(result.doc["enemies"][1]["ai"]["move_index"], 1)
 
@@ -940,10 +940,10 @@ class WarningTests(unittest.TestCase):
     ) -> None:
         doc = load("enemy")
         doc["enemies"][0].update(
-            id="CHOMPER",
-            entity_id="CHOMPER_0",
-            move_id="CLAMP_MOVE",
-            state_log=["CLAMP_MOVE"],
+            id="THE_ADVERSARY_MK_ONE",
+            entity_id="THE_ADVERSARY_MK_ONE_0",
+            move_id="SMASH_MOVE",
+            state_log=["SMASH_MOVE"],
             ai_fields={},
         )
         doc["enemies"][0]["intents"][0]["base_damage"] = None

@@ -54,7 +54,14 @@ BUFF = {name: ordinal for ordinal, name in names.buffs().items()}
 INTENT = {name: ordinal for ordinal, name in names.intents().items()}
 COMPANIONS = frozenset(
     BUFF[name]
-    for name in ("Stunned", "Reviving", "SummonCooldown", "BackupCount", "TerrorQueued")
+    for name in (
+        "Stunned",
+        "Reviving",
+        "SummonCooldown",
+        "BackupCount",
+        "TerrorQueued",
+        "WitherIntensity",
+    )
 )
 MODEL_BY_ENTRY = {model.entry: model for model in enemy_ai.MONSTERS.values()}
 STRIKE = 472  # Cards.g.cs StrikeIronclad
@@ -95,6 +102,28 @@ NO_ACT1_CORPUS = frozenset(
         "DECIMILLIPEDE_SEGMENT",
         "BOWLBUG_EGG",
         "BOWLBUG_NECTAR",
+        "CHOMPER",
+        "MYTE",
+        "SPINY_TOAD",
+        "OVICOPTER",
+        "TOUGH_EGG",
+        "HUNTER_KILLER",
+        "INFESTED_PRISM",
+        "THE_INSATIABLE",
+        "SLIMED_BERSERKER",
+        "TURRET_OPERATOR",
+        "AEONGLASS",
+        "GUARDBOT",
+        "NOISEBOT",
+        "STABBOT",
+        "ZAPBOT",
+        "TORCH_HEAD_AMALGAM",
+        "FABRICATOR",
+        "LIVING_SHIELD",
+        "SOUL_NEXUS",
+        "FROG_KNIGHT",
+        "QUEEN",
+        "KNOWLEDGE_DEMON",
     },
 )
 
@@ -116,6 +145,21 @@ ACT23_ENCOUNTERS = (
     # A Rock with an Egg or a Nectar; the normal fight adds the Silk.
     "bowlbugs-weak",
     "bowlbugs",
+    "tunneler-and-chomper",
+    "mytes",
+    "spiny-toad",
+    "ovicopter",
+    "hunter-killer",
+    "infested-prisms",
+    "insatiable",
+    "slimed-berserker",
+    "turret-operator",
+    "aeonglass",
+    "fabricator",
+    "frog-knight",
+    "soul-nexus",
+    "queen",
+    "construct-menagerie",
 )
 
 # The Test Subject killed once, early and late: AdaptablePower keeps the corpse, and it
@@ -129,6 +173,14 @@ ACT23_HITS = (
     ("decimillipede", "DECIMILLIPEDE_SEGMENT", 1, 0),
     ("decimillipede", "DECIMILLIPEDE_SEGMENT", 1, 1),
     ("decimillipede", "DECIMILLIPEDE_SEGMENT", 1, 3),
+    # The Queen's amalgam dies before she burns bright: she swings the axe instead
+    # (decompiled Queen.cs's YOURE_MINE_NOW branch). Killed while she shows BURN_BRIGHT,
+    # `Queen.AfterDeath` forces ENRAGE unlogged, which `enemy_ai.Queen` leaves generic.
+    ("queen", "TORCH_HEAD_AMALGAM", 1, 0),
+    # The Turret Operator dies: the Living Shield, alone, smashes.
+    ("turret-operator", "TURRET_OPERATOR", 1, 1),
+    # The Frog Knight below half health charges once (HALF_HEALTH).
+    ("frog-knight", "FROG_KNIGHT", 40, 0),
 )
 
 # Moves that ending turns cannot reach: the Rock's DIZZY needs a headbutt blocked whole,
@@ -240,7 +292,13 @@ REVIVED_GIANT_MAX_HP = 999_999_999
 
 # `TestSubject.RespawnMove` raises its max HP to the next form's (CombatEngine.cs
 # RespawnTestSubject): the same creature, respawned.
-RESPAWNING_DEF_IDS = frozenset({ids.enemy_id("TEST_SUBJECT")})
+RESPAWNING_DEF_IDS = frozenset(
+    {
+        ids.enemy_id("TEST_SUBJECT"),
+        # `ToughEgg.Hatch` rolls the hatchling's HP onto the same creature.
+        ids.enemy_id("TOUGH_EGG"),
+    },
+)
 
 
 # ── The emulator side ────────────────────────────────────────────────────────
@@ -775,6 +833,27 @@ class Act23SelfConsistencyTests(_Rebuilds):
         "DECIMILLIPEDE_SEGMENT",
         "BOWLBUG_EGG",
         "BOWLBUG_NECTAR",
+        "CHOMPER",
+        "MYTE",
+        "SPINY_TOAD",
+        "OVICOPTER",
+        "TOUGH_EGG",
+        "HUNTER_KILLER",
+        "INFESTED_PRISM",
+        "THE_INSATIABLE",
+        "SLIMED_BERSERKER",
+        "TURRET_OPERATOR",
+        "AEONGLASS",
+        "GUARDBOT",
+        "NOISEBOT",
+        "STABBOT",
+        "ZAPBOT",
+        "TORCH_HEAD_AMALGAM",
+        "FABRICATOR",
+        "LIVING_SHIELD",
+        "SOUL_NEXUS",
+        "FROG_KNIGHT",
+        "QUEEN",
     }
 
     def test_every_act23_fight_rebuilds_every_turn(self) -> None:
@@ -1698,6 +1777,42 @@ class Act23ToAiTests(unittest.TestCase):
         self.assertEqual(ai["move_index"], 2)
         self.assertEqual(intent, emu_intent("Attack", 8))
 
+    def test_the_knowledge_demon_stops_cursing_after_three(self) -> None:
+        # KnowledgeDemonPhase (EnemyAI.cs): CURSE, SLAP, KNOWLEDGE_OVERWHELMING, PONDER three
+        # times, then the three without the curse. Its CURSE opens a choice the Act 2-3
+        # corpus cannot answer by ending turns, so the walk is pinned here instead.
+        cycle = [
+            "CURSE_OF_KNOWLEDGE_MOVE",
+            "SLAP_MOVE",
+            "KNOWLEDGE_OVERWHELMING_MOVE",
+            "PONDER_MOVE",
+        ]
+        ai, intent, warnings, _ = to_ai(
+            enemy(
+                "KNOWLEDGE_DEMON",
+                [*cycle * 3, "SLAP_MOVE"],
+                "SLAP_MOVE",
+                intents=[attack_intent(18)],
+            ),
+            12,
+            ascension=10,
+        )
+        self.assertEqual(warnings, [])
+        self.assertEqual(ai["move_index"], 12)
+        self.assertEqual(intent, emu_intent("Attack", 18))
+        _, _, warnings, _ = to_ai(
+            enemy(
+                "KNOWLEDGE_DEMON",
+                [*cycle * 3, "CURSE_OF_KNOWLEDGE_MOVE"],
+                "CURSE_OF_KNOWLEDGE_MOVE",
+                intents=[other_intent("DEBUFF")],
+            ),
+            12,
+            ascension=10,
+        )
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("not a walk", warnings[0])
+
     def test_an_exoskeleton_follows_mandibles_with_enrage(self) -> None:
         # Session 2026-09-26 01:06, floor 18: the second slot opens on MANDIBLES, which
         # ENRAGE follows outright, and nothing else can.
@@ -2116,15 +2231,15 @@ class FallbackTests(unittest.TestCase):
         self.assertIn("round 2", warnings[0])
 
     def test_an_unsupported_monster_gets_the_generic_block_and_a_warning(self) -> None:
-        # The Chomper is Hive's (Act 2), outside the tables.
+        # The Adversary Mk One is an event fight's, outside the tables.
         live = enemy(
-            "CHOMPER",
-            ["CLAMP_MOVE", "SCREECH_MOVE"],
-            "SCREECH_MOVE",
+            "THE_ADVERSARY_MK_ONE",
+            ["SMASH_MOVE", "BEAM_MOVE"],
+            "BEAM_MOVE",
             intents=[other_intent("DEBUFF")],
         )
         ai, intent, warnings, buffs = to_ai(live, turn=1)
-        self.assertNotIn(ids.enemy_id("CHOMPER"), enemy_ai.SUPPORTED)
+        self.assertNotIn(ids.enemy_id("THE_ADVERSARY_MK_ONE"), enemy_ai.SUPPORTED)
         self.assertEqual(ai, {**enemy_ai.ai_defaults(), "move_index": 1})
         self.assertEqual(intent, emu_intent("Debuff", 0))
         self.assertEqual((len(warnings), buffs), (1, []))
@@ -2132,9 +2247,9 @@ class FallbackTests(unittest.TestCase):
 
     def test_an_unsupported_attack_with_no_numbers_warns(self) -> None:
         live = enemy(
-            "CHOMPER",
-            ["CLAMP_MOVE"],
-            "CLAMP_MOVE",
+            "THE_ADVERSARY_MK_ONE",
+            ["SMASH_MOVE"],
+            "SMASH_MOVE",
             intents=[attack_intent(None, 2)],
         )
         _, intent, warnings, _ = to_ai(live, turn=0)

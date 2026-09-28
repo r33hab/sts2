@@ -1555,6 +1555,255 @@ class DecimillipedeSegment(Monster):
         return self.RING[emu["ai"]["move_index"] % 3]
 
 
+class HunterKiller(Monster):
+    """TENDERIZING_GOOP once, then a roll of BITE and PUNCTURE (EnemyAI.cs, case KE.HunterKiller).
+
+    Decompiled HunterKiller.cs: every move returns to RAND, which offers BITE CannotRepeat
+    and PUNCTURE capped at two running. The emulator keeps the roll in `LastBranch` (0 BITE,
+    1 PUNCTURE) and `RepeatStreak`, and still spends its draw when only one branch is left.
+    """
+
+    OPENER = "TENDERIZING_GOOP_MOVE"
+    BRANCHES = ("BITE_MOVE", "PUNCTURE_MOVE")
+
+    def __init__(self, entry: str, moves: Mapping[str, Move], **kwargs: Any) -> None:
+        super().__init__(entry, moves, rng=True, **kwargs)
+
+    def start(self, moves: Sequence[str], ctx: Context) -> Fields | None:
+        return Fields() if moves[0] == self.OPENER else None
+
+    def select(self, f: Fields, move: str, ctx: Context, *, check: bool = True) -> bool:
+        if move not in self.BRANCHES:
+            return not check
+        branch = self.BRANCHES.index(move)
+        if f.last_branch == 0:
+            eligible = {1}
+        elif f.last_branch == 1 and f.repeat_streak >= 2:
+            eligible = {0}
+        else:
+            eligible = {0, 1}
+        if check and branch not in eligible:
+            return False
+        f.repeat_streak = f.repeat_streak + 1 if branch == f.last_branch else 1
+        f.last_branch = branch
+        return True
+
+    def announced(self, emu: Mapping[str, Any]) -> str:
+        if _stunned_buff(emu):
+            return STUNNED
+        ai = emu["ai"]
+        return (
+            self.OPENER if ai["move_index"] == 0 else self.BRANCHES[ai["last_branch"]]
+        )
+
+
+class Ovicopter(Cycle):
+    """LAY_EGGS, SMASH, TENDERIZER round a ring, the first slot NUTRITIONAL_PASTE when crowded.
+
+    Decompiled Ovicopter.cs: TENDERIZER leads to SUMMON_BRANCH_STATE, a conditional that lays
+    eggs while the side has room and makes Strength paste when it has not. The emulator walks
+    `MoveIndex % 3` and decides that first slot off the roster -- more than three living
+    creatures and it is the paste, with its Strength as the Buff's magnitude (EnemyAI.cs,
+    case KE.Ovicopter) -- so either move fills slot 0.
+    """
+
+    LAY, PASTE = "LAY_EGGS_MOVE", "NUTRITIONAL_PASTE_MOVE"
+
+    def select(self, f: Fields, move: str, ctx: Context, *, check: bool = True) -> bool:
+        if not check:
+            return True
+        expected = self.at(f.move_index)
+        if expected == self.LAY:
+            return move in {self.LAY, self.PASTE}
+        return move == expected
+
+    def announced(self, emu: Mapping[str, Any]) -> str:
+        move = super().announced(emu)
+        if move == self.LAY and emu["intent"]["magnitude"] > 0:
+            return self.PASTE
+        return move
+
+
+class Aeonglass(Cycle):
+    """EBB -> EYE_LASERS -> INCREASING_INTENSITY round `MoveIndex % 3` (EnemyAI.cs, case KE.Aeonglass).
+
+    Every INCREASING_INTENSITY makes each Wither in play hit 3 harder (`FakeUpgrade`) and
+    its own Strength climb by the count; the emulator keeps the count in the companion
+    `WitherIntensity`, raised as the move runs -- so it is the moves of that name the log
+    holds before the one on display.
+    """
+
+    INTENSITY = "INCREASING_INTENSITY_MOVE"
+
+    def execute(self, f: Fields, move: str, ctx: Context) -> None:
+        super().execute(f, move, ctx)
+        if move == self.INTENSITY:
+            f.companions["WitherIntensity"] = f.companions.get("WitherIntensity", 0) + 1
+
+
+class Fabricator(Monster):
+    """FABRICATE or FABRICATING_STRIKE while there is room for a bot, DISINTEGRATE when not.
+
+    Decompiled Fabricator.cs: every move returns to fabricateBranch, which rolls RAND
+    (FABRICATE, FABRICATING_STRIKE) while the side has room and takes DISINTEGRATE when it
+    is full. The emulator decides off the roster each turn -- fewer than four living
+    creatures and it rolls `PickBranch([0, 1])` -- and keeps no memory of the roll
+    (EnemyAI.cs, case KE.Fabricator). Which roster each past roll saw is not in the log, so
+    any of the three can follow any.
+
+    `SpawnBot` filters its pool with `m != _lastSpawned` (EnemyAI.SummonFabricatorBots), a
+    model reference the live snapshot does not carry, so a converted Fabricator remembers
+    no bot: its next FABRICATE rolls over both kinds where the game may offer one. The
+    roll is random either way, so the game's outcome stays among the emulator's.
+    """
+
+    FABRICATE, STRIKE, DISINTEGRATE = (
+        "FABRICATE_MOVE",
+        "FABRICATING_STRIKE_MOVE",
+        "DISINTEGRATE_MOVE",
+    )
+
+    def __init__(self, entry: str, moves: Mapping[str, Move], **kwargs: Any) -> None:
+        super().__init__(entry, moves, rng=True, **kwargs)
+
+    def start(self, moves: Sequence[str], ctx: Context) -> Fields | None:
+        return Fields() if moves[0] in self.moves else None
+
+    def select(self, f: Fields, move: str, ctx: Context, *, check: bool = True) -> bool:
+        return not check or move in self.moves
+
+    def announced(self, emu: Mapping[str, Any]) -> str:
+        if _stunned_buff(emu):
+            return STUNNED
+        intent = emu["intent"]
+        if intent["type"] == _intent_value()["Buff"]:
+            return self.FABRICATE
+        # FabricatingStrikeDamage is 21/18 and DisintegrateDamage 13/11.
+        return self.STRIKE if intent["magnitude"] > 15 else self.DISINTEGRATE
+
+
+class LivingShield(Monster):
+    """SHIELD_SLAM while another creature stands, SMASH once it is alone (EnemyAI.cs, case KE.LivingShield).
+
+    Decompiled LivingShield.cs: SHIELD_SLAM leads to SHIELD_SLAM_BRANCH, a conditional on the
+    rest of the side, and SMASH follows up to itself. The emulator opens on SHIELD_SLAM
+    (MoveIndex 0) and answers the question off the roster every turn after, so either move
+    can follow either; which roster a past turn saw is not in the log.
+    """
+
+    SLAM, SMASH = "SHIELD_SLAM_MOVE", "SMASH_MOVE"
+
+    def start(self, moves: Sequence[str], ctx: Context) -> Fields | None:
+        return Fields() if moves[0] == self.SLAM else None
+
+    def select(self, f: Fields, move: str, ctx: Context, *, check: bool = True) -> bool:
+        return not check or move in self.moves
+
+    def announced(self, emu: Mapping[str, Any]) -> str:
+        if _stunned_buff(emu):
+            return STUNNED
+        return self.SLAM if emu["intent"]["magnitude"] == 6 else self.SMASH
+
+
+class SoulNexus(LastMoveRoll):
+    """SOUL_BURN, then a roll over the two moves it did not just make (EnemyAI.cs, case KE.SoulNexus).
+
+    Decompiled SoulNexus.cs: every move returns to RAND, whose three branches are each
+    CannotRepeat. The emulator keeps the last move in `LastMove`, in its own order: soul
+    burn, maelstrom, drain life.
+    """
+
+    def start(self, moves: Sequence[str], ctx: Context) -> Fields | None:
+        return Fields(last_move=0) if moves[0] == self.order[0] else None
+
+    def select(self, f: Fields, move: str, ctx: Context, *, check: bool = True) -> bool:
+        number = self.order.index(move)
+        if check and number == f.last_move:
+            return False
+        f.last_move = number
+        return True
+
+
+class FrogKnight(Monster):
+    """TONGUE_LASH -> STRIKE_DOWN_EVIL -> FOR_THE_QUEEN, and one BEETLE_CHARGE under half HP.
+
+    Decompiled FrogKnight.cs: FOR_THE_QUEEN leads to HALF_HEALTH, which charges once below
+    half health and lashes otherwise; the charge leads back to the lash. The emulator walks
+    it on `LastMove` in its own order -- lash, strike, queen, charge -- and spends the charge
+    in `OnceOnlyMoveUsed` (EnemyAI.cs, case KE.FrogKnight). The HP a past turn saw is not in
+    the log, so after FOR_THE_QUEEN an unspent charge may come or not.
+    """
+
+    ORDER = ("TONGUE_LASH", "STRIKE_DOWN_EVIL", "FOR_THE_QUEEN", "BEETLE_CHARGE")
+
+    def start(self, moves: Sequence[str], ctx: Context) -> Fields | None:
+        return Fields(last_move=0) if moves[0] == self.ORDER[0] else None
+
+    def select(self, f: Fields, move: str, ctx: Context, *, check: bool = True) -> bool:
+        number = self.ORDER.index(move)
+        lash, strike, queen, charge = range(4)
+        follow = {lash: {strike}, strike: {queen}, charge: {lash}}.get(
+            f.last_move,
+            {lash} if f.once_only_move_used else {lash, charge},
+        )
+        if check and number not in follow:
+            return False
+        f.once_only_move_used |= number == charge
+        f.last_move = number
+        return True
+
+    def announced(self, emu: Mapping[str, Any]) -> str:
+        if _stunned_buff(emu):
+            return STUNNED
+        return self.ORDER[emu["ai"]["last_move"]]
+
+
+class Queen(Monster):
+    """PUPPET_STRINGS, YOU_ARE_MINE, then BURN_BRIGHT while her amalgam burns, then the axe.
+
+    Decompiled Queen.cs: YOU_ARE_MINE and BURN_BRIGHT_FOR_ME both lead to a conditional on
+    the Torch Head Amalgam -- BURN_BRIGHT again while it lives, OFF_WITH_YOUR_HEAD once it
+    is dead -- and OFF_WITH_YOUR_HEAD -> EXECUTION -> ENRAGE -> OFF_WITH_YOUR_HEAD after. The
+    emulator walks it on `LastMove` in that order (EnemyAI.cs, case KE.Queen). Whether the
+    amalgam stood at a past roll is not in the log, so after either of the first two
+    either answer is accepted. An ENRAGE forced over BURN_BRIGHT by the amalgam's death
+    (`Queen.AfterDeath`, unlogged) falls back to the generic state.
+    """
+
+    ORDER = (
+        "PUPPET_STRINGS_MOVE",
+        "YOU_ARE_MINE_MOVE",
+        "BURN_BRIGHT_FOR_ME_MOVE",
+        "OFF_WITH_YOUR_HEAD_MOVE",
+        "EXECUTION_MOVE",
+        "ENRAGE_MOVE",
+    )
+
+    def start(self, moves: Sequence[str], ctx: Context) -> Fields | None:
+        return Fields(last_move=0) if moves[0] == self.ORDER[0] else None
+
+    def select(self, f: Fields, move: str, ctx: Context, *, check: bool = True) -> bool:
+        number = self.ORDER.index(move)
+        puppet, mine, burn, head, execution, enrage = range(6)
+        follow = {
+            puppet: {mine},
+            mine: {burn, head},
+            burn: {burn, head},
+            head: {execution},
+            execution: {enrage},
+            enrage: {head},
+        }.get(f.last_move, {puppet})
+        if check and number not in follow:
+            return False
+        f.last_move = number
+        return True
+
+    def announced(self, emu: Mapping[str, Any]) -> str:
+        if _stunned_buff(emu):
+            return STUNNED
+        return self.ORDER[emu["ai"]["last_move"]]
+
+
 _MODELS: tuple[Monster, ...] = (
     # EnemyAI.cs:1112-1119 -- MoveIndex 0 INCANTATION, then DARK_STRIKE for good.
     Cycle(
@@ -2379,6 +2628,260 @@ _MODELS: tuple[Monster, ...] = (
         },
         prefix=("THRASH_MOVE", "BUFF_MOVE"),
         loop=("THRASH2_MOVE",),
+    ),
+    # Act 2. EnemyAI.cs, case KE.Chomper: CLAMP <-> SCREECH on `MoveIndex % 2`
+    # (decompiled Chomper.cs); CLAMP is MultiAttackIntent(ClampDamage, 2), SCREECH a
+    # StatusIntent(3) the emulator announces as a Debuff. The Tunneler's Chomper is built
+    # on 1, so it opens on SCREECH.
+    Cycle(
+        "CHOMPER",
+        {
+            "CLAMP_MOVE": attack(deadly(9, 8), hits=2),
+            "SCREECH_MOVE": debuff(3, live="STATUS_CARD"),
+        },
+        loop=("CLAMP_MOVE", "SCREECH_MOVE"),
+        openers=("CLAMP_MOVE", "SCREECH_MOVE"),
+    ),
+    # Act 2. EnemyAI.cs, case KE.Myte: TOXIC -> BITE -> SUCK round `MoveIndex % 3`; INIT_MOVE
+    # opens the second Myte on SUCK, which CombatFactory builds two ahead (decompiled
+    # Myte.cs). TOXIC is a StatusIntent(2) announced as a Debuff.
+    Cycle(
+        "MYTE",
+        {
+            "TOXIC_MOVE": debuff(2, live="STATUS_CARD"),
+            "BITE_MOVE": attack(deadly(15, 13)),
+            "SUCK_MOVE": attack(deadly(6, 4)),
+        },
+        loop=("TOXIC_MOVE", "BITE_MOVE", "SUCK_MOVE"),
+        openers=("TOXIC_MOVE", "SUCK_MOVE"),
+        branches=("INIT_MOVE",),
+    ),
+    # Act 2. EnemyAI.cs, case KE.SpinyToad: PROTRUDING_SPIKES -> SPIKE_EXPLOSION -> TONGUE_LASH,
+    # a plain ring (decompiled SpinyToad.cs). The spikes' Buff carries its 5.
+    Cycle(
+        "SPINY_TOAD",
+        {
+            "PROTRUDING_SPIKES_MOVE": buff(5),
+            "SPIKE_EXPLOSION_MOVE": attack(deadly(25, 23)),
+            "TONGUE_LASH_MOVE": attack(deadly(19, 17)),
+        },
+        loop=("PROTRUDING_SPIKES_MOVE", "SPIKE_EXPLOSION_MOVE", "TONGUE_LASH_MOVE"),
+    ),
+    # Act 2. See `Ovicopter`. LAY_EGGS is a SummonIntent, a bare Buff to the emulator;
+    # TENDERIZER declares its attack before its Vulnerable.
+    Ovicopter(
+        "OVICOPTER",
+        {
+            "LAY_EGGS_MOVE": Move("SUMMON", "Buff", 0),
+            "NUTRITIONAL_PASTE_MOVE": buff(deadly(4, 3)),
+            "SMASH_MOVE": attack(deadly(17, 16)),
+            "TENDERIZER_MOVE": attack(deadly(8, 7)),
+        },
+        loop=("LAY_EGGS_MOVE", "SMASH_MOVE", "TENDERIZER_MOVE"),
+        branches=("SUMMON_BRANCH_STATE",),
+        # The summon chokepoint records the egg; only the Fabricator reads it back.
+        unread=("last_spawned_def_id",),
+    ),
+    # Act 2, laid by the Ovicopter. EnemyAI.cs, case KE.ToughEgg: HATCH while its
+    # HatchPower lasts, then NIBBLE, which follows up to itself (decompiled ToughEgg.cs).
+    # One laid on the enemy turn keeps its HATCH unlogged a round: the game logs the
+    # initial state once and does not roll before the first move (MonsterMoveStateMachine).
+    Cycle(
+        "TOUGH_EGG",
+        {
+            "HATCH_MOVE": Move("SUMMON", "Buff", 0),
+            "NIBBLE_MOVE": attack(deadly(5, 4)),
+        },
+        prefix=("HATCH_MOVE",),
+        loop=("NIBBLE_MOVE",),
+        summoned=True,
+    ),
+    # Act 2. See `HunterKiller`. TENDERIZING_GOOP is its Tender debuff.
+    HunterKiller(
+        "HUNTER_KILLER",
+        {
+            "TENDERIZING_GOOP_MOVE": debuff(1),
+            "BITE_MOVE": attack(deadly(19, 17)),
+            "PUNCTURE_MOVE": attack(deadly(8, 7), hits=3),
+        },
+        branches=("RAND",),
+    ),
+    # Act 2 elite. EnemyAI.cs, case KE.InfestedPrism: JAB -> RADIATE -> WHIRLWIND -> PULSATE
+    # round `MoveIndex % 4` (decompiled InfestedPrism.cs); WHIRLWIND is
+    # MultiAttackIntent(WhirlwindDamage, 3).
+    Cycle(
+        "INFESTED_PRISM",
+        {
+            "JAB_MOVE": attack(deadly(17, 15)),
+            "RADIATE_MOVE": attack(deadly(13, 11)),
+            "WHIRLWIND_MOVE": attack(deadly(6, 5), hits=3),
+            "PULSATE_MOVE": attack(deadly(10, 8)),
+        },
+        loop=("JAB_MOVE", "RADIATE_MOVE", "WHIRLWIND_MOVE", "PULSATE_MOVE"),
+    ),
+    # Act 2 boss. EnemyAI.cs, case KE.TheInsatiable: LIQUIFY_GROUND once, then THRASH,
+    # LUNGING_BITE, SALIVATE, THRASH_2 round `(MoveIndex - 1) % 4` (decompiled
+    # TheInsatiable.cs). SALIVATE's Buff carries its Strength.
+    Cycle(
+        "THE_INSATIABLE",
+        {
+            "LIQUIFY_GROUND_MOVE": buff(),
+            "THRASH_MOVE": attack(deadly(9, 8), hits=2),
+            "LUNGING_BITE_MOVE": attack(deadly(31, 28)),
+            "SALIVATE_MOVE": buff(deadly(3, 2)),
+            "THRASH_MOVE_2": attack(deadly(9, 8), hits=2),
+        },
+        prefix=("LIQUIFY_GROUND_MOVE",),
+        loop=("THRASH_MOVE", "LUNGING_BITE_MOVE", "SALIVATE_MOVE", "THRASH_MOVE_2"),
+    ),
+    # Act 3. EnemyAI.cs, case KE.SlimedBerserker: VOMIT_ICHOR -> FURIOUS_PUMMELING ->
+    # LEECHING_HUG -> SMOTHER round `MoveIndex % 4` (decompiled SlimedBerserker.cs). VOMIT is
+    # a StatusIntent(10) announced as a Debuff; PUMMELING is MultiAttackIntent(4).
+    Cycle(
+        "SLIMED_BERSERKER",
+        {
+            "VOMIT_ICHOR_MOVE": debuff(10, live="STATUS_CARD"),
+            "FURIOUS_PUMMELING_MOVE": attack(deadly(5, 4), hits=4),
+            "LEECHING_HUG_MOVE": debuff(3),
+            "SMOTHER_MOVE": attack(deadly(33, 30)),
+        },
+        loop=(
+            "VOMIT_ICHOR_MOVE",
+            "FURIOUS_PUMMELING_MOVE",
+            "LEECHING_HUG_MOVE",
+            "SMOTHER_MOVE",
+        ),
+    ),
+    # Act 3. EnemyAI.cs, case KE.TurretOperator: UNLOAD, UNLOAD_2, RELOAD round `MoveIndex %
+    # 3` (decompiled TurretOperator.cs); both unloads are MultiAttackIntent(FireDamage, 5).
+    Cycle(
+        "TURRET_OPERATOR",
+        {
+            "UNLOAD_MOVE": attack(deadly(4, 3), hits=5),
+            "UNLOAD_MOVE_2": attack(deadly(4, 3), hits=5),
+            "RELOAD_MOVE": buff(1),
+        },
+        loop=("UNLOAD_MOVE", "UNLOAD_MOVE_2", "RELOAD_MOVE"),
+    ),
+    # Act 3 boss. See `Aeonglass` (decompiled Aeonglass.cs); INTENSITY is a StatusIntent
+    # (its Withers) announced as a Debuff.
+    Aeonglass(
+        "AEONGLASS",
+        {
+            "EBB_MOVE": attack(deadly(32, 26)),
+            "EYE_LASERS_MOVE": attack(deadly(12, 11), hits=2),
+            "INCREASING_INTENSITY_MOVE": debuff(deadly(2, 1), live="STATUS_CARD"),
+        },
+        loop=("EBB_MOVE", "EYE_LASERS_MOVE", "INCREASING_INTENSITY_MOVE"),
+    ),
+    # Act 3, the Fabricator's bots: one move each, following up to itself (decompiled
+    # Guardbot.cs, Noisebot.cs, Stabbot.cs, Zapbot.cs; EnemyAI.cs's cases).
+    Cycle("GUARDBOT", {"GUARD_MOVE": defend(15)}, loop=("GUARD_MOVE",), summoned=True),
+    Cycle(
+        "NOISEBOT",
+        {"NOISE_MOVE": debuff(2, live="STATUS_CARD")},
+        loop=("NOISE_MOVE",),
+        summoned=True,
+    ),
+    Cycle(
+        "STABBOT",
+        {"STAB_MOVE": attack(deadly(12, 11))},
+        loop=("STAB_MOVE",),
+        summoned=True,
+    ),
+    Cycle("ZAPBOT", {"ZAP": attack(deadly(15, 14))}, loop=("ZAP",), summoned=True),
+    # Act 3 boss, the Queen's partner. EnemyAI.cs, case KE.TorchHeadAmalgam: TACKLE and
+    # TACKLE_2 once, then BEAM, TACKLE_3, TACKLE_4 round `(MoveIndex - 2) % 3` (decompiled
+    # TorchHeadAmalgam.cs). BEAM is MultiAttackIntent(SoulBeamDamage, 3), a flat 8.
+    Cycle(
+        "TORCH_HEAD_AMALGAM",
+        {
+            "TACKLE_MOVE": attack(deadly(19, 18)),
+            "TACKLE_2_MOVE": attack(deadly(19, 18)),
+            "BEAM_MOVE": attack(8, hits=3),
+            "TACKLE_3_MOVE": attack(deadly(15, 14)),
+            "TACKLE_4_MOVE": attack(deadly(15, 14)),
+        },
+        prefix=("TACKLE_MOVE", "TACKLE_2_MOVE"),
+        loop=("BEAM_MOVE", "TACKLE_3_MOVE", "TACKLE_4_MOVE"),
+    ),
+    # Act 3. See `Fabricator`. FABRICATE is a SummonIntent, a bare Buff to the emulator.
+    Fabricator(
+        "FABRICATOR",
+        {
+            "FABRICATE_MOVE": Move("SUMMON", "Buff", 0),
+            "FABRICATING_STRIKE_MOVE": attack(deadly(21, 18)),
+            "DISINTEGRATE_MOVE": attack(deadly(13, 11)),
+        },
+        branches=("fabricateBranch", "RAND"),
+        # `_lastSpawned`, a model reference the mod does not report (see `Fabricator`).
+        unread=("last_spawned_def_id",),
+    ),
+    # Act 3, the Turret Operator's partner. See `LivingShield`.
+    LivingShield(
+        "LIVING_SHIELD",
+        {
+            "SHIELD_SLAM_MOVE": attack(6),
+            "SMASH_MOVE": attack(deadly(18, 16)),
+        },
+        branches=("SHIELD_SLAM_BRANCH",),
+    ),
+    # Act 3 elite. See `SoulNexus`. MAELSTROM is MultiAttackIntent(MaelstromDamage, 4).
+    SoulNexus(
+        "SOUL_NEXUS",
+        {
+            "SOUL_BURN_MOVE": attack(deadly(31, 29)),
+            "MAELSTROM_MOVE": attack(deadly(7, 6), hits=4),
+            "DRAIN_LIFE_MOVE": attack(deadly(19, 18)),
+        },
+        branches=("RAND",),
+    ),
+    # Act 3. See `FrogKnight`. FOR_THE_QUEEN's Buff carries its Strength.
+    FrogKnight(
+        "FROG_KNIGHT",
+        {
+            "TONGUE_LASH": attack(deadly(14, 13)),
+            "STRIKE_DOWN_EVIL": attack(deadly(23, 21)),
+            "FOR_THE_QUEEN": buff(5),
+            "BEETLE_CHARGE": attack(deadly(40, 35)),
+        },
+        branches=("HALF_HEALTH",),
+    ),
+    # Act 3 boss. See `Queen`. PUPPET_STRINGS is a CardDebuffIntent; YOU_ARE_MINE carries
+    # the 99 the emulator's debuff reads, BURN_BRIGHT and ENRAGE their Strength.
+    Queen(
+        "QUEEN",
+        {
+            "PUPPET_STRINGS_MOVE": debuff(3, live="CARD_DEBUFF"),
+            "YOU_ARE_MINE_MOVE": debuff(99),
+            "BURN_BRIGHT_FOR_ME_MOVE": buff(20),
+            "OFF_WITH_YOUR_HEAD_MOVE": attack(deadly(4, 3), hits=5),
+            "EXECUTION_MOVE": attack(deadly(18, 15)),
+            "ENRAGE_MOVE": buff(2),
+        },
+        branches=("YOURE_MINE_NOW_BRANCH", "BURN_BRIGHT_FOR_ME_BRANCH"),
+    ),
+    # Act 2 boss. EnemyAI.cs, case KE.KnowledgeDemon (KnowledgeDemonPhase): CURSE, SLAP,
+    # KNOWLEDGE_OVERWHELMING, PONDER three times, then the three without the curse for good
+    # -- PONDER leads to CurseOfKnowledgeBranch, which curses while it has casts left
+    # (decompiled KnowledgeDemon.cs). The curse's Debuff opens the player's choice.
+    Cycle(
+        "KNOWLEDGE_DEMON",
+        {
+            "CURSE_OF_KNOWLEDGE_MOVE": debuff(0),
+            "SLAP_MOVE": attack(deadly(18, 17)),
+            "KNOWLEDGE_OVERWHELMING_MOVE": attack(deadly(9, 8), hits=3),
+            "PONDER_MOVE": attack(deadly(13, 11)),
+        },
+        prefix=(
+            "CURSE_OF_KNOWLEDGE_MOVE",
+            "SLAP_MOVE",
+            "KNOWLEDGE_OVERWHELMING_MOVE",
+            "PONDER_MOVE",
+        )
+        * 3,
+        loop=("SLAP_MOVE", "KNOWLEDGE_OVERWHELMING_MOVE", "PONDER_MOVE"),
+        branches=("CurseOfKnowledgeBranch",),
     ),
     # Act 2. EnemyAI.cs, case KE.LouseProgenitor: WEB_CANNON -> CURL_AND_GROW -> POUNCE, a
     # plain ring (decompiled LouseProgenitor.cs). CURL_AND_GROW declares its DefendIntent
