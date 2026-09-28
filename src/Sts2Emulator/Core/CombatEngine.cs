@@ -811,6 +811,10 @@ public static class CombatEngine
         // for the turn it was played and no part of the next one.
         BuffSystem.Remove(state.PlayerBuffs, BuffId.Shadowmeld);
 
+        // `BurstPower.AfterSideTurnEnd` removes itself too: "this turn", and a Burst no
+        // Skill spent does not carry into the next.
+        BuffSystem.Remove(state.PlayerBuffs, BuffId.Burst);
+
         // TangledPower.AfterSideTurnEnd removes itself when its OWNER's side turn ends —
         // the player's. Removing it at the start of the player turn instead meant the Vine
         // Shambler applied it during the enemy turn and it was gone before a single card
