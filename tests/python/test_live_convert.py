@@ -502,6 +502,22 @@ class PowersFixtureTests(unittest.TestCase):
         self.assertTrue(any("THIEVERY_POWER" in w for w in self.result.warnings))
         self.assertFalse(self.result.reliable)
 
+    def test_thievery_carries_its_takings_when_the_mod_sends_them(self) -> None:
+        # ThieveryPower keeps what it has lifted in its GoldVar (decompiled
+        # ThieveryPower.Steal); the mod sends it as fields.stolen_gold, and the emulator
+        # holds it in EnemyState.StolenGold (Enemy.cs:162, CombatSnapshot.cs:547).
+        live = load("powers")
+        merc_index, merc = next(
+            (i, e)
+            for i, e in enumerate(live["enemies"])
+            if any(p["id"] == "THIEVERY_POWER" for p in e["powers"])
+        )
+        thievery = next(p for p in merc["powers"] if p["id"] == "THIEVERY_POWER")
+        thievery["fields"] = {"stolen_gold": 40}
+        result = convert.convert(live)
+        self.assertEqual(result.doc["enemies"][merc_index]["ai"]["stolen_gold"], 40)
+        self.assertFalse(any("THIEVERY_POWER" in w for w in result.warnings))
+
     def test_missing_known_draw_lists_default_to_empty(self) -> None:
         self.assertEqual(
             self.doc["piles"]["draw"],

@@ -872,10 +872,15 @@ class TwoTailedRat(Monster):
                 for other in ctx.roster
                 if other["id"] == self.entry
             )
-            ctx.warnings.append(
-                f"{ctx.label}: ai_fields has no CallForBackupCount; counted {count} from "
-                "the roster's move logs, which miss any rat that has since died",
-            )
+            # A mod before 2026-09-28 leaves an ai_fields entry out at its type's
+            # default (STS2MCP ReadPrimitiveMembers), and a call sets the count on
+            # EVERY rat of the pack -- so with no call logged anywhere a missing count
+            # is that default 0. Only a call the field does not reflect is a gap.
+            if count > 0:
+                ctx.warnings.append(
+                    f"{ctx.label}: ai_fields has no CallForBackupCount; counted {count} "
+                    "from the roster's move logs, which miss any rat that has since died",
+                )
         if count > 0:
             f.companions["BackupCount"] = count
 
