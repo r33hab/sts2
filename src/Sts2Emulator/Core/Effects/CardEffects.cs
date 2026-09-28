@@ -335,7 +335,7 @@ public static class CardEffects
                 break;
 
             case IC.Breakthrough: // 1-cost, lose 1 HP + 9/13 dmg to ALL enemies
-                LoseHp(state, 1);
+                LoseHp(state, 1, fromPlayedCard: true);
                 DealDamageToAll(state, Dmg(state, def, upgraded, card));
                 break;
 
@@ -478,7 +478,7 @@ public static class CardEffects
                 break;
 
             case IC.Hemokinesis: // 1-cost, lose 2 HP then deal 15/20 dmg
-                LoseHp(state, 2);
+                LoseHp(state, 2, fromPlayedCard: true);
                 DealDamage(state, Dmg(state, def, upgraded, card));
                 break;
 
@@ -741,7 +741,7 @@ public static class CardEffects
                 break;
 
             case IC.Brand: // 0-cost, lose 1 HP, exhaust a CHOSEN card, gain 1/2 Strength
-                LoseHp(state, 1);
+                LoseHp(state, 1, fromPlayedCard: true);
                 // The game applies the Strength after the exhaust resolves. Nothing reads
                 // Strength during an exhaust, so granting it first is observationally the
                 // same and keeps the pending selection as the last thing this play does.
@@ -764,12 +764,12 @@ public static class CardEffects
                 break;
 
             case IC.BloodWall: // 2-cost, lose 2 HP + gain 16/20 block
-                LoseHp(state, 2);
+                LoseHp(state, 2, fromPlayedCard: true);
                 GainBlock(state, Blk(def, upgraded, card), rng);
                 break;
 
             case IC.Bloodletting: // 0-cost, lose 3 HP + gain 2/3 energy
-                LoseHp(state, 3);
+                LoseHp(state, 3, fromPlayedCard: true);
                 GainEnergy(state, upgraded ? 3 : 2);
                 break;
 
@@ -887,7 +887,7 @@ public static class CardEffects
                 break;
 
             case IC.Offering: // 0-cost, lose 6 HP + gain 2 energy + draw 3/5
-                LoseHp(state, 6);
+                LoseHp(state, 6, fromPlayedCard: true);
                 GainEnergy(state, 2);
                 DrawCards(state, upgraded ? 5 : 3, rng);
                 break;
@@ -1006,7 +1006,7 @@ public static class CardEffects
                 break;
 
             case IC.DemonicShield: // 0-cost, lose 1 HP, double target ally's block (self in SP)
-                LoseHp(state, 1);
+                LoseHp(state, 1, fromPlayedCard: true);
                 GainBlock(state, state.PlayerBlock, rng);
                 break;
 
@@ -3692,6 +3692,16 @@ public static class CardEffects
             // Hook.AfterDamageReceived does not care who dealt the damage, so a card that
             // hits its own owner arms Centennial Puzzle and Self-Forming Clay too.
             RelicEffects.ApplyAfterUnblockedDamageReceived(state, unblocked: hpLoss);
+            // `RupturePower.AfterDamageReceived` pays for any unblocked damage on the
+            // player's OWN turn -- a Burn at the turn's end, an enemy's Thorns, Constrict --
+            // and none of these comes from the card being played, so it pays at once. The
+            // enemy turn's attacks are the other side's, and pay nothing.
+            int rupture = BuffSystem.Get(state.PlayerBuffs, BuffId.RupturePower);
+            if (rupture > 0 && state.PlayerTurn)
+            {
+                RelicEffects.GainPlayerStrength(state, rupture);
+            }
+
             RelicEffects.ApplyAfterPlayerHpChanged(state);
         }
     }
@@ -4727,6 +4737,16 @@ public static class CardEffects
             BuffSystem.Apply(target.Buffs, BuffId.Slippery, -1);
         }
         target.Hp = Math.Max(0, target.Hp - hpLoss);
+
+        // `CurlUpPower.AfterDamageReceived` reads no damage result -- a hit the louse
+        // blocks whole counts too -- and only REMEMBERS the card; the block comes when
+        // that card has finished (`CombatEngine.PayCurlUp`). Curling here, mid-card, let
+        // a multi-hit card's later hits spend the block the game hands out after them.
+        if (BuffSystem.Get(target.Buffs, BuffId.CurlUp) > 0)
+        {
+            target.CurlUpArmed = true;
+        }
+
         if (hpLoss > 0)
         {
             EnemyAI.TriggerShriekIfWounded(target);
@@ -4844,13 +4864,6 @@ public static class CardEffects
                 );
             }
 
-            int curlUp = BuffSystem.Get(target.Buffs, BuffId.CurlUp);
-            if (curlUp > 0)
-            {
-                target.Block += curlUp;
-                BuffSystem.Remove(target.Buffs, BuffId.CurlUp);
-            }
-
             // SkittishPower.AfterAttack: the FIRST card each turn to land unblocked
             // damage on the gardener makes it flinch behind N block. Unlike Curl Up the
             // power stays -- it is spent for the turn, not consumed -- and the flag
@@ -4930,12 +4943,13 @@ public static class CardEffects
         // doubles UNPOWERED block too -- Afterimage's, for one, which can land in the same
         // turn. That is why it sits here rather than inside IncomingBlock.
         // `Vambrace.ModifyBlockMultiplicative` doubles the first CARD block of a combat,
-        // and `AfterModifyingBlockAmount` latches only once the gain actually lands -- so a
-        // card that would gain nothing does not spend it.
+        // and `AfterModifyingBlockAmount` names the card only once the gain actually lands
+        // -- so a card that would gain nothing does not spend it. The relic is spent when
+        // that card finishes (`AfterCardPlayed`), so all of its gains are doubled.
         if (powered && effective > 0 && RelicEffects.DoublesCardBlock(state))
         {
             effective *= 2;
-            state.VambraceSpent = true;
+            state.VambraceCard = true;
         }
 
         // `PaelsLegion.ModifyBlockMultiplicative` returns 2 while its cooldown is clear,
@@ -4944,7 +4958,7 @@ public static class CardEffects
         if (powered && effective > 0 && RelicEffects.PaelsLegionDoublesBlock(state))
         {
             effective *= 2;
-            state.PaelsLegionCooldown = RelicEffects.PaelsLegionCooldownTurns;
+            state.PaelsLegionCard = true;
         }
 
         int shadowmeld = BuffSystem.Get(state.PlayerBuffs, BuffId.Shadowmeld);
@@ -5158,7 +5172,13 @@ public static class CardEffects
     }
 
     // Deals unblockable, unpowered HP loss to the player and triggers Rupture.
-    public static void LoseHp(CombatState state, int amount)
+    /// <param name="fromPlayedCard">
+    /// The HP is what the card being PLAYED costs. `RupturePower` banks that and pays it
+    /// once the card has finished (`CombatEngine.PayRupture`); any other HP loss on the
+    /// player's turn -- a status burning in hand, Royal Poison, Inferno's tick -- pays at
+    /// once (decompiled RupturePower.cs).
+    /// </param>
+    public static void LoseHp(CombatState state, int amount, bool fromPlayedCard = false)
     {
         int hpBefore = state.PlayerHp;
         int buffer = BuffSystem.Get(state.PlayerBuffs, BuffId.Buffer);
@@ -5182,7 +5202,14 @@ public static class CardEffects
         int rupt = BuffSystem.Get(state.PlayerBuffs, BuffId.RupturePower);
         if (rupt > 0 && hpBefore > state.PlayerHp)
         {
-            RelicEffects.GainPlayerStrength(state, rupt);
+            if (fromPlayedCard)
+            {
+                state.RuptureOwed += rupt;
+            }
+            else
+            {
+                RelicEffects.GainPlayerStrength(state, rupt);
+            }
         }
 
         TriggerInfernoAfterPlayerSelfDamage(state, hpBefore - state.PlayerHp);
@@ -7483,7 +7510,9 @@ public static class CardEffects
                 }
                 return true;
             case "Exterminate":
-                DealDamageMultiHit(state, Dmg(state, def, upgraded, card), 4, rng);
+                // TargetType.AllEnemies, `TargetingAllOpponents`: each of the four hits
+                // lands on every enemy (decompiled Exterminate.cs), not four on one.
+                DealDamageToAllMultiHit(state, Dmg(state, def, upgraded, card), 4);
                 return true;
             case "Peck":
                 DealDamageMultiHit(state, Dmg(state, def, upgraded, card), upgraded ? 4 : 3, rng);

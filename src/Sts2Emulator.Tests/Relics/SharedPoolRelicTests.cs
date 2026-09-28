@@ -228,6 +228,32 @@ public class VambraceTests
 
         Assert.Equal(10, fight.State.PlayerBlock);
     }
+
+    /// <summary>
+    /// Every gain the triggering card makes is doubled: `AfterModifyingBlockAmount` names
+    /// the card, and only that card's `AfterCardPlayed` latches the relic. Second Wind
+    /// gains once per card it exhausts.
+    /// </summary>
+    [Fact]
+    public void EveryGainOfTheTriggeringCardIsDoubled()
+    {
+        var fight = Fight.WithRelics(RelicEffects.Vambrace);
+        fight.State.Hand =
+        [
+            Card(IC.SecondWind),
+            Card(IC.DefendIronclad),
+            Card(IC.DefendIronclad),
+            Card(IC.DefendIronclad),
+        ];
+        fight.State.Energy = 9;
+
+        fight.Play();
+        Assert.Equal(3 * 10, fight.State.PlayerBlock);
+
+        fight.State.Hand.Add(Card(IC.DefendIronclad));
+        fight.Play();
+        Assert.Equal(3 * 10 + 5, fight.State.PlayerBlock);
+    }
 }
 
 public class JossPaperTests

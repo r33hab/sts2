@@ -2294,7 +2294,9 @@ What actually differs between A8 and A10, and nothing else does:
 - **`DoubleBoss` (10)** adds a second boss — but only to the _last_ act
   (`i == Acts.Count - 1` in `RunManager.GenerateRooms`), which act-1 generation never
   reaches. Verified in passing: an A10 capture's deck, enemy roster and HP all match an
-  A8-modelled emulator, because HP comes from `ToughEnemies` (live at both).
+  A8-modelled emulator, because HP comes from `ToughEnemies` (live at both). The run
+  engine models it (`DoubleBossTests`): one more UpFront draw after the last act's rooms,
+  a boss point one row above the first, and both last-act boss rooms pay nothing.
 - Player HP stays 64/80: the HP-affecting levels (TightBelt 4, AscendersBane 5) are both
   below 8.
 
@@ -2902,6 +2904,25 @@ is what self-play will need. Captures record `profile.all_act1_bosses_seen` and
 `all_act1_acts_discovered`; `verify_run_generation.py` prints **PROFILE MISMATCH** and a
 test fails if a fixture came from a fresher account, because such a capture encodes
 different rules and is not comparable.
+
+### Replaying a real run's run layer (`scripts/replay_real_run.py`)
+
+`replay_real_run.py SESSION.jsonl ...` replays the coach's session logs (spire-coach
+`data/runs`, `data/captures`); `--fixtures` replays the committed captures. The seed of a
+real session is read from the game's own run history
+(`<SlayTheSpire2>/steam/<id>/[modded/]profileN/saves/history/<start_time>.run`, matched
+by start time and ascension, read only). Fights are resolved with
+`Sts2Run_DebugResolveCombat` and the holdings reset with `Sts2Run_DebugSetPlayer`, so
+the numbers are the run layer's alone, per category: Neow and ancients, map, encounter,
+unknown room, event, card reward, gold, potion, relic, treasure, shop, card offer, rest,
+outcome. `check_run_traces.py` runs it over every fixture and fails on any difference.
+
+**A session played with content mods cannot be replayed seed-exactly**, and the tool says
+so (`modded` on its report, left out of the totals). The first real sessions all ran
+with Workshop mods (Watcher and The Shape characters, Multiplayer Expanded's extra cards,
+BaseLib, Unlock The Spire): the character screen lists two extra characters and a
+101-card Ironclad pool, and every roll drawn over a pool moves -- the relic bags on
+run start first, then the rooms, events and bosses. Capture with content mods off.
 
 ## One-shot smoke test (verify the whole stack works)
 

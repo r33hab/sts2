@@ -43,8 +43,13 @@ class Move(NamedTuple):
 # declaration and swallows it. That silently shrank the denominator for every monster
 # with one (Ceremonial Beast's BEAST_CRY, Waterfall Giant's EXPLODE), which makes
 # coverage easier to pass rather than harder.
+#
+# The intents are optional: the Decimillipede segment's DEAD_MOVE is
+# `new MoveState("DEAD_MOVE", DeadMove)`, the one MoveState in the game that declares none,
+# and requiring the comma dropped it from the machine along with its REATTACH edge.
 MOVE_STATE = re.compile(
-    r'new MoveState\(\s*"(?P<name>[A-Z0-9_]+)"\s*,\s*\w+\s*,\s*(?P<intents>.*?)\)\s*[;{]',
+    r'new MoveState\(\s*"(?P<name>[A-Z0-9_]+)"\s*,\s*\w+\s*'
+    r"(?:,\s*(?P<intents>.*?))?\)\s*[;{]",
     re.DOTALL,
 )
 INTENT = re.compile(r"new (?P<kind>\w*Intent)\((?P<args>[^()]*(?:\([^()]*\)[^()]*)*)\)")
@@ -139,7 +144,7 @@ def parse_machine(text: str) -> Machine:
     moves = {
         match.group("name"): tuple(
             f"{m.group('kind')}({m.group('args').strip()})"
-            for m in INTENT.finditer(match.group("intents"))
+            for m in INTENT.finditer(match.group("intents") or "")
         )
         for match in MOVE_STATE.finditer(text)
     }
@@ -239,7 +244,7 @@ def moves_for(enemy: str) -> list[Move]:
             continue
         intents = [
             f"{m.group('kind')}({m.group('args').strip()})"
-            for m in INTENT.finditer(match.group("intents"))
+            for m in INTENT.finditer(match.group("intents") or "")
         ]
         if not intents:
             continue

@@ -23,6 +23,11 @@ public class BreadTests
         fight.State.PlayerHp = 999;
         int max = fight.State.MaxEnergy;
 
+        // `Bread.AfterSideTurnStart` on TurnNumber 1: PlayerCmd.LoseEnergy(LoseEnergy 2),
+        // after the reset (decompiled Bread.cs). This test used to look at turn two only,
+        // and the turn-one half was missing.
+        Assert.Equal(max - 2, fight.State.Energy);
+
         fight.EndTurn();
 
         Assert.Equal(max + 1, fight.State.Energy);

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Sts2Emulator.Core;
 using Sts2Emulator.Core.Effects;
@@ -14,6 +15,72 @@ namespace Sts2Emulator.Tests;
 /// </summary>
 public class ArtifactPowerTests
 {
+    /// <summary>
+    /// EVERY power the game types `PowerType.Debuff` is one Artifact stops -- the hook
+    /// asks `GetTypeForAmount`, not a list -- so `BuffSystem.IsDebuff` agrees with the
+    /// generated `IsBuff` flag for every BuffId that models a power. The hand-kept list it
+    /// replaced had twelve names, and Hex, Dampen, No Draw and twenty-six more went straight
+    /// past an Artifact. Temporary powers are the exception the game makes by name: they
+    /// hand their effect back by being removed, which is bookkeeping, not a debuff landing.
+    /// </summary>
+    [Fact]
+    public void EveryDebuffPowerIsOneArtifactStops()
+    {
+        var wrong = new List<string>();
+        foreach (BuffId id in Enum.GetValues<BuffId>())
+        {
+            if (id.ToString().StartsWith("Temporary") || id == BuffId.Illusion)
+            {
+                continue;
+            }
+
+            int? found =
+                GeneratedData.Powers.FindId($"{id}Power") ?? GeneratedData.Powers.FindId($"{id}");
+            if (found is not int power)
+            {
+                continue;
+            }
+
+            bool debuff = !GeneratedData.Powers.Get(power).IsBuff;
+            if (debuff != BuffSystem.IsDebuff(id))
+            {
+                wrong.Add($"{id} (debuff: {debuff})");
+            }
+        }
+
+        Assert.Empty(wrong);
+    }
+
+    /// <summary>
+    /// A debuff the player gives THEMSELVES is still a debuff on its owner: Battle Trance's
+    /// `NoDrawPower` against an Artifact is eaten, and the Artifact goes.
+    /// </summary>
+    [Fact]
+    public void ArtifactStopsBattleTrancesNoDraw()
+    {
+        var fight = Fight
+            .Hand(TestDeck.Card(IC.BattleTrance))
+            .Energy(1)
+            .PlayerBuff(BuffId.Artifact, 1);
+
+        fight.Play();
+
+        Assert.Equal(0, fight.PlayerBuffAmount(BuffId.NoDraw));
+        Assert.Equal(0, fight.PlayerBuffAmount(BuffId.Artifact));
+    }
+
+    /// <summary>The Spectral Knight's Hex against a player holding Artifact.</summary>
+    [Fact]
+    public void ArtifactStopsAHex()
+    {
+        var buffs = new List<BuffState> { new(BuffId.Artifact, 1) };
+
+        BuffSystem.Apply(buffs, BuffId.Hex, 2);
+
+        Assert.Equal(0, BuffSystem.Get(buffs, BuffId.Hex));
+        Assert.Equal(0, BuffSystem.Get(buffs, BuffId.Artifact));
+    }
+
     /// <summary>The ordinary case: a positive debuff is eaten and one Artifact goes.</summary>
     [Fact]
     public void APositiveDebuffIsEatenWhole()

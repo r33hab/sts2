@@ -52,8 +52,10 @@ public class CrabRageAndCurlUpTests
     }
 
     /// <summary>
-    /// `CurlUpPower.AfterDamageReceived`: the first powered attack to land turns into
-    /// block, and the power is spent doing it.
+    /// `CurlUpPower`: the first card whose powered attack lands turns into block once it
+    /// has finished playing (`AfterDamageReceived` remembers the card, `AfterCardPlayed`
+    /// pays), and the power is spent doing it. `LouseProgenitorTests` has the multi-hit
+    /// case that the timing decides.
     /// </summary>
     [Fact]
     public void CurlUpTurnsTheFirstHitIntoBlock()
@@ -62,8 +64,10 @@ public class CrabRageAndCurlUpTests
         var curled = fight.State.Enemies.First(e => BuffSystem.Get(e.Buffs, BuffId.CurlUp) > 0);
         int curl = BuffSystem.Get(curled.Buffs, BuffId.CurlUp);
         int blockBefore = curled.Block;
+        fight.State.Hand = [TestDeck.Card(IC.StrikeIronclad)];
+        fight.State.Energy = 1;
 
-        CardEffects.DealDamage(fight.State, 1);
+        fight.Play();
 
         Assert.Equal(blockBefore + curl, curled.Block);
         Assert.Equal(0, BuffSystem.Get(curled.Buffs, BuffId.CurlUp));
@@ -75,11 +79,13 @@ public class CrabRageAndCurlUpTests
     {
         var fight = Fight.Encounter(CombatFactory.ActOneEncounter.LouseProgenitor);
         var curled = fight.State.Enemies.First(e => BuffSystem.Get(e.Buffs, BuffId.CurlUp) > 0);
+        fight.State.Hand = [TestDeck.Card(IC.StrikeIronclad), TestDeck.Card(IC.StrikeIronclad)];
+        fight.State.Energy = 2;
 
-        CardEffects.DealDamage(fight.State, 1);
+        fight.Play();
         int afterFirst = curled.Block;
         curled.Block = 0;
-        CardEffects.DealDamage(fight.State, 1);
+        fight.Play();
 
         Assert.True(afterFirst > 0);
         Assert.Equal(0, curled.Block);

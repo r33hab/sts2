@@ -155,8 +155,8 @@ def check_playable(ascension: int) -> None:
     would end complete-looking and empty.
 
     Raises:
-        ValueError: If the engine refuses the level. Until run-fidelity Task 5 models A10,
-            the default 10 is refused: play 9 with `ascension_stands_in_for=10` (E11).
+        ValueError: If the engine refuses the level: it plays the game's 0-10, A10's
+            second boss included.
 
     """
     env = new_run_env("PREFLIGHT", ascension)
@@ -164,8 +164,7 @@ def check_playable(ascension: int) -> None:
         env.reset()
     except RuntimeError as error:
         raise ValueError(
-            f"the run engine cannot play ascension {ascension} ({error}); until it "
-            "models 10, play 9 with ascension_stands_in_for=10 (erratum E11)",
+            f"the run engine cannot play ascension {ascension} ({error})",
         ) from error
     finally:
         env.close()

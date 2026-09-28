@@ -228,6 +228,9 @@ public static class RelicEffects
     public const int PunchDagger = 210;
     public const int RoyalStamp = 224;
     public const int Bread = 32;
+
+    /// <summary>`Bread`'s `EnergyVar("LoseEnergy", 2)`, charged on turn one.</summary>
+    public const int BreadTurnOneEnergyLoss = 2;
     public const int BurningSticks = 37;
     public const int ChemicalX = 46;
     public const int GhostSeed = 99;
@@ -689,6 +692,14 @@ public static class RelicEffects
         if (HasRelic(state, DivineRight))
         {
             CardEffects.GainStars(state, 3);
+        }
+
+        // `Bread.AfterSideTurnStart` at `TurnNumber == 1`: `PlayerCmd.LoseEnergy(2)`, after
+        // turn one's reset, clamped at zero -- the price of its +1 on every later turn
+        // (`ModifyMaxEnergy` below). Only that half was here.
+        if (HasRelic(state, Bread))
+        {
+            state.Energy = Math.Max(0, state.Energy - BreadTurnOneEnergyLoss);
         }
 
         // `DivineDestiny.AfterSideTurnStart` at `TurnNumber <= 1`: StarsVar(6). Divine
@@ -1688,8 +1699,18 @@ public static class RelicEffects
         state.Relics[index] = state.Relics[index] with { Counter = shouldBeActive ? 1 : 0 };
     }
 
-    public static void ApplyEndOfPlayerTurn(CombatState state, Random? rng = null)
+    /// <param name="heldNoBlock">
+    /// Whether the player held no block when the turn ended, read before any turn-end hook
+    /// granted some (Orichalcum's `BeforeSideTurnEndVeryEarly`); by default, read here.
+    /// </param>
+    public static void ApplyEndOfPlayerTurn(
+        CombatState state,
+        Random? rng = null,
+        bool? heldNoBlock = null
+    )
     {
+        bool noBlock = heldNoBlock ?? state.PlayerBlock == 0;
+
         // `LunarPastry.AfterSideTurnEnd`: StarsVar(1) whenever the player's side turn
         // ends. Through `GainStars` rather than `Stars +=`, so Black Hole sees it.
         if (HasRelic(state, LunarPastry))
@@ -1697,17 +1718,15 @@ public static class RelicEffects
             CardEffects.GainStars(state, 1);
         }
 
-        if (HasRelic(state, Orichalcum) && state.PlayerBlock == 0)
+        if (HasRelic(state, Orichalcum) && noBlock)
         {
             // BlockVar(6m, ValueProp.Unpowered) — flat, whatever the player's Dexterity.
             CardEffects.GainUnpoweredBlock(state, 6, rng);
         }
 
         // The fake pays 3 where Orichalcum pays 6, on the same "ended the turn with no
-        // block" test. Its `BeforeSideTurnEndVeryEarly`/`BeforeSideTurnEnd` split exists so
-        // Plating cannot rob it of the trigger; the emulator reads block once, here, which
-        // is the same answer because Plating's grant happens on the enemy boundary.
-        if (HasRelic(state, FakeOrichalcum) && state.PlayerBlock == 0)
+        // block" test, read at the same early point -- so holding both pays both.
+        if (HasRelic(state, FakeOrichalcum) && noBlock)
         {
             CardEffects.GainUnpoweredBlock(state, 3, rng);
         }
@@ -2526,7 +2545,8 @@ public static class RelicEffects
 
     /// <summary>
     /// `Vambrace.ModifyBlockMultiplicative`: the FIRST card each combat that gains block
-    /// gains double. `BlockGainedThisCombat` latches once the gain actually lands.
+    /// gains double -- every gain that card makes -- and `BlockGainedThisCombat` latches
+    /// once it finishes (`FinishBlockDoublingCard`).
     /// </summary>
     internal static bool DoublesCardBlock(CombatState state) =>
         HasRelic(state, Vambrace) && !state.VambraceSpent;
@@ -2978,6 +2998,26 @@ public static class RelicEffects
         {
             state.UnsettlingLampCard = false;
             state.UnsettlingLampSpent = true;
+        }
+    }
+
+    /// <summary>
+    /// `Vambrace.AfterCardPlayed` and `PaelsLegion.AfterCardPlayed` on the card whose block
+    /// they doubled: Vambrace is spent for the combat, and the Legion's cooldown starts.
+    /// Until then every gain the card makes is doubled (Second Wind's, one per exhaust).
+    /// </summary>
+    internal static void FinishBlockDoublingCard(CombatState state)
+    {
+        if (state.VambraceCard)
+        {
+            state.VambraceCard = false;
+            state.VambraceSpent = true;
+        }
+
+        if (state.PaelsLegionCard)
+        {
+            state.PaelsLegionCard = false;
+            state.PaelsLegionCooldown = PaelsLegionCooldownTurns;
         }
     }
 

@@ -534,7 +534,10 @@ def _run_constant(name: str) -> int:
 
 
 # Every act's map: the ancient on row 0, rooms on rows 1-15, the boss on `MapBossRow`,
-# one floor per row, and the floor carries across acts (DESIGN.md 5.2).
+# one floor per row, and the floor carries across acts (DESIGN.md 5.2). `MapBossRow` is
+# Act 1's: Hive's map is a row shorter and Glory's two (`RunConstants.MapBossRowFor`), so
+# the bosses stand on floors 17, 33 and 48 and FLOORS_PER_ACT is an upper bound -- the
+# floor classes past 49 are never reached, which costs the heads nothing.
 MAP_BOSS_ROW = _run_constant("MapBossRow")
 ACTS = len(set(act_index_of_region().values()))
 FLOORS_PER_ACT = MAP_BOSS_ROW + 1
