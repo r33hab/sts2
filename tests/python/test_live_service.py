@@ -34,6 +34,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "rl"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 native = importlib.import_module("sts2_gym.native")
 cards = importlib.import_module("sts2_gym.live.cards")
@@ -45,6 +46,8 @@ service = importlib.import_module("sts2_gym.live.service")
 strategy = importlib.import_module("sts2_gym.live.strategy")
 names = importlib.import_module("sts2_gym.names")
 live_search = importlib.import_module("live_search")
+combat_prior = importlib.import_module("combat_prior")
+prior_fixture = importlib.import_module("prior_fixture")
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "live"
 CAPTURED = sorted((FIXTURES / "captured").glob("*.json"))
@@ -290,6 +293,20 @@ class FixedSearcher:
 
     def search(self, snapshot_doc: dict, **kw: object) -> Any:
         return self.result
+
+
+class KwargsSearcher:
+    """A searcher that notes the settings of every call, and passes it on (or fails it)."""
+
+    def __init__(self, inner: Any = None) -> None:
+        self.inner = inner
+        self.calls: list[dict[str, Any]] = []
+
+    def search(self, snapshot_doc: dict, **kw: Any) -> Any:
+        self.calls.append(kw)
+        if self.inner is None:
+            raise RuntimeError("noted, not searched")
+        return self.inner.search(snapshot_doc, **kw)
 
 
 class RecordingSearcher:
@@ -2345,6 +2362,63 @@ class WorkerFailureTests(unittest.TestCase):
                 self.assertEqual(service._about_the_pool(warning), about_the_pool)
 
 
+class CombatPriorTests(unittest.TestCase):
+    """`--prior-dir`: the search plays the exported combat prior, and health names it."""
+
+    def test_the_search_plays_the_prior_and_health_names_it(self) -> None:
+        live = load("captured/floor4_toadpoles_round1")
+        with tempfile.TemporaryDirectory() as tmp:
+            champion = combat_prior.find(prior_fixture.export_prior(Path(tmp)))
+            searcher = live_search.ParallelSearcher(
+                workers=2,
+                nice=10,
+                warmup=champion.live_prior().warm,
+            )
+            try:
+                recording = KwargsSearcher(searcher)
+                svc = service.Service(
+                    recording,
+                    workers=2,
+                    sim_commit="abc1234",
+                    combat_prior=champion,
+                )
+                health = strict(svc.handle(request("health")) or "")["result"]
+                answer = strict(
+                    svc.handle(request("analyze", {"live": live, **QUICK}, 2)) or "",
+                )
+            finally:
+                searcher.close()
+        self.assertEqual(health["combat_prior"], champion.describe())
+        self.assertTrue(answer["ok"], answer)
+        self.assertTrue(answer["result"]["reliable"], answer["result"]["warnings"])
+        [call] = recording.calls
+        self.assertEqual(call["prior_fn"], champion.live_prior())
+        self.assertEqual(
+            (call["c_puct"], call["prior_min_visits"]),
+            (champion.c_puct, champion.prior_min_visits),
+        )
+        self.assertEqual(call["time_budget_s"], QUICK["time_budget_s"])
+
+    def test_without_a_prior_the_search_is_asked_as_before(self) -> None:
+        recording = KwargsSearcher()
+        svc = service.Service(recording, workers=2, sim_commit="abc1234")
+        answer = strict(svc.handle(request("analyze", {"live": load(DEFEND_BEFORE), **QUICK})) or "")
+        self.assertEqual(answer["error"]["type"], "search")
+        [call] = recording.calls
+        self.assertEqual(set(call), {"time_budget_s", "seed", "min_child_sims", "confirm_pairs"})
+
+    def test_prior_dir_names_a_prior_this_build_can_play(self) -> None:
+        self.assertIsNone(service._combat_prior(None))
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "no combat prior is exported"):
+                service._combat_prior(Path(tmp))
+            prior_fixture.export_prior(Path(tmp) / "old", vocab_sha256="0" * 64)
+            with self.assertRaisesRegex(ValueError, "vocabulary"):
+                service._combat_prior(Path(tmp) / "old")
+            root = prior_fixture.export_prior(Path(tmp) / "good")
+            self.assertEqual(service._combat_prior(root), combat_prior.find(root))
+
+
 # ── The process ──────────────────────────────────────────────────────────────
 
 
@@ -2525,6 +2599,35 @@ class ProcessTests(unittest.TestCase):
             128 + signal.SIGTERM,
             err.decode("utf-8", "replace"),
         )
+        self.assert_no_orphans(proc)
+
+    def test_prior_dir_puts_the_prior_in_the_search_and_in_health(self) -> None:
+        live = load("captured/floor4_toadpoles_round1")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = prior_fixture.export_prior(Path(tmp))
+            proc = self.start("-m", "sts2_gym.live.service", "--prior-dir", str(root))
+            try:
+                health = self.send(proc, request("health", req_id=1))
+                answer = self.send(proc, request("analyze", {"live": live, **QUICK}, 2))
+                self.send(proc, request("shutdown", req_id=3))
+                out, err = self.stop(proc)
+            finally:
+                if proc.poll() is None:
+                    self.stop(proc)
+        self.assertEqual(proc.returncode, 0, err.decode("utf-8", "replace"))
+        self.assertEqual(health["result"]["combat_prior"]["directory"], str(root))
+        self.assertTrue(answer["ok"], answer)
+        self.assertTrue(answer["result"]["reliable"], answer["result"]["warnings"])
+        self.assertEqual(out, b"", "stdout carries protocol lines only")
+        self.assert_no_orphans(proc)
+
+    def test_a_prior_dir_without_a_prior_stops_the_service_at_startup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self.start("-m", "sts2_gym.live.service", "--prior-dir", tmp)
+            out, err = self.stop(proc)
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("no combat prior is exported", err.decode("utf-8", "replace"))
+        self.assertEqual(out, b"")
         self.assert_no_orphans(proc)
 
     def test_a_bad_line_is_answered_and_the_process_stays_up(self) -> None:
