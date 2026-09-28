@@ -3692,6 +3692,16 @@ public static class CardEffects
             // Hook.AfterDamageReceived does not care who dealt the damage, so a card that
             // hits its own owner arms Centennial Puzzle and Self-Forming Clay too.
             RelicEffects.ApplyAfterUnblockedDamageReceived(state, unblocked: hpLoss);
+            // `RupturePower.AfterDamageReceived` pays for any unblocked damage on the
+            // player's OWN turn -- a Burn at the turn's end, an enemy's Thorns, Constrict --
+            // and none of these comes from the card being played, so it pays at once. The
+            // enemy turn's attacks are the other side's, and pay nothing.
+            int rupture = BuffSystem.Get(state.PlayerBuffs, BuffId.RupturePower);
+            if (rupture > 0 && state.PlayerTurn)
+            {
+                RelicEffects.GainPlayerStrength(state, rupture);
+            }
+
             RelicEffects.ApplyAfterPlayerHpChanged(state);
         }
     }

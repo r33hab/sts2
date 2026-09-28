@@ -78,6 +78,27 @@ public class RuptureTests
         Assert.Equal(400 - hemokinesis - (strike + 1), fight.State.Enemies[0].Hp);
     }
 
+    /// <summary>
+    /// Any unblocked damage on the player's own turn pays at once, not only a card's price:
+    /// a Burn searing the hand at the turn's end is `CreatureCmd.Damage` from a card that
+    /// was never played, so `AfterDamageReceived` grants the Strength there and then
+    /// (decompiled RupturePower.cs). The emulator only paid Rupture from `LoseHp`.
+    /// </summary>
+    [Fact]
+    public void ABurnInHandAtTheTurnsEndPaysAtOnce()
+    {
+        var fight = Fight
+            .Hand(Card(ST.Burn))
+            .Energy(3)
+            .PlayerHp(64)
+            .PlayerBuff(BuffId.RupturePower, 1)
+            .Enemy(hp: 400);
+
+        fight.EndTurn();
+
+        Assert.Equal(1, fight.PlayerBuffAmount(BuffId.Strength));
+    }
+
     [Fact]
     public void GivesNoStrengthWithoutHpLoss()
     {
