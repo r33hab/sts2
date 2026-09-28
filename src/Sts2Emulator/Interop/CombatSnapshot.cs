@@ -182,6 +182,7 @@ public static class CombatSnapshot
         new("void_form_cards_played_this_turn", s => ref s.VoidFormCardsPlayedThisTurn),
         new("cards_generated_this_combat", s => ref s.CardsGeneratedThisCombat),
         new("tender_cards_played_this_turn", s => ref s.TenderCardsPlayedThisTurn),
+        new("rupture_owed", s => ref s.RuptureOwed),
         new("unblocked_damage_hit_count", s => ref s.UnblockedDamageHitCount),
     ];
 

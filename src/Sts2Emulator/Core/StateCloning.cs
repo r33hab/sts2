@@ -274,6 +274,7 @@ public static class StateCloning
             ExecutedThisEnemyTurn = [.. combat.ExecutedThisEnemyTurn],
             AutoPlayTargetIndex = combat.AutoPlayTargetIndex,
             CardsPlayedSincePanacheProc = combat.CardsPlayedSincePanacheProc,
+            RuptureOwed = combat.RuptureOwed,
             BlockGainsThisTurn = combat.BlockGainsThisTurn,
             PlayerHpLostThisTurn = combat.PlayerHpLostThisTurn,
             CardsExhaustedThisTurn = combat.CardsExhaustedThisTurn,

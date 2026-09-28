@@ -606,6 +606,13 @@ public sealed class CombatState
     /// has to be carried rather than recomputed.
     /// </summary>
     public int TenderCardsPlayedThisTurn;
+
+    /// <summary>
+    /// `RupturePower`'s bank: the Strength owed for HP a card cost the player while it was
+    /// being played (`playedCards[cardSource]`), paid in `AfterCardPlayed` once the card
+    /// has finished. A play can pause on a selection, so it is carried.
+    /// </summary>
+    public int RuptureOwed;
     public int UnblockedDamageHitCount; // times player took unblocked damage this combat (TearAsunder)
     public int TargetEnemyIndex = -1; // -1 = auto (first living enemy), >=0 = specific index
 

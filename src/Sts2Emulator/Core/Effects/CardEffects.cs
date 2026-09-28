@@ -335,7 +335,7 @@ public static class CardEffects
                 break;
 
             case IC.Breakthrough: // 1-cost, lose 1 HP + 9/13 dmg to ALL enemies
-                LoseHp(state, 1);
+                LoseHp(state, 1, fromPlayedCard: true);
                 DealDamageToAll(state, Dmg(state, def, upgraded, card));
                 break;
 
@@ -478,7 +478,7 @@ public static class CardEffects
                 break;
 
             case IC.Hemokinesis: // 1-cost, lose 2 HP then deal 15/20 dmg
-                LoseHp(state, 2);
+                LoseHp(state, 2, fromPlayedCard: true);
                 DealDamage(state, Dmg(state, def, upgraded, card));
                 break;
 
@@ -741,7 +741,7 @@ public static class CardEffects
                 break;
 
             case IC.Brand: // 0-cost, lose 1 HP, exhaust a CHOSEN card, gain 1/2 Strength
-                LoseHp(state, 1);
+                LoseHp(state, 1, fromPlayedCard: true);
                 // The game applies the Strength after the exhaust resolves. Nothing reads
                 // Strength during an exhaust, so granting it first is observationally the
                 // same and keeps the pending selection as the last thing this play does.
@@ -764,12 +764,12 @@ public static class CardEffects
                 break;
 
             case IC.BloodWall: // 2-cost, lose 2 HP + gain 16/20 block
-                LoseHp(state, 2);
+                LoseHp(state, 2, fromPlayedCard: true);
                 GainBlock(state, Blk(def, upgraded, card), rng);
                 break;
 
             case IC.Bloodletting: // 0-cost, lose 3 HP + gain 2/3 energy
-                LoseHp(state, 3);
+                LoseHp(state, 3, fromPlayedCard: true);
                 GainEnergy(state, upgraded ? 3 : 2);
                 break;
 
@@ -887,7 +887,7 @@ public static class CardEffects
                 break;
 
             case IC.Offering: // 0-cost, lose 6 HP + gain 2 energy + draw 3/5
-                LoseHp(state, 6);
+                LoseHp(state, 6, fromPlayedCard: true);
                 GainEnergy(state, 2);
                 DrawCards(state, upgraded ? 5 : 3, rng);
                 break;
@@ -1006,7 +1006,7 @@ public static class CardEffects
                 break;
 
             case IC.DemonicShield: // 0-cost, lose 1 HP, double target ally's block (self in SP)
-                LoseHp(state, 1);
+                LoseHp(state, 1, fromPlayedCard: true);
                 GainBlock(state, state.PlayerBlock, rng);
                 break;
 
@@ -5161,7 +5161,13 @@ public static class CardEffects
     }
 
     // Deals unblockable, unpowered HP loss to the player and triggers Rupture.
-    public static void LoseHp(CombatState state, int amount)
+    /// <param name="fromPlayedCard">
+    /// The HP is what the card being PLAYED costs. `RupturePower` banks that and pays it
+    /// once the card has finished (`CombatEngine.PayRupture`); any other HP loss on the
+    /// player's turn -- a status burning in hand, Royal Poison, Inferno's tick -- pays at
+    /// once (decompiled RupturePower.cs).
+    /// </param>
+    public static void LoseHp(CombatState state, int amount, bool fromPlayedCard = false)
     {
         int hpBefore = state.PlayerHp;
         int buffer = BuffSystem.Get(state.PlayerBuffs, BuffId.Buffer);
@@ -5185,7 +5191,14 @@ public static class CardEffects
         int rupt = BuffSystem.Get(state.PlayerBuffs, BuffId.RupturePower);
         if (rupt > 0 && hpBefore > state.PlayerHp)
         {
-            RelicEffects.GainPlayerStrength(state, rupt);
+            if (fromPlayedCard)
+            {
+                state.RuptureOwed += rupt;
+            }
+            else
+            {
+                RelicEffects.GainPlayerStrength(state, rupt);
+            }
         }
 
         TriggerInfernoAfterPlayerSelfDamage(state, hpBefore - state.PlayerHp);

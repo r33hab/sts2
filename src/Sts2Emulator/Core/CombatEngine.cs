@@ -2157,7 +2157,7 @@ public static class CombatEngine
                 // DealDamageToPlayer, which spends block first, so a blocking player paid
                 // the enchantment's price out of their block and a Body Slam played off it
                 // then hit for less. LoseHp is the unblockable-unpowered path.
-                Effects.CardEffects.LoseHp(state, 2);
+                Effects.CardEffects.LoseHp(state, 2, fromPlayedCard: true);
                 break;
             case Enchantment.Adroit:
                 // `RecalculateValues` sets a BlockVar from the amount, so the block IS the
@@ -4585,6 +4585,22 @@ public static class CombatEngine
         }
     }
 
+    /// <summary>
+    /// `RupturePower.AfterCardPlayed`: the Strength banked for HP the card cost while it
+    /// was being played, paid now that it has finished (decompiled RupturePower.cs).
+    /// </summary>
+    private static void PayRupture(CombatState state)
+    {
+        if (state.RuptureOwed <= 0)
+        {
+            return;
+        }
+
+        int owed = state.RuptureOwed;
+        state.RuptureOwed = 0;
+        Effects.RelicEffects.GainPlayerStrength(state, owed);
+    }
+
     private static void ApplyAfterCardPlayedPowers(
         CombatState state,
         CardDef def,
@@ -4594,6 +4610,7 @@ public static class CombatEngine
     {
         Effects.RelicEffects.ApplyAfterCardPlayed(state, def, rng, energySpent);
         PayCurlUp(state);
+        PayRupture(state);
 
         // `TenderPower.AfterCardPlayed`: every card the player plays costs 1 Strength and
         // 1 Dexterity, applied `silent: true` -- so it does not go through
