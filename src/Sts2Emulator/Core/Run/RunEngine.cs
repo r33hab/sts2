@@ -2290,22 +2290,14 @@ public sealed class RunEngine
         }
 
         // `DreamCatcher.TryModifyRestSiteHealRewards`: resting also offers a card, from
-        // the MONSTER room's creation options -- an ordinary combat reward, three wide,
-        // bolted onto the sleep.
+        // the MONSTER room's creation options -- `CardCreationOptions.ForRoom(player,
+        // RoomType.Monster)`, an ordinary combat reward three wide, bolted onto the sleep.
+        // Encounter-sourced, so its rarity rolls read and grow the rare offset and each
+        // card rolls its upgrade: the same reward, and the same three draws a card, as a
+        // monster room's. The rest site reads as a monster room to `RollRewardCardRarity`.
         if (Effects.RelicEffects.Has(State.Relics, Effects.RelicEffects.DreamCatcher))
         {
-            Array.Clear(State.RewardCards);
-            Array.Clear(State.RewardUpgraded);
-            var offer = RunRewardGenerator.GenerateEventOfferCards(
-                State,
-                State.RewardCards.Length,
-                RunRewardGenerator.IroncladRewardPool
-            );
-            for (int i = 0; i < State.RewardCards.Length && i < offer.Length; i++)
-            {
-                State.RewardCards[i] = offer[i];
-            }
-
+            RunRewardGenerator.PopulateCardReward(State);
             State.RewardCardPending = true;
             State.Phase = RunPhase.CardReward;
         }
