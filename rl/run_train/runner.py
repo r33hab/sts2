@@ -95,10 +95,11 @@ class Stopped(Exception):  # noqa: N818 -- a stop the operator asked for, not an
 class JobConfig:
     """The settings of a multi-process job; every default is DESIGN.md 5.9's.
 
-    `ascension` defaults to 10, the level the user plays (erratum E11). The run engine
-    models 0-9 until run-fidelity Task 5 lands, so until then a job plays 9, which has
-    Act 1's rules exactly, and says so with `ascension_stands_in_for=10`; evaluations
-    carry the substitution in their `EvalMeta`.
+    `ascension` defaults to 10, the level the user plays (erratum E11), and the run engine
+    plays it: DoubleBoss, the last act's second boss, is modelled. Jobs started before it
+    was played 9, which has Act 1's rules exactly, and said so with
+    `ascension_stands_in_for=10`; evaluations carry the substitution in their `EvalMeta`.
+    A stand-in names a level ABOVE the one played, or it says nothing true.
     """
 
     workers: int = 8
@@ -121,6 +122,12 @@ class JobConfig:
         if self.run_step_cap < 1:
             raise ValueError(
                 f"run_step_cap must be at least 1, not {self.run_step_cap}",
+            )
+        stands_in_for = self.ascension_stands_in_for
+        if stands_in_for is not None and stands_in_for <= self.ascension:
+            raise ValueError(
+                f"ascension_stands_in_for ({stands_in_for}) must name a level above the "
+                f"one played ({self.ascension}); the engine plays {self.ascension} itself",
             )
 
     @classmethod
