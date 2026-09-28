@@ -1699,8 +1699,18 @@ public static class RelicEffects
         state.Relics[index] = state.Relics[index] with { Counter = shouldBeActive ? 1 : 0 };
     }
 
-    public static void ApplyEndOfPlayerTurn(CombatState state, Random? rng = null)
+    /// <param name="heldNoBlock">
+    /// Whether the player held no block when the turn ended, read before any turn-end hook
+    /// granted some (Orichalcum's `BeforeSideTurnEndVeryEarly`); by default, read here.
+    /// </param>
+    public static void ApplyEndOfPlayerTurn(
+        CombatState state,
+        Random? rng = null,
+        bool? heldNoBlock = null
+    )
     {
+        bool noBlock = heldNoBlock ?? state.PlayerBlock == 0;
+
         // `LunarPastry.AfterSideTurnEnd`: StarsVar(1) whenever the player's side turn
         // ends. Through `GainStars` rather than `Stars +=`, so Black Hole sees it.
         if (HasRelic(state, LunarPastry))
@@ -1708,17 +1718,15 @@ public static class RelicEffects
             CardEffects.GainStars(state, 1);
         }
 
-        if (HasRelic(state, Orichalcum) && state.PlayerBlock == 0)
+        if (HasRelic(state, Orichalcum) && noBlock)
         {
             // BlockVar(6m, ValueProp.Unpowered) — flat, whatever the player's Dexterity.
             CardEffects.GainUnpoweredBlock(state, 6, rng);
         }
 
         // The fake pays 3 where Orichalcum pays 6, on the same "ended the turn with no
-        // block" test. Its `BeforeSideTurnEndVeryEarly`/`BeforeSideTurnEnd` split exists so
-        // Plating cannot rob it of the trigger; the emulator reads block once, here, which
-        // is the same answer because Plating's grant happens on the enemy boundary.
-        if (HasRelic(state, FakeOrichalcum) && state.PlayerBlock == 0)
+        // block" test, read at the same early point -- so holding both pays both.
+        if (HasRelic(state, FakeOrichalcum) && noBlock)
         {
             CardEffects.GainUnpoweredBlock(state, 3, rng);
         }

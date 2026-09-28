@@ -74,4 +74,35 @@ public class OrichalcumTests
         Assert.Equal(hpBefore - 4, plain.State.PlayerHp);
         Assert.Equal(hpBefore - 4, dexterous.State.PlayerHp);
     }
+
+    /// <summary>
+    /// `BeforeSideTurnEndVeryEarly` reads the block before `PlatingPower.BeforeSideTurnEndEarly`
+    /// grants its own ("otherwise, PlatingPower will prevent this relic's block gain"), and
+    /// pays later, in `BeforeSideTurnEnd`. The fake is the same split.
+    /// </summary>
+    [Theory]
+    [InlineData(RelicEffects.Orichalcum, 6)]
+    [InlineData(RelicEffects.FakeOrichalcum, 3)]
+    public void PlatingDoesNotRobItOfTheTrigger(int relic, int block)
+    {
+        var fight = Facing(20, relic);
+        BuffSystem.Apply(fight.State.PlayerBuffs, BuffId.Plating, 4);
+        int hpBefore = fight.State.PlayerHp;
+
+        fight.EndTurn();
+
+        Assert.Equal(hpBefore - (20 - 4 - block), fight.State.PlayerHp);
+    }
+
+    /// <summary>Each reads the block before either pays, so holding both pays both.</summary>
+    [Fact]
+    public void TheRealAndTheFakeBothPay()
+    {
+        var fight = Facing(20, RelicEffects.Orichalcum, RelicEffects.FakeOrichalcum);
+        int hpBefore = fight.State.PlayerHp;
+
+        fight.EndTurn();
+
+        Assert.Equal(hpBefore - (20 - 6 - 3), fight.State.PlayerHp);
+    }
 }

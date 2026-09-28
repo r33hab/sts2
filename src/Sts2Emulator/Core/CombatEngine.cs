@@ -725,6 +725,21 @@ public static class CombatEngine
 
         // ── End of player turn ────────────────────────────────────────────────
 
+        // ── AutoPostPlay ──────────────────────────────────────────────────────
+        // `CombatManager.EndPlayerTurnPhaseOneInternal` runs the whole of
+        // `Hook.AfterAutoPostPlayPhaseEntered` the moment the player ends the turn --
+        // before `BeforeTurnEnd`, before the hand flush and before the enemies act. Both
+        // of these are that hook, so they come ahead of every turn-end hook below: Paels
+        // Eye's exhaust has not taken the hand, Plating's block is not there for Body
+        // Slam, and the player's Ritual (`AfterSideTurnEnd`) has not paid its Strength.
+        AutoPlayStampedeAttacks(state, rng);
+        AutoPlayHowlsFromExhaust(state, rng);
+
+        // `Orichalcum.BeforeSideTurnEndVeryEarly` (and the fake's) reads the block before
+        // any turn-end hook grants some, and pays in `BeforeSideTurnEnd`: Plating's
+        // `BeforeSideTurnEndEarly` block in between does not rob it of the trigger.
+        bool heldNoBlock = state.PlayerBlock == 0;
+
         // `PaelsEye.BeforeSideTurnEndEarly` exhausts the whole hand -- EARLY, so it lands
         // before the end-of-turn effects a card in hand would otherwise see. It is the
         // price of the extra turn granted at the enemy-side seam below, and its guard is
@@ -786,17 +801,7 @@ public static class CombatEngine
             Effects.CardEffects.EvokeLastOrb(state, rng);
         }
 
-        // ── AutoPostPlay ──────────────────────────────────────────────────────
-        // `CombatManager.EndPlayerTurnPhaseOneInternal` runs the whole of
-        // `Hook.AfterAutoPostPlayPhaseEntered` the moment the player ends the turn --
-        // before `BeforeTurnEnd`, before the hand flush and before the enemies act. Both
-        // of these are that hook, so they sit ahead of the `AfterSideTurnEnd` work below
-        // (Shadowmeld, DoubleDamage, TemporaryStrength) that would otherwise be gone
-        // before their damage was rolled.
-        AutoPlayStampedeAttacks(state, rng);
-        AutoPlayHowlsFromExhaust(state, rng);
-
-        Effects.RelicEffects.ApplyEndOfPlayerTurn(state, rng);
+        Effects.RelicEffects.ApplyEndOfPlayerTurn(state, rng, heldNoBlock);
         Effects.RelicEffects.ApplyBeforeEndOfPlayerTurnShared(state, rng);
 
         // `DoubleDamagePower.AfterSideTurnEnd` DECREMENTS -- so a stack bought by one

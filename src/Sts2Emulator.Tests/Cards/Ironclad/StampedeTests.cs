@@ -79,4 +79,35 @@ public class StampedeTests
 
         Assert.Equal(38, state.Enemies[0].Hp);
     }
+
+    /// <summary>
+    /// `StampedePower.AfterAutoPostPlayPhaseEntered` runs the moment the turn ends, ahead
+    /// of every turn-end hook, so the player's Ritual (`RitualPower.AfterSideTurnEnd`) has
+    /// not paid its Strength yet when the Strike swings.
+    /// </summary>
+    [Fact]
+    public void SwingsBeforeTheTurnEndsRitualPays()
+    {
+        var state = CombatFactory.NewCombat(seed: 0);
+        state.Hand = [new CardInstance(IC.StrikeIronclad, false)];
+        state.DrawPile.Clear();
+        state.DiscardPile.Clear();
+        state.PlayerBuffs = [new BuffState(BuffId.Stampede, 1), new BuffState(BuffId.Ritual, 3)];
+        state.Enemies =
+        [
+            new EnemyState
+            {
+                DefId = 16,
+                Hp = 50,
+                MaxHp = 50,
+                CurrentIntent = new Intent(IntentType.Defend, 0),
+                Buffs = [],
+            },
+        ];
+
+        CombatEngine.Step(state, state.Hand.Count, new Random(0));
+
+        Assert.Equal(44, state.Enemies[0].Hp);
+        Assert.Equal(3, BuffSystem.Get(state.PlayerBuffs, BuffId.Strength));
+    }
 }
