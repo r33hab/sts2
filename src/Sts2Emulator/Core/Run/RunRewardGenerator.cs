@@ -1740,11 +1740,41 @@ public static class RunRewardGenerator
     public static bool IsAllowedSolo(int cardId) =>
         !GeneratedData.Cards.Get(cardId).MultiplayerOnly;
 
-    private static bool RollCardUpgrade(RunState state, int cardId, GameRng rng)
+    /// <summary>
+    /// `CardFactory.RollForUpgrade` with a reward's <c>baseChance</c> of 0: the float is
+    /// drawn first, whatever the card; an upgradable card that is not Rare then adds
+    /// <c>CurrentActIndex * UpgradedCardOddScaling</c>, and <c>num &lt;= odds</c> upgrades it.
+    /// </summary>
+    /// <remarks>
+    /// Act 1 never upgrades (odds 0, and <c>NextFloat</c> is never below it), act 2 a quarter
+    /// of non-Rare options, act 3 half -- each halved from Scarcity. The comparison is the
+    /// game's own, decimal against <c>(decimal)NextFloat()</c>, so a roll ON the line
+    /// upgrades. No model overrides <c>ModifyCardRewardUpgradeOdds</c>.
+    /// </remarks>
+    internal static bool RollCardUpgrade(RunState state, int cardId, GameRng rng)
     {
-        _ = rng.NextDouble();
-        return false;
+        decimal roll = (decimal)rng.NextFloat();
+        var card = GeneratedData.Cards.Get(cardId);
+        if (!card.Upgradable)
+        {
+            return false;
+        }
+
+        decimal odds = 0m;
+        if (card.Rarity != CardRarity.Rare)
+        {
+            odds += state.CurrentActIndex * UpgradedCardOddScaling(state);
+        }
+
+        return roll <= odds;
     }
+
+    /// <summary>
+    /// `CardFactory.UpgradedCardOddScaling`: <c>GetValueIfAscension(Scarcity, 0.125m, 0.25m)</c>,
+    /// the upgrade chance each act after the first adds to a non-Rare reward card.
+    /// </summary>
+    private static decimal UpgradedCardOddScaling(RunState state) =>
+        Scarcity(state) ? 0.125m : 0.25m;
 
     private static bool CheckPotionRoll(RunState state, double roll)
     {
