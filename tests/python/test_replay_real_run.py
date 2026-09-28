@@ -109,6 +109,49 @@ class SessionTests(unittest.TestCase):
         late = [(5000.0, _state(3, ascension=9))]
         self.assertIsNone(replay.match_history(late, histories))
 
+    def test_a_gameplay_mod_the_game_reports_marks_the_session(self) -> None:
+        # The mod's loaded_mods (2026-09-28): only a mod that affects gameplay counts.
+        states = [
+            (
+                1.0,
+                {
+                    "loaded_mods": [
+                        {"id": "STS2_MCP", "affects_gameplay": False},
+                        {"id": "BaseLib", "affects_gameplay": False},
+                        {"id": "Watcher", "affects_gameplay": True},
+                    ],
+                },
+            ),
+        ]
+        self.assertEqual(replay.mod_markers(states), ["mod Watcher"])
+
+    def test_a_run_start_time_joins_its_history_exactly(self) -> None:
+        histories = [
+            {
+                "path": "a",
+                "solo": True,
+                "ascension": 2,
+                "start_time": 100,
+                "written": 900,
+            },
+            {
+                "path": "b",
+                "solo": True,
+                "ascension": 2,
+                "start_time": 150,
+                "written": 950,
+            },
+        ]
+        segment = [(10**9, {**_state(3), "run": {"floor": 3, "start_time": 100}})]
+        self.assertEqual(replay.match_history(segment, histories)["path"], "a")
+
+    def test_an_options_own_key_settles_the_choice(self) -> None:
+        choices = [
+            {"index": 0, "title": "Eat", "text_key": "X.pages.INITIAL.options.TAKE"},
+            {"index": 1, "title": "Take", "text_key": "X.pages.INITIAL.options.EAT"},
+        ]
+        self.assertEqual(replay._option_index(choices, "EAT"), 1)
+
     def test_a_modded_character_marks_the_session(self) -> None:
         states = [
             (

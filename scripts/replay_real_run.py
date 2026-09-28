@@ -296,6 +296,14 @@ def mod_markers(states: list[tuple[float, dict[str, Any]]]) -> list[str]:
     """
     markers: set[str] = set()
     for _, state in states:
+        # A mod from 2026-09-28 names what the game loaded, and each mod says whether it
+        # affects gameplay (the coach's own bridge and BaseLib say no).
+        loaded = state.get("loaded_mods") or (state.get("game_over") or {}).get(
+            "loaded_mods",
+        )
+        for mod in loaded or []:
+            if mod.get("affects_gameplay"):
+                markers.add(f"mod {mod.get('id') or mod.get('name')}")
         for character in state.get("characters") or []:
             character_id = str(character.get("id") or "")
             if character_id and character_id.upper() not in VANILLA_CHARACTERS:
@@ -380,6 +388,20 @@ def match_history(
     """The finished run a session segment belongs to: same ascension, and the segment
     falls between that run's start and the moment its history file was written.
     """
+    start = next(
+        (
+            (state.get("run") or {}).get("start_time")
+            for _, state in segment
+            if (state.get("run") or {}).get("start_time")
+        ),
+        None,
+    )
+    if start is not None:
+        # A mod from 2026-09-28 stamps every state with the run's start time, which is
+        # the history file's own name: an exact join, whenever the session was played.
+        exact = [entry for entry in histories if entry["start_time"] == start]
+        if exact:
+            return exact[0]
     first = segment[0][0]
     ascension = next(
         (
@@ -1623,7 +1645,10 @@ class Replayer:
             if int(r)
         ]
         if choices:
-            real = [slug(o.get("relic_name") or o.get("title")) for o in choices]
+            real = [
+                slug(o.get("relic_id") or o.get("relic_name") or o.get("title"))
+                for o in choices
+            ]
             category = "neow" if act == 1 else "ancient"
             self.report.record(category, screen.floor, "blessings", real, emu)
         chosen = None
@@ -1635,7 +1660,11 @@ class Replayer:
                 None,
             )
             if picked is not None:
-                chosen = slug(picked.get("relic_name") or picked.get("title"))
+                chosen = slug(
+                    picked.get("relic_id")
+                    or picked.get("relic_name")
+                    or picked.get("title"),
+                )
         record = self.history_floors.get(screen.floor) or {}
         stats = (record.get("player_stats") or [{}])[0]
         for option in stats.get("ancient_choice") or []:
@@ -1741,6 +1770,11 @@ def _option_index(choices: list[dict[str, Any]], option: str) -> int | None:
     The key is the option's own id (``EAT``), the title its text (``Eat the Egg``), so an
     exact spelling is tried first, then a title that starts with the key's words.
     """
+    for choice in choices:
+        # A mod from 2026-09-28 sends the option's own key, which is the history's.
+        key = str(choice.get("text_key") or "")
+        if key and key.rsplit(".", 1)[-1] == option:
+            return int(choice["index"])
     titles = [
         (int(choice["index"]), slug(choice.get("title")) or "") for choice in choices
     ]
