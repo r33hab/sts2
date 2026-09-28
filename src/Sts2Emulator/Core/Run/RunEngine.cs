@@ -1329,74 +1329,7 @@ public sealed class RunEngine
             }
             if (result.Terminal)
             {
-                // `ImprovementPower.AfterCombatEnd`, which fires whether or not the
-                // fight was won: upgrade its amount of UPGRADABLE deck cards, drawn
-                // off `Rng.CombatCardSelection` without replacement. Mad Science's
-                // Improvement rider, and the run-side seam that kept it unmodelled
-                // until O17. Before the sync, which is where the combat is dropped.
-                RunNonCombatEffects.ApplyImprovementUpgrades(State);
-
-                // `RoyaltiesPower.AfterCombatEnd` and
-                // `ForbiddenGrimoirePower.AfterCombatEnd` each hang an extra reward on the
-                // room. Read off the COMBAT here, before the sync drops it -- both powers
-                // were applied by their cards and asked about by nothing, so the gold and
-                // the removals never arrived.
-                if (State.ActiveCombat is { } finished)
-                {
-                    State.RoyaltiesGoldOwed += BuffSystem.Get(
-                        finished.PlayerBuffs,
-                        BuffId.Royalties
-                    );
-                    State.CardRemovalsOwed += BuffSystem.Get(
-                        finished.PlayerBuffs,
-                        BuffId.ForbiddenGrimoire
-                    );
-                }
-                // `PumpkinCandle.AfterCombatEnd` burns a point of Kindle whether the fight
-                // was won or not, so it sits here rather than behind the victory check.
-                RunNonCombatEffects.BurnPumpkinCandle(State);
-
-                // `ToyBox.AfterCombatEnd` counts the fight whether or not it was won, the
-                // same as the candle -- and every third one melts a wax relic.
-                RunNonCombatEffects.MeltAToyBoxRelic(State);
-                SyncAfterCombat();
-                if (result.PlayerWon)
-                {
-                    RunNonCombatEffects.TriggerFishingRod(State);
-                    RunNonCombatEffects.ServeGuiltySentences(State);
-                    // `SwordOfStone.AfterCombatVictory(room.RoomType == Elite)`: five
-                    // elites and it becomes Sword of Jade. Counted on the VICTORY rather
-                    // than on entering the room, so fleeing or dying does not count.
-                    // `LastingCandy.AfterCombatEnd` counts the fight; the reward screen
-                    // that follows is what reads the count.
-                    Effects.RelicEffects.CountCombatForLastingCandy(State);
-                    Effects.RelicEffects.CountCombatForWongosTicket(State);
-                    RunNonCombatEffects.CountEliteVictoryForSwordOfStone(
-                        State,
-                        State.LastResolvedRoomType == RunConstants.NodeElite
-                    );
-
-                    RunNonCombatEffects.ApplyWarHammerOnVictory(
-                        State,
-                        State.LastResolvedRoomType == RunConstants.NodeElite
-                    );
-
-                    // `EnterCombatWithoutExitingEvent(..., shouldResumeAfterCombat: true)`:
-                    // the room was never the combat's, so the event pays instead of the
-                    // fight. `ShouldGiveRewards => false` on the encounter is the same
-                    // statement from the other side.
-                    if (State.ResumeEventId != 0)
-                    {
-                        return ResumeEventAfterCombat(out terminal);
-                    }
-
-                    RunRewardGenerator.GenerateCombatRewards(State);
-                    terminal = false;
-                }
-                else
-                {
-                    State.Phase = RunPhase.Complete;
-                }
+                return FinishCombat(result.PlayerWon, out terminal);
             }
             return 0;
         }
@@ -1458,6 +1391,207 @@ public sealed class RunEngine
         }
 
         return -1;
+    }
+
+    /// <summary>
+    /// The end of a fight, won or lost: every after-combat hook, the sync back to the run,
+    /// and on a win the room's rewards. The fight that ends on a card and the fight a
+    /// replay resolves (<see cref="DebugResolveCombat" />) leave through this one door, so
+    /// the two cannot drift apart.
+    /// </summary>
+    private int FinishCombat(bool playerWon, out bool terminal)
+    {
+        terminal = true;
+        // `ImprovementPower.AfterCombatEnd`, which fires whether or not the
+        // fight was won: upgrade its amount of UPGRADABLE deck cards, drawn
+        // off `Rng.CombatCardSelection` without replacement. Mad Science's
+        // Improvement rider, and the run-side seam that kept it unmodelled
+        // until O17. Before the sync, which is where the combat is dropped.
+        RunNonCombatEffects.ApplyImprovementUpgrades(State);
+
+        // `RoyaltiesPower.AfterCombatEnd` and
+        // `ForbiddenGrimoirePower.AfterCombatEnd` each hang an extra reward on the
+        // room. Read off the COMBAT here, before the sync drops it -- both powers
+        // were applied by their cards and asked about by nothing, so the gold and
+        // the removals never arrived.
+        if (State.ActiveCombat is { } finished)
+        {
+            State.RoyaltiesGoldOwed += BuffSystem.Get(finished.PlayerBuffs, BuffId.Royalties);
+            State.CardRemovalsOwed += BuffSystem.Get(
+                finished.PlayerBuffs,
+                BuffId.ForbiddenGrimoire
+            );
+        }
+        // `PumpkinCandle.AfterCombatEnd` burns a point of Kindle whether the fight
+        // was won or not, so it sits here rather than behind the victory check.
+        RunNonCombatEffects.BurnPumpkinCandle(State);
+
+        // `ToyBox.AfterCombatEnd` counts the fight whether or not it was won, the
+        // same as the candle -- and every third one melts a wax relic.
+        RunNonCombatEffects.MeltAToyBoxRelic(State);
+        SyncAfterCombat();
+        if (playerWon)
+        {
+            RunNonCombatEffects.TriggerFishingRod(State);
+            RunNonCombatEffects.ServeGuiltySentences(State);
+            // `SwordOfStone.AfterCombatVictory(room.RoomType == Elite)`: five
+            // elites and it becomes Sword of Jade. Counted on the VICTORY rather
+            // than on entering the room, so fleeing or dying does not count.
+            // `LastingCandy.AfterCombatEnd` counts the fight; the reward screen
+            // that follows is what reads the count.
+            Effects.RelicEffects.CountCombatForLastingCandy(State);
+            Effects.RelicEffects.CountCombatForWongosTicket(State);
+            RunNonCombatEffects.CountEliteVictoryForSwordOfStone(
+                State,
+                State.LastResolvedRoomType == RunConstants.NodeElite
+            );
+
+            RunNonCombatEffects.ApplyWarHammerOnVictory(
+                State,
+                State.LastResolvedRoomType == RunConstants.NodeElite
+            );
+
+            // `EnterCombatWithoutExitingEvent(..., shouldResumeAfterCombat: true)`:
+            // the room was never the combat's, so the event pays instead of the
+            // fight. `ShouldGiveRewards => false` on the encounter is the same
+            // statement from the other side.
+            if (State.ResumeEventId != 0)
+            {
+                return ResumeEventAfterCombat(out terminal);
+            }
+
+            RunRewardGenerator.GenerateCombatRewards(State);
+            terminal = false;
+        }
+        else
+        {
+            State.Phase = RunPhase.Complete;
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// Win the fight in progress without playing it. A DEBUG hook, not a game rule: it
+    /// exists so scripts/replay_real_run.py can replay a real run's RUN LAYER, whose fights
+    /// are measured separately by the live combat checks.
+    /// </summary>
+    /// <remarks>
+    /// Only the fight's own turns are skipped. Everything the game does as a fight is set
+    /// up (the roster, its HP rolls, the opening shuffle) has already happened when the
+    /// combat was built, and the victory runs through <see cref="FinishCombat" /> exactly as
+    /// a real one does. What a fight would have drawn mid-turn -- a card generated, a
+    /// potion rolled -- is not drawn, which is the one way a resolved fight can leave a
+    /// stream behind the game's.
+    /// The three outcome flags are the fight's own results that its REWARDS read, which a
+    /// resolved fight cannot produce by itself: gold a Heist hands back
+    /// (<see cref="CombatState.StolenBackGold" />), and how a Gremlin Merc fight ended
+    /// (<see cref="CombatState.FatGremlinEscaped" />, <see cref="CombatState.MercGoldWasStolen" />),
+    /// which decides whether the fight's gold is rolled at all.
+    /// Returns -1, changing nothing, when no fight is in progress.
+    /// </remarks>
+    public int DebugResolveCombat(
+        int stolenBackGold = 0,
+        bool fatGremlinEscaped = false,
+        bool mercGoldWasStolen = false
+    )
+    {
+        if (State.Phase != RunPhase.Combat || State.ActiveCombat is not { } combat)
+        {
+            return -1;
+        }
+
+        combat.StolenBackGold = Math.Max(0, stolenBackGold);
+        combat.FatGremlinEscaped = fatGremlinEscaped;
+        combat.MercGoldWasStolen = mercGoldWasStolen;
+        State.LastPlayerWon = true;
+        return FinishCombat(playerWon: true, out _);
+    }
+
+    /// <summary>
+    /// Put the player's holdings where a real run had them. A DEBUG hook for the run
+    /// replay, which uses it after a resolved fight and wherever the real run's holdings
+    /// part company with the emulator's, so the offerings after it stay comparable.
+    /// </summary>
+    /// <remarks>
+    /// The holdings are SET, not earned: no pickup effect runs, because the real run's
+    /// totals already include every one. A relic the run already holds keeps its
+    /// <see cref="RelicInstance.Counter" />. A negative scalar or a null list leaves that
+    /// holding as it is. <paramref name="cards" /> is four numbers a card: id, upgraded,
+    /// enchantment, enchantment amount.
+    /// </remarks>
+    public void DebugSetPlayer(
+        int hp,
+        int maxHp,
+        int gold,
+        int[]? cards,
+        int[]? relics,
+        int[]? potions,
+        int maxPotionSlots = -1
+    )
+    {
+        if (maxHp >= 0)
+        {
+            State.PlayerMaxHp = Math.Max(1, maxHp);
+        }
+
+        if (hp >= 0)
+        {
+            State.PlayerHp = Math.Clamp(hp, 0, State.PlayerMaxHp);
+        }
+
+        if (gold >= 0)
+        {
+            State.Gold = gold;
+        }
+
+        if (cards is not null)
+        {
+            State.Deck.Clear();
+            for (int i = 0; i + 3 < cards.Length; i += 4)
+            {
+                State.Deck.Add(
+                    new CardInstance(
+                        cards[i],
+                        cards[i + 1] != 0,
+                        Enchantment: (Enchantment)cards[i + 2],
+                        EnchantAmount: cards[i + 3]
+                    )
+                );
+            }
+        }
+
+        if (relics is not null)
+        {
+            var held = State.Relics.ToList();
+            State.Relics.Clear();
+            foreach (int relicId in relics)
+            {
+                int at = held.FindIndex(relic => relic.DefId == relicId);
+                if (at >= 0)
+                {
+                    State.Relics.Add(held[at]);
+                    held.RemoveAt(at);
+                }
+                else
+                {
+                    State.Relics.Add(new RelicInstance(relicId));
+                }
+            }
+        }
+
+        if (maxPotionSlots >= 0)
+        {
+            State.MaxPotionSlots = Math.Min(maxPotionSlots, State.PotionSlots.Length);
+        }
+
+        if (potions is not null)
+        {
+            Array.Clear(State.PotionSlots);
+            for (int i = 0; i < potions.Length && i < State.PotionSlots.Length; i++)
+            {
+                State.PotionSlots[i] = potions[i];
+            }
+        }
     }
 
     public int ActiveEncounterId => State.ActiveCombat?.EncounterId ?? -1;

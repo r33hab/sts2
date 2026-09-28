@@ -15,7 +15,7 @@ _LIB_NAMES = {
 }
 _ALLOW_STALE_ENV = "STS2_ALLOW_STALE_NATIVE"
 _REQUIRED_NATIVE_API_VERSION = 32
-_REQUIRED_RUN_NATIVE_API_VERSION = 20
+_REQUIRED_RUN_NATIVE_API_VERSION = 21
 
 
 def _repo_root() -> Path:
@@ -585,6 +585,31 @@ _lib.Sts2Run_DebugEnterNextAct.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c
 
 _lib.Sts2Run_DebugUpgradeDeck.restype = ctypes.c_int
 _lib.Sts2Run_DebugUpgradeDeck.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_int)]
+
+_lib.Sts2Run_DebugResolveCombat.restype = ctypes.c_int
+_lib.Sts2Run_DebugResolveCombat.argtypes = [
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+]
+
+_lib.Sts2Run_DebugSetPlayer.restype = ctypes.c_int
+_lib.Sts2Run_DebugSetPlayer.argtypes = [
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+]
 
 _lib.Sts2Run_GetPhase.restype = ctypes.c_int
 _lib.Sts2Run_GetPhase.argtypes = [ctypes.c_int]
@@ -1423,6 +1448,90 @@ def run_debug_upgrade_deck(handle: int, obs_buf: ctypes.Array) -> None:
     """
     if _lib.Sts2Run_DebugUpgradeDeck(handle, obs_buf) != 0:
         raise RuntimeError("Sts2Run_DebugUpgradeDeck failed")
+
+
+def run_debug_resolve_combat(
+    handle: int,
+    obs_buf: ctypes.Array,
+    *,
+    stolen_back_gold: int = 0,
+    fat_gremlin_escaped: bool = False,
+    merc_gold_stolen: bool = False,
+) -> bool:
+    """Replay-only: win the fight in progress without playing it.
+
+    The run layer of a real run is replayed through this (scripts/replay_real_run.py);
+    its fights are measured separately. The keywords are the fight's results its rewards
+    read: gold a Heist hands back, and how a Gremlin Merc fight ended. Returns False when
+    no fight is in progress.
+
+    Raises:
+        RuntimeError: if the handle is not a live run.
+
+    """
+    result = int(
+        _lib.Sts2Run_DebugResolveCombat(
+            handle,
+            int(stolen_back_gold),
+            int(bool(fat_gremlin_escaped)),
+            int(bool(merc_gold_stolen)),
+            obs_buf,
+        ),
+    )
+    if result < -1:
+        raise RuntimeError("Sts2Run_DebugResolveCombat failed")
+    return result == 0
+
+
+def _int_array(values):
+    if values is None:
+        return None, -1
+    array = (ctypes.c_int * max(1, len(values)))(*values)
+    return array, len(values)
+
+
+def run_debug_set_player(
+    handle: int,
+    obs_buf: ctypes.Array,
+    *,
+    hp: int = -1,
+    max_hp: int = -1,
+    gold: int = -1,
+    cards=None,
+    relics=None,
+    potions=None,
+    max_potion_slots: int = -1,
+) -> None:
+    """Replay-only: set the player's holdings where a real run had them.
+
+    ``cards`` is ``[(id, upgraded, enchantment, amount), ...]``; ``relics`` and
+    ``potions`` are ids (a potion list is by slot, 0 for empty). ``None`` or a negative
+    scalar leaves that holding alone. No pickup effect runs.
+
+    Raises:
+        RuntimeError: if the handle is not a live run.
+
+    """
+    flat = None if cards is None else [int(v) for card in cards for v in card]
+    card_buf, card_len = _int_array(flat)
+    relic_buf, relic_len = _int_array(None if relics is None else list(relics))
+    potion_buf, potion_len = _int_array(None if potions is None else list(potions))
+    status = _lib.Sts2Run_DebugSetPlayer(
+        handle,
+        int(hp),
+        int(max_hp),
+        int(gold),
+        card_buf,
+        card_len,
+        relic_buf,
+        relic_len,
+        potion_buf,
+        potion_len,
+        int(max_potion_slots),
+        obs_buf,
+    )
+    if status != 0:
+        raise RuntimeError("Sts2Run_DebugSetPlayer failed")
 
 
 def run_destroy(handle: int) -> None:
