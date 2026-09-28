@@ -336,7 +336,7 @@ def uct(parent: Node, child: Node, c: float) -> float:
     )
 
 
-def puct_action(node: Node, c_puct: float) -> int:
+def puct_action(node: Node, c_puct: float, prior: dict[int, float] | None = None) -> int:
     """AlphaZero's selection rule: Q(a) + c * P(a) * sqrt(N) / (1 + n(a)).
 
     Over EVERY action the node knows, tried or not, so the prior decides which untried
@@ -351,8 +351,10 @@ def puct_action(node: Node, c_puct: float) -> int:
     disjoint, which the engine took as an action index.
 
     sqrt(N + 1) rather than sqrt(N): at a fresh node N is 0 and every score would tie.
+
+    `prior` replaces the node's own prior for this one choice (see `prior_min_visits`).
     """
-    prior = node.prior or {}
+    prior = (node.prior if prior is None else prior) or {}
     parent_mean = node.value / node.visits if node.visits else 0.5
     explore = c_puct * math.sqrt(node.visits + 1)
     best, best_score = -1, -math.inf
@@ -455,6 +457,18 @@ def rollout_weights(sim: Combat, legal: list[int]) -> np.ndarray:
     return weights / weights.sum()
 
 
+def heuristic_prior(world: Combat) -> dict[int, float]:
+    """The tempo rollout's weights on `world`'s legal actions, normalised: a free prior."""
+    legal = world.legal()
+    if not legal:
+        return {}
+    weights = rollout_weights(world, legal)
+    total = float(weights.sum())
+    if total <= 0:
+        return dict.fromkeys(legal, 1.0 / len(legal))
+    return {a: float(w) / total for a, w in zip(legal, weights)}
+
+
 def rollout(
     sim: Combat,
     rng: np.random.Generator,
@@ -499,6 +513,7 @@ def simulate_gen(
     force_root_action: int | None = None,
     use_prior: bool = False,
     c_puct: float = 0.2,
+    prior_min_visits: int = 0,
 ) -> Generator[Combat, dict[int, float], int]:
     """One determinization: fork, descend, expand, roll out, back up. As a GENERATOR.
 
@@ -517,6 +532,11 @@ def simulate_gen(
     whole round of requests with one batched forward (`drive_batched`), which is the only
     way a network at the search's nodes is not slower than no network at all. `simulate`
     is the same thing driven synchronously.
+
+    `prior_min_visits` asks for a node's prior only once the node has been visited that
+    often. Until then PUCT reads the tempo rollout's weights on the current world as the
+    node's prior, uncached: most nodes of a small tree are visited once or twice, and a
+    network call there costs more than the simulation it steers. 0 asks at once.
     """
     world = position.fork(resample_seed)
     steps = 0
@@ -557,9 +577,13 @@ def simulate_gen(
             if use_prior:
                 if not node.untried and not node.children:
                     break
-                if node.prior is None:
+                if node.prior is not None:
+                    action = puct_action(node, c_puct)
+                elif node.visits >= prior_min_visits:
                     node.prior = yield world
-                action = puct_action(node, c_puct)
+                    action = puct_action(node, c_puct)
+                else:
+                    action = puct_action(node, c_puct, heuristic_prior(world))
                 if action in node.untried:
                     node.untried.remove(action)
                     world.step(action)
@@ -672,6 +696,7 @@ def simulate(
     force_root_action: int | None = None,
     prior_fn: Callable[[Combat], dict[int, float]] | None = None,
     c_puct: float = 0.2,
+    prior_min_visits: int = 0,
 ) -> int:
     """`simulate_gen`, driven synchronously. See there."""
     return drive(
@@ -680,6 +705,7 @@ def simulate(
             greedy_rollout=greedy_rollout, returns=returns,
             force_root_action=force_root_action,
             use_prior=prior_fn is not None, c_puct=c_puct,
+            prior_min_visits=prior_min_visits,
         ),
         prior_fn,
     )
@@ -701,6 +727,7 @@ def run_search_gen(
     use_prior: bool = False,
     c_puct: float = 0.2,
     root_noise: float = 0.0,
+    prior_min_visits: int = 0,
 ) -> Generator[Combat, dict[int, float], Node]:
     """Build one search tree over `legal`, and return its root. As a generator.
 
@@ -756,6 +783,7 @@ def run_search_gen(
             force_root_action=forced,
             use_prior=use_prior,
             c_puct=c_puct,
+            prior_min_visits=prior_min_visits,
         )
     return root
 
@@ -776,6 +804,7 @@ def run_search(
     prior_fn: Callable[[Combat], dict[int, float]] | None = None,
     c_puct: float = 0.2,
     root_noise: float = 0.0,
+    prior_min_visits: int = 0,
 ) -> Node:
     """`run_search_gen`, driven synchronously with `prior_fn`. See there."""
     return drive(
@@ -784,6 +813,7 @@ def run_search(
             greedy_rollout=greedy_rollout, returns=returns,
             crn=crn, crn_fraction=crn_fraction,
             use_prior=prior_fn is not None, c_puct=c_puct, root_noise=root_noise,
+            prior_min_visits=prior_min_visits,
         ),
         prior_fn,
     )
