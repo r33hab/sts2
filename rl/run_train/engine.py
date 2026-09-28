@@ -15,6 +15,7 @@ from __future__ import annotations
 import ctypes
 from collections import Counter
 from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING
 
 from sts2_gym import native
 from sts2_gym import run_constants as rc
@@ -22,6 +23,9 @@ from sts2_gym.run_env import Sts2RunEnv
 
 from . import features, seeding, vocab
 from .features import CardRef, Decision, Option, RunView
+
+if TYPE_CHECKING:
+    import combat_mcts
 
 __all__ = [
     "CombatBudget",
@@ -187,6 +191,10 @@ class RunCombat:
     a fresh seed at the same call counts and the unseen draw pile is reshuffled
     (`RunEngine.Clone`, `ResampleHiddenState`).
 
+    With `fork_combat` a fork is a combat handle instead (`combat_fork`): the same
+    determinization, a cheaper step, and a position `combat_tokens.encode`, and so a combat
+    prior, can read (DESIGN.md 6.5).
+
     The fight is over when the phase leaves Combat, not when a step reports terminal: a
     won fight clears `terminal` on its way to the rewards screen (`RunEngine.cs:1353-1356`).
     A change of encounter while the phase is still Combat also ends it, so a future event
@@ -202,6 +210,7 @@ class RunCombat:
         node_type: int = vocab.NODE_NONE,
         sims: int = 0,
         owns_handle: bool = False,
+        fork_combat: bool = False,
     ):
         self.handle = handle
         self.obs = obs if obs is not None else (ctypes.c_int * native.RUN_OBS_SIZE)()
@@ -214,9 +223,15 @@ class RunCombat:
         self.node_type = node_type
         self.sims = sims
         self._owns_handle = owns_handle
+        self.fork_combat = fork_combat
 
-    def fork(self, resample_seed: int | None) -> RunCombat:
-        """Copy the fight. With a seed it is determinized; without one it is an oracle."""
+    def fork(self, resample_seed: int | None) -> RunCombat | combat_mcts.Combat:
+        """Copy the fight. With a seed it is determinized; without one it is an oracle.
+
+        A run clone, or with `fork_combat` a combat handle (`combat_fork`).
+        """
+        if self.fork_combat:
+            return self.combat_fork(resample_seed)
         child = RunCombat.__new__(RunCombat)
         child.obs = (ctypes.c_int * native.RUN_OBS_SIZE)()
         child._reward = (ctypes.c_float * 1)()
@@ -233,6 +248,32 @@ class RunCombat:
         child.node_type = self.node_type
         child.sims = self.sims
         child._owns_handle = True
+        child.fork_combat = False
+        return child
+
+    def combat_fork(self, resample_seed: int | None) -> combat_mcts.Combat:
+        """Copy the fight onto a combat handle (`Sts2Run_ForkCombat`).
+
+        With a seed it is exactly the fight `fork` would have determinized with that seed
+        (the same streams at the same call counts, the same reshuffle); without one it is
+        an oracle. It steps without writing the run observation, which is most of what a
+        playout on a run clone costs extra (DESIGN.md 1.3, 2.2). A won playout ends at the
+        fight's own HP, before the rewards screen's heals (Burning Blood), which the run
+        block would have counted.
+        """
+        import combat_mcts  # noqa: PLC0415 -- rl/ is on sys.path; only a search needs it
+
+        child = combat_mcts.Combat.__new__(combat_mcts.Combat)
+        child.obs = (ctypes.c_int * native.OBS_SIZE)()
+        child.reward = (ctypes.c_float * 1)()
+        child.handle = native.run_fork_combat(
+            self.handle,
+            resample_seed is not None,
+            resample_seed or 0,
+            child.obs,
+        )
+        child.done = self.done
+        child.encounter_id = self.encounter_id
         return child
 
     def legal(self) -> list[int]:
@@ -1062,7 +1103,13 @@ class RunSession:
             self._step(option.action)
         self.visit.took(option.kind)
 
-    def combat(self) -> RunCombat:
+    def combat(self, *, fork_combat: bool = False) -> RunCombat:
+        """Return the fight the run stands in; with `fork_combat` its forks are combat handles.
+
+        Raises:
+            RuntimeError: If the run is not in a fight.
+
+        """
         if self.phase != rc.PHASE_COMBAT:
             raise RuntimeError("combat() outside a fight")
         node_type = self.info["node_type"]
@@ -1071,6 +1118,7 @@ class RunSession:
             self.env._run_obs_buf,
             node_type=node_type,
             sims=self.budget.sims_for(node_type),
+            fork_combat=fork_combat,
         )
 
     def close(self) -> None:

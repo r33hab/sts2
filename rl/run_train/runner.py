@@ -113,6 +113,9 @@ class JobConfig:
     seed_timeout: float = 3_600.0  # erratum O5; a full run is several Act 1 runs long
     shard_size: int = 25
     run_step_cap: int = seeding.RUN_STEP_CAP
+    # The folder of an exported combat prior to guide the fight search, "" for none
+    # (selfplay; DESIGN.md 6.5). Off until a paired run-level test shows it helps.
+    combat_prior: str = ""
 
     def __post_init__(self) -> None:
         if self.workers < 1:
@@ -146,6 +149,7 @@ class JobConfig:
             seed_timeout=float(data["seed_timeout"]),
             shard_size=int(data["shard_size"]),
             run_step_cap=int(data["run_step_cap"]),
+            combat_prior=str(data.get("combat_prior", "")),
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -160,6 +164,7 @@ class JobConfig:
             "seed_timeout": self.seed_timeout,
             "shard_size": self.shard_size,
             "run_step_cap": self.run_step_cap,
+            "combat_prior": self.combat_prior,
         }
 
 
@@ -385,7 +390,8 @@ def run_seeds(
     Raises:
         Stopped: When SIGTERM arrives; the workers are ended first.
         ValueError: If a seed is listed twice, or the run engine cannot play
-            `config.ascension` (checked before any seed runs, for the default play).
+            `config.ascension`, or `config.combat_prior` names no playable prior (both
+            checked before any seed runs, for the default play).
 
     """
     policy_spec = playing_spec(policy_spec, config)
@@ -397,6 +403,7 @@ def run_seeds(
         return stats
     if play is None:
         selfplay.check_playable(config.ascension)
+        selfplay.check_combat_prior(config.combat_prior)
         play = selfplay.play_task
     ctx = multiprocessing.get_context("spawn")
     failures: dict[str, int] = {}

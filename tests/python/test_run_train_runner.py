@@ -514,12 +514,34 @@ class JobConfigTests(unittest.TestCase):
             ascension_stands_in_for=10,
             W=30.0,
             seed_timeout=90.0,
+            combat_prior="/some/combat_prior",
         )
         self.assertEqual(runner.JobConfig.from_json(config.to_json()), config)
         self.assertEqual(
             runner.JobConfig.from_json(runner.JobConfig().to_json()),
             runner.JobConfig(),
         )
+        # A job started before the combat prior searches without one.
+        older = runner.JobConfig().to_json()
+        self.assertEqual(older.pop("combat_prior"), "")
+        self.assertEqual(runner.JobConfig.from_json(older), runner.JobConfig())
+
+    def test_a_combat_prior_that_is_not_there_is_refused_before_any_seed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = runner.JobConfig(
+                workers=1,
+                combat_budget=CombatBudget(3, 3),
+                ascension=A9,
+                combat_prior=tmp,
+            )
+            with self.assertRaisesRegex(ValueError, "no combat prior is exported"):
+                runner.run_seeds(
+                    ["T0000R0001"],
+                    {"kind": "rules"},
+                    config,
+                    on_done=lambda *_: self.fail("a seed ran"),
+                    on_quarantine=lambda *_: self.fail("a seed ran"),
+                )
 
 
 class ResumeTests(RunnerTestCase):

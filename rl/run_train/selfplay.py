@@ -9,6 +9,11 @@ A run is a function of its seed and its settings. Search draws from the run's MC
 and a determinization base, the policy from its exploration stream (5.10), so a retried
 seed replays the same run -- the runner's retry rule relies on it (5.8).
 
+With a combat prior (the job's `combat_prior`, a folder the prior loop exported to) the
+fight search is PUCT guided by it, with the gate's settings, and forks combat handles off
+the run (`Sts2Run_ForkCombat`) instead of run clones, since the prior reads combat handles
+(DESIGN.md 6.5). The record's combat block then names the prior's policy by its sha256.
+
 A self-play policy has `pick(view, decision, rng) -> Pick` and `describe()`, the record's
 `policy` block. `RulesPlayer` is the rules baseline in that shape, with generation 0's
 uniform exploration (5.5), and `policy.LookaheadPolicy` is the learned one; `make_policy`
@@ -17,6 +22,7 @@ builds either from its picklable spec, which is how a runner worker gets one.
 
 from __future__ import annotations
 
+import functools
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -27,10 +33,11 @@ import combat_mcts  # rl/ is on sys.path (the package's __init__)
 from sts2_gym import run_constants as rc
 
 from . import FEATURE_VERSION, seeding, shards, vocab
-from .engine import CombatBudget, RunSession, new_run_env
+from .engine import CombatBudget, RunCombat, RunSession, new_run_env
 from .rules import RulesPolicy
 
 if TYPE_CHECKING:
+    import combat_prior
     import numpy as np
 
     from .features import Decision, RunView
@@ -40,7 +47,9 @@ __all__ = [
     "Pick",
     "Policy",
     "RulesPlayer",
+    "check_combat_prior",
     "check_playable",
+    "combat_prior_sha256",
     "make_policy",
     "play_run",
     "play_task",
@@ -170,6 +179,40 @@ def check_playable(ascension: int) -> None:
         env.close()
 
 
+@functools.cache
+def _combat_prior(directory: str) -> combat_prior.Champion:
+    """Read the prior exported to `directory`, once per process.
+
+    Raises:
+        ValueError: If there is none there, or one this build cannot play.
+
+    """
+    import combat_prior  # noqa: PLC0415 -- the strategy service imports this module too
+
+    try:
+        champion = combat_prior.find(directory)
+    except combat_prior.PriorError as error:
+        raise ValueError(f"combat_prior: {error}") from error
+    if champion is None:
+        raise ValueError(f"combat_prior: no combat prior is exported to {directory}")
+    return champion
+
+
+def check_combat_prior(directory: str) -> None:
+    """Refuse a configured combat prior this build cannot play, before any seed runs.
+
+    `directory` "" is none. A folder with no playable prior raises `_combat_prior`'s
+    ValueError.
+    """
+    if directory:
+        _combat_prior(directory)
+
+
+def combat_prior_sha256(directory: str) -> str | None:
+    """Name the configured combat prior by its policy's sha256; None without one."""
+    return _combat_prior(directory).policy_sha256 if directory else None
+
+
 def play_task(
     task: Task,
     on_fight: Callable[[int], None] | None = None,
@@ -186,6 +229,7 @@ def play_task(
         crn_fraction=config.crn_fraction,
         step_cap=config.run_step_cap,
         on_fight=on_fight,
+        combat_prior=config.combat_prior,
     )
 
 
@@ -200,12 +244,14 @@ def play_run(
     crn_fraction: float = DEFAULT_CRN_FRACTION,
     step_cap: int = seeding.RUN_STEP_CAP,
     on_fight: Callable[[int], None] | None = None,
+    combat_prior: str = "",
 ) -> shards.RunRecord:
     """Play one full run and return its RunRecord (DESIGN.md 1.4, 5.7; FULL_RUNS.md).
 
     `on_fight(encounter_id)` is called as each fight starts; the runner reports it to the
     parent, which names the fight a quarantined seed died in. A run that reaches
-    `step_cap` engine steps is recorded with `truncated: true`.
+    `step_cap` engine steps is recorded with `truncated: true`. `combat_prior` is the
+    folder of a combat prior to search the fights with ("": none; see the module).
 
     Raises:
         RuntimeError: If a fight offers no legal action or outlives `combat_mcts.STEP_CAP`
@@ -214,6 +260,7 @@ def play_run(
 
     """
     budget = CombatBudget.of(combat_budget)
+    prior = _combat_prior(combat_prior) if combat_prior else None
     mcts_rng, explore_rng, move_base = seeding.run_streams(seed)
     started = time.perf_counter()
     run = _Run()
@@ -253,6 +300,7 @@ def play_run(
                 c,
                 crn_fraction,
                 on_fight,
+                prior,
             )
         info = session.info
         won, died = session.won, session.died
@@ -268,7 +316,12 @@ def play_run(
             "seed": seed,
             "generation": generation,
             "policy": policy.describe(),
-            "combat": {"budget": str(budget), "c": c, "crn_fraction": crn_fraction},
+            "combat": {
+                "budget": str(budget),
+                "c": c,
+                "crn_fraction": crn_fraction,
+                **({} if prior is None else {"prior": prior.policy_sha256}),
+            },
             "ascension": ascension,
             "outcome": {
                 "final_floor": WON_FLOOR if won else info["floor"],
@@ -322,19 +375,22 @@ class _Run:
         c: float,
         crn_fraction: float,
         on_fight: Callable[[int], None] | None,
+        prior: combat_prior.Champion | None = None,
     ) -> None:
         """Search the fight the session stands in to its end, and record it (1.4 item 2).
 
         Simulation j of combat decision k is seeded `(move_base + k) * sims + j`, so the
-        imagined worlds differ between runs and never repeat within one (5.10).
+        imagined worlds differ between runs and never repeat within one (5.10). With a
+        `prior` the search is PUCT on combat-handle forks (see the module).
 
         Raises:
             RuntimeError: If the fight offers no legal action or outlives
                 `combat_mcts.STEP_CAP` decisions.
 
         """
-        combat = session.combat()
+        combat = session.combat(fork_combat=prior is not None)
         view = session.view()
+        guided = {} if prior is None else _guided(prior)
         if view.act_index != self.act_index:
             self.act_index, self.normal_fights = view.act_index, 0
         if combat.node_type == vocab.NODE_MONSTER:
@@ -365,6 +421,7 @@ class _Run:
                 move_base + self.moves,
                 crn=True,
                 crn_fraction=crn_fraction,
+                **guided,
             )
             combat.step(combat_mcts.best_action(tree, legal, mcts_rng))
             self.moves += 1
@@ -384,3 +441,30 @@ class _Run:
                 "seconds": time.perf_counter() - started,
             },
         )
+
+
+def _guided(prior: combat_prior.Champion) -> dict[str, Any]:
+    """`combat_mcts.run_search`'s settings to search with `prior`, as the gate played it.
+
+    The search asks for the root's prior on the position itself, which is the run's own
+    fight, and the network reads a combat handle: the root is read through a faithful fork
+    onto one, made and freed here. Every other world the search asks about is a fork
+    already. The network's encode sorts the draw pile, so the faithful fork shows it
+    nothing a player cannot see.
+    """
+    ask = prior.world_prior()
+
+    def prior_fn(world: Any) -> dict[int, float]:
+        if not isinstance(world, RunCombat):
+            return ask(world)
+        view = world.combat_fork(None)
+        try:
+            return ask(view)
+        finally:
+            view.close()
+
+    return {
+        "prior_fn": prior_fn,
+        "c_puct": prior.c_puct,
+        "prior_min_visits": prior.prior_min_visits,
+    }

@@ -141,7 +141,7 @@ def configure(root: Path, args: argparse.Namespace) -> loop.LoopConfig:
         if value is not None:
             if name == "combat_budget":
                 value = CombatBudget.parse(value)
-            elif name == "export_dest" and value:
+            elif name in ("export_dest", "combat_prior") and value:
                 value = str(Path(value).expanduser().resolve())
             given[section][name] = value
     # A job that stood a lower level in for a higher one moves to that level outright by

@@ -47,7 +47,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
-from . import FEATURE_VERSION, evaluate, models, runner, shards, train, vocab
+from . import FEATURE_VERSION, evaluate, models, runner, selfplay, shards, train, vocab
 from .evaluate import EvalResult
 
 __all__ = [
@@ -648,14 +648,16 @@ class Loop:
     def stale_fields(self, meta: evaluate.EvalMeta) -> list[str]:
         """Return the fields of `meta` that no longer match the config (5.6, E5, E6).
 
-        Those that change what the same policy scores: the combat budget, the ascension,
-        both native API versions and W. Erratum E6 takes the feature version off the
-        list, since a checkpoint of another version refuses to load.
+        Those that change what the same policy scores: the combat budget, the combat
+        prior, the ascension, both native API versions and W. Erratum E6 takes the
+        feature version off the list, since a checkpoint of another version refuses to
+        load.
         """
         combat_api, run_api = evaluate.native_api_versions()
         job = self.config.job
         current = {
             "combat_budget": str(job.combat_budget),
+            "combat_prior": selfplay.combat_prior_sha256(job.combat_prior),
             "ascension": job.ascension,
             "native_api": combat_api,
             "run_native_api": run_api,

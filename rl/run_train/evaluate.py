@@ -38,7 +38,7 @@ from typing import Any
 
 from sts2_gym import native
 
-from . import FEATURE_VERSION, runner, shards
+from . import FEATURE_VERSION, runner, selfplay, shards
 from .engine import CombatBudget
 
 __all__ = [
@@ -151,7 +151,9 @@ class EvalMeta:
     `ascension` is the level the engine played. `ascension_stands_in_for` names the level
     it stood in for, when the engine could not play that one (erratum E11: A9 for A10).
     `seeds_sha256` hashes the seed list, one seed per line; `policy_sha256` the policy's
-    checkpoint, None for the rules policy, which has none.
+    checkpoint, None for the rules policy, which has none. `combat_prior` is the sha256 of
+    the combat prior the fights were searched with, None for the plain search (and for
+    every evaluation from before the field).
     """
 
     combat_budget: str
@@ -163,6 +165,7 @@ class EvalMeta:
     W: float  # the value of a won run (5.2)
     seeds_sha256: str
     policy_sha256: str | None
+    combat_prior: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -175,6 +178,7 @@ class EvalMeta:
             "W": self.W,
             "seeds_sha256": self.seeds_sha256,
             "policy_sha256": self.policy_sha256,
+            "combat_prior": self.combat_prior,
         }
 
     @classmethod
@@ -395,6 +399,7 @@ def eval_meta(
             if checkpoint
             else None
         ),
+        combat_prior=selfplay.combat_prior_sha256(config.combat_prior),
     )
 
 

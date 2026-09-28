@@ -4,6 +4,7 @@ Tests that touch the run engine pass their ascension explicitly (erratum RF1). M
 at 8, the level the committed traces and live fixtures were captured at.
 """
 
+import ctypes
 import re
 import sys
 import unittest
@@ -22,7 +23,7 @@ sys.path.insert(0, str(ROOT / "src"))
 import combat_mcts  # noqa: E402  # ty: ignore[unresolved-import] -- rl/ is on sys.path
 
 from rl.run_train import engine, features, rules, seeding, vocab  # noqa: E402
-from rl.run_train.engine import CombatBudget, RunSession  # noqa: E402
+from rl.run_train.engine import CombatBudget, RunCombat, RunSession  # noqa: E402
 from rl.run_train.features import Decision  # noqa: E402
 from sts2_gym import native  # noqa: E402
 from sts2_gym import run_constants as rc  # noqa: E402
@@ -613,6 +614,61 @@ class RunCombatTests(unittest.TestCase):
             child.close()
             combat.close()  # the session's own handle: a no-op
             self.assertEqual(native.run_phase(session.handle), rc.PHASE_COMBAT)
+        finally:
+            session.close()
+
+
+class CombatForkTests(unittest.TestCase):
+    """`RunCombat(fork_combat=True)`: forks are combat handles (`Sts2Run_ForkCombat`)."""
+
+    def test_a_combat_fork_plays_the_run_clones_world(self):
+        session = RunCombatTests.reach_first_fight("RCFORK02")
+        try:
+            combat = session.combat(fork_combat=True)
+            for seed in (7, 99_999):
+                run_world = RunCombat(session.handle, owns_handle=False).fork(seed)
+                fight = combat.fork(seed)
+                try:
+                    self.assertIsInstance(fight, combat_mcts.Combat)
+                    self.assertEqual(fight.encounter_id, combat.encounter_id)
+                    for _ in range(combat_mcts.STEP_CAP):
+                        legal = fight.legal()
+                        self.assertEqual(legal, run_world.legal())
+                        self.assertEqual(
+                            list(fight.obs),
+                            list(run_world.obs[: native.OBS_SIZE]),
+                        )
+                        if fight.step(legal[0]) | run_world.step(legal[0]):
+                            break
+                    self.assertTrue(fight.done and run_world.done)
+                    self.assertEqual(fight.won(), run_world.won())
+                finally:
+                    fight.close()
+                    run_world.close()
+            self.assertEqual(native.run_phase(session.handle), rc.PHASE_COMBAT)
+        finally:
+            session.close()
+
+    def test_a_faithful_combat_fork_is_the_fight_itself(self):
+        session = RunCombatTests.reach_first_fight("RCFORK03")
+        try:
+            combat = session.combat(fork_combat=True)
+            view = combat.combat_fork(None)
+            try:
+                self.assertEqual(list(view.obs), list(combat.obs[: native.OBS_SIZE]))
+                self.assertEqual(view.legal(), combat.legal())
+            finally:
+                view.close()
+        finally:
+            session.close()
+
+    def test_a_run_outside_a_fight_has_none_to_fork(self):
+        session = RunSession("RCFORK04", ascension=A8)
+        try:
+            self.assertNotEqual(session.phase, rc.PHASE_COMBAT)
+            obs = (ctypes.c_int * native.OBS_SIZE)()
+            with self.assertRaisesRegex(RuntimeError, "not in a fight"):
+                native.run_fork_combat(session.handle, True, 1, obs)
         finally:
             session.close()
 
