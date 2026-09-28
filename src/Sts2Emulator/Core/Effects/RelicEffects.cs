@@ -228,6 +228,9 @@ public static class RelicEffects
     public const int PunchDagger = 210;
     public const int RoyalStamp = 224;
     public const int Bread = 32;
+
+    /// <summary>`Bread`'s `EnergyVar("LoseEnergy", 2)`, charged on turn one.</summary>
+    public const int BreadTurnOneEnergyLoss = 2;
     public const int BurningSticks = 37;
     public const int ChemicalX = 46;
     public const int GhostSeed = 99;
@@ -689,6 +692,14 @@ public static class RelicEffects
         if (HasRelic(state, DivineRight))
         {
             CardEffects.GainStars(state, 3);
+        }
+
+        // `Bread.AfterSideTurnStart` at `TurnNumber == 1`: `PlayerCmd.LoseEnergy(2)`, after
+        // turn one's reset, clamped at zero -- the price of its +1 on every later turn
+        // (`ModifyMaxEnergy` below). Only that half was here.
+        if (HasRelic(state, Bread))
+        {
+            state.Energy = Math.Max(0, state.Energy - BreadTurnOneEnergyLoss);
         }
 
         // `DivineDestiny.AfterSideTurnStart` at `TurnNumber <= 1`: StarsVar(6). Divine
