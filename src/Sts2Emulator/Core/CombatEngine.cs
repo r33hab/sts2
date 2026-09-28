@@ -4651,7 +4651,14 @@ public static class CombatEngine
             BuffSystem.Apply(enemy.Buffs, BuffId.WitheringPresence, -1);
             if (BuffSystem.Get(enemy.Buffs, BuffId.WitheringPresence) <= 0)
             {
-                Effects.CardEffects.AddGeneratedCardToHand(state, Effects.ST.Wither);
+                // `AddToCombatAndPreview<Wither>(..., creator: null)`: the Aeonglass's card,
+                // so not `AddGeneratedCardToHand`, whose generation hooks (Arsenal, Pillar
+                // of Creation, Regalite, Supermassive's count) each ask for a card the
+                // player created.
+                Effects.CardEffects.AddToHandOrDiscard(
+                    state,
+                    new CardInstance(Effects.ST.Wither, false)
+                );
                 BuffSystem.Apply(
                     enemy.Buffs,
                     BuffId.WitheringPresence,
