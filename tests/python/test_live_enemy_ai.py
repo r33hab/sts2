@@ -89,7 +89,11 @@ NO_ACT1_CORPUS = frozenset(
         "SLUMBERING_BEETLE",
         "BOWLBUG_ROCK",
         "TEST_SUBJECT",
-    }
+        "LOUSE_PROGENITOR",
+        "ENTOMANCER",
+        "EXOSKELETON",
+        "DECIMILLIPEDE_SEGMENT",
+    },
 )
 
 # Act 2-3 encounters whose every creature has a model, played the way the Act 1 corpus is
@@ -101,6 +105,12 @@ ACT23_ENCOUNTERS = (
     "scrolls-weak",
     "slumbering-beetle",
     "test-subject",
+    "louse-progenitor",
+    "entomancer",
+    "exoskeletons-normal",
+    "decimillipede",
+    # A Flail Knight given Strength and Plating as it arrives (ids.MONSTER_SUBCLASSES).
+    "mysterious-knight",
 )
 
 # The Test Subject killed once, early and late: AdaptablePower keeps the corpse, and it
@@ -108,6 +118,12 @@ ACT23_ENCOUNTERS = (
 ACT23_HITS = (
     ("test-subject", "TEST_SUBJECT", 1, 0),
     ("test-subject", "TEST_SUBJECT", 1, 2),
+    # A segment killed while the others stand: DEAD_MOVE (forced), then REATTACH_MOVE,
+    # then a roll (decompiled ReattachPower.cs, DecimillipedeSegment.cs). On turn 0 it
+    # dies before it has made any move at all.
+    ("decimillipede", "DECIMILLIPEDE_SEGMENT", 1, 0),
+    ("decimillipede", "DECIMILLIPEDE_SEGMENT", 1, 1),
+    ("decimillipede", "DECIMILLIPEDE_SEGMENT", 1, 3),
 )
 
 # Moves that ending turns cannot reach: the Rock's DIZZY needs a headbutt blocked whole,
@@ -748,6 +764,10 @@ class Act23SelfConsistencyTests(_Rebuilds):
         "SPECTRAL_KNIGHT",
         "SCROLL_OF_BITING",
         "SLUMBERING_BEETLE",
+        "LOUSE_PROGENITOR",
+        "ENTOMANCER",
+        "EXOSKELETON",
+        "DECIMILLIPEDE_SEGMENT",
     }
 
     def test_every_act23_fight_rebuilds_every_turn(self) -> None:
@@ -898,8 +918,11 @@ def machine(entry: str) -> Any:
 def first_intent(written: tuple[str, ...]) -> str:
     """Map a move's first intent, as the parser wrote it, to the live `IntentType`.
 
-    `DebuffIntent(strong: true)` reads DebuffStrong (decompiled DebuffIntent.cs).
+    `DebuffIntent(strong: true)` reads DebuffStrong (decompiled DebuffIntent.cs). A move
+    declaring none (a Decimillipede segment's DEAD_MOVE) shows none: NONE.
     """
+    if not written:
+        return "NONE"
     kind, _, args = written[0].partition("(")
     if kind == "DebuffIntent":
         return "DEBUFF_STRONG" if "strong: true" in args else "DEBUFF"
@@ -1555,6 +1578,128 @@ class Act23ToAiTests(unittest.TestCase):
                 intents=[attack_intent(20)],
             ),
             3,
+        )
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("not a walk", warnings[0])
+
+    def test_a_fallen_segment_shows_dead_then_reattach_then_a_roll(self) -> None:
+        # Session 2026-09-26 01:06, floor 25 (A2): the front segment falls on round 3
+        # showing BULK, shows DEAD_MOVE (forced, unlogged) and then REATTACH_MOVE at 0 HP
+        # with `revive.in_turns` 2 and 1, and comes back on 25 rolling BULK.
+        reattach = [{"id": "REATTACH_POWER", "amount": 25}]
+        ring = ["WRITHE_MOVE", "CONSTRICT_MOVE", "BULK_MOVE"]
+        dead = enemy(
+            "DECIMILLIPEDE_SEGMENT_FRONT",
+            ring,
+            "DEAD_MOVE",
+            intents=[],
+            powers_=reattach,
+            hp=0,
+        )
+        ai, intent, warnings, buffs = to_ai(dead, 2, ascension=2)
+        self.assertEqual(warnings, [])
+        # BULK's ring position: the move it fell showing, never made.
+        self.assertEqual(ai["move_index"], 2)
+        self.assertEqual(intent, emu_intent("Buff", 0))
+        self.assertIn({"id": BUFF["Reviving"], "amount": 2}, buffs)
+
+        waiting = enemy(
+            "DECIMILLIPEDE_SEGMENT_FRONT",
+            [*ring, "REATTACH_MOVE"],
+            "REATTACH_MOVE",
+            intents=[other_intent("HEAL")],
+            powers_=reattach,
+            hp=0,
+        )
+        ai, intent, warnings, buffs = to_ai(waiting, 3, ascension=2)
+        self.assertEqual(warnings, [])
+        self.assertEqual(ai["move_index"], 2)
+        self.assertEqual(intent, emu_intent("Buff", 0))
+        self.assertIn({"id": BUFF["Reviving"], "amount": 1}, buffs)
+
+        back = enemy(
+            "DECIMILLIPEDE_SEGMENT_FRONT",
+            [*ring, "REATTACH_MOVE", "BULK_MOVE"],
+            "BULK_MOVE",
+            intents=[attack_intent(6), other_intent("BUFF")],
+            powers_=reattach,
+            hp=25,
+        )
+        ai, intent, warnings, buffs = to_ai(back, 4, ascension=2)
+        self.assertEqual(warnings, [])
+        # RollsNextMove wrote the rolled ring position into MoveIndex.
+        self.assertEqual(ai["move_index"], 2)
+        self.assertEqual(intent, emu_intent("Attack", 6))
+        self.assertNotIn(BUFF["Reviving"], {item["id"] for item in buffs})
+
+    def test_a_reattached_segment_rolls_even_its_last_move(self) -> None:
+        # RAND's branches are CannotRepeat against REATTACH, the last logged move, so the
+        # move a segment fell showing can come straight back: the same session's front
+        # segment fell showing BULK and rolled BULK; the ring then walks on from it.
+        log = [
+            "WRITHE_MOVE",
+            "CONSTRICT_MOVE",
+            "BULK_MOVE",
+            "REATTACH_MOVE",
+            "BULK_MOVE",
+            "REATTACH_MOVE",
+            "BULK_MOVE",
+            "WRITHE_MOVE",
+        ]
+        ai, intent, warnings, _ = to_ai(
+            enemy(
+                "DECIMILLIPEDE_SEGMENT_FRONT",
+                log,
+                "WRITHE_MOVE",
+                intents=[attack_intent(5, 2)],
+                powers_=[{"id": "REATTACH_POWER", "amount": 25}],
+            ),
+            7,
+            ascension=2,
+        )
+        self.assertEqual(warnings, [])
+        self.assertEqual(ai["move_index"], 3)
+        self.assertEqual(intent, emu_intent("Attack", 5, 2))
+        # Off the ring without a reattach in between is a walk the machine cannot make.
+        _, _, warnings, _ = to_ai(
+            enemy(
+                "DECIMILLIPEDE_SEGMENT_MIDDLE",
+                ["BULK_MOVE", "CONSTRICT_MOVE"],
+                "CONSTRICT_MOVE",
+                intents=[attack_intent(8)],
+            ),
+            1,
+            ascension=2,
+        )
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("not a walk", warnings[0])
+
+    def test_an_exoskeleton_follows_mandibles_with_enrage(self) -> None:
+        # Session 2026-09-26 01:06, floor 18: the second slot opens on MANDIBLES, which
+        # ENRAGE follows outright, and nothing else can.
+        ai, intent, warnings, _ = to_ai(
+            enemy(
+                "EXOSKELETON",
+                ["MANDIBLES_MOVE", "ENRAGE_MOVE"],
+                "ENRAGE_MOVE",
+                intents=[other_intent("BUFF")],
+                slot=1,
+            ),
+            1,
+            ascension=2,
+        )
+        self.assertEqual(warnings, [])
+        self.assertEqual(ai["move_index"], 1)
+        self.assertEqual(intent, emu_intent("Buff", 0))
+        _, _, warnings, _ = to_ai(
+            enemy(
+                "EXOSKELETON",
+                ["MANDIBLES_MOVE", "SKITTER_MOVE"],
+                "SKITTER_MOVE",
+                intents=[attack_intent(1, 3)],
+            ),
+            1,
+            ascension=2,
         )
         self.assertEqual(len(warnings), 1)
         self.assertIn("not a walk", warnings[0])

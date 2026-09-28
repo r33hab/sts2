@@ -363,6 +363,10 @@ RELICS: dict[str, Relic] = {
     # (PaelsWing.cs: TryModifyCardRewardAlternatives/OnSacrifice), which the emulator never
     # touches -- so its Counter (RewardsSacrificed % 2, PaelsWing.cs:36) cannot affect combat.
     "PAELS_WING": _STATELESS,
+    # Act 2's Ancient pool. `RadiantPearl.BeforeHandDraw` puts its Luminesce in hand on
+    # turn one and keeps nothing (decompiled RadiantPearl.cs; RelicEffects.cs, the turn-one
+    # hand draw), so nothing about it outlives the moment it fires.
+    "RADIANT_PEARL": _STATELESS,
     # ── Per-turn counts: PerTurnCounters, cleared at turn start (RelicEffects.cs:990-993,
     # :1364-1371). The game resets `AttacksPlayedThisTurn` in BeforeSideTurnStart too.
     "KUNAI": Relic(counter=_residue("_attacksPlayedThisTurn", 3)),  # :1430

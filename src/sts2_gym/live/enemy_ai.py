@@ -178,6 +178,10 @@ class Fields:
     nemesis_intangible_on: bool = False
     companions: dict[str, int] = field(default_factory=dict)
     seen: set[str] = field(default_factory=set)
+    # The last logged move, for a model whose next move depends on it (an Exoskeleton's
+    # follow-up, a reattached segment's roll). The replay's own note, like `seen`: the
+    # emulator reads it off the intent on display, or keeps it in no field at all.
+    previous: str = ""
 
 
 @dataclass(frozen=True)
@@ -1429,6 +1433,125 @@ class TestSubject(Monster):
         return self.FIRST[move_index % 2]
 
 
+class Exoskeleton(Monster):
+    """An opening by slot, then MANDIBLES -> ENRAGE and a roll after the rest (EnemyAI.ExoskeletonIntent).
+
+    Decompiled Exoskeleton.cs: INIT_MOVE opens the first slot on SKITTER, the second on
+    MANDIBLES, the third on ENRAGE and the fourth on RAND. MANDIBLES is followed by ENRAGE
+    outright, SKITTER and ENRAGE by RAND, a roll of SKITTER or MANDIBLES, each
+    CannotRepeat -- so after a SKITTER the roll can only come out MANDIBLES, and it still
+    costs its draw. The emulator tells the move just made from the intent on display (a
+    one-hit attack is MANDIBLES, a multi-hit one SKITTER) and counts turns in `MoveIndex`
+    only to find its opening, on 0. Which slot a creature stands in is left to the
+    emulator's roster, so any of the three openers is accepted.
+    """
+
+    SKITTER, MANDIBLES, ENRAGE = "SKITTER_MOVE", "MANDIBLES_MOVE", "ENRAGE_MOVE"
+    FOLLOW_UPS: Mapping[str, frozenset[str]] = {
+        MANDIBLES: frozenset({ENRAGE}),
+        SKITTER: frozenset({MANDIBLES}),
+        ENRAGE: frozenset({SKITTER, MANDIBLES}),
+    }
+
+    def __init__(self, entry: str, moves: Mapping[str, Move], **kwargs: Any) -> None:
+        super().__init__(entry, moves, rng=True, **kwargs)
+
+    def start(self, moves: Sequence[str], ctx: Context) -> Fields | None:
+        return Fields() if moves[0] in self.FOLLOW_UPS else None
+
+    def execute(  # noqa: PLR6301 - Monster's hook, overridden
+        self,
+        f: Fields,
+        move: str,
+        ctx: Context,
+    ) -> None:
+        f.move_index += 1
+        f.previous = move
+
+    def select(self, f: Fields, move: str, ctx: Context, *, check: bool = True) -> bool:
+        return not check or move in self.FOLLOW_UPS.get(f.previous, frozenset())
+
+    def announced(self, emu: Mapping[str, Any]) -> str:
+        if _stunned_buff(emu):
+            return STUNNED
+        intent = emu["intent"]
+        if intent["type"] == _intent_value()["Buff"]:
+            return self.ENRAGE
+        return self.SKITTER if intent["hits"] > 1 else self.MANDIBLES
+
+
+class DecimillipedeSegment(Monster):
+    """WRITHE -> CONSTRICT -> BULK round a ring, and a roll once it reattaches.
+
+    Decompiled DecimillipedeSegment.cs: the three moves follow up round a ring, entered
+    where `StarterMoveIdx % 3` points (0 WRITHE, 1 BULK, 2 CONSTRICT). A segment killed
+    while another stands is forced onto DEAD_MOVE (ReattachPower.AfterDeath, never
+    logged); its follow-up REATTACH_MOVE heals it on the next enemy turn, and REATTACH is
+    followed by RAND, a roll over all three moves. Each branch is CannotRepeat, but against
+    REATTACH, the last logged move, so none is barred.
+
+    The emulator builds each segment on its ring position (CombatFactory.
+    CreateDecimillipede) and walks `MoveIndex % 3` (EnemyAI.cs, case KE.
+    DecimillipedeSegment). A killed segment keeps its MoveIndex, holds Reviving 2 on the
+    DEAD turn and 1 on the REATTACH one with a Buff readout (CombatEngine.
+    TryReattachSegment), acts on neither, and comes back with `RollsNextMove`, which writes
+    the rolled ring position into MoveIndex.
+
+    The move a segment was showing when it fell is logged but never made, so REATTACH
+    takes back the step the replay gave it. A segment killed on the enemy turn, after its
+    move, keeps that step in the emulator; the log cannot tell the two apart, and the roll
+    overwrites MoveIndex before anything reads it.
+    """
+
+    RING = ("WRITHE_MOVE", "CONSTRICT_MOVE", "BULK_MOVE")
+    DEAD, REATTACH = "DEAD_MOVE", "REATTACH_MOVE"
+
+    def __init__(self, entry: str, moves: Mapping[str, Move], **kwargs: Any) -> None:
+        super().__init__(entry, moves, rng=True, forced=(self.DEAD,), **kwargs)
+
+    def start(self, moves: Sequence[str], ctx: Context) -> Fields | None:
+        if moves[0] not in self.RING:
+            return None
+        return Fields(move_index=self.RING.index(moves[0]))
+
+    def execute(self, f: Fields, move: str, ctx: Context) -> None:
+        if move in self.RING:
+            f.move_index += 1
+        f.previous = move
+
+    def select(self, f: Fields, move: str, ctx: Context, *, check: bool = True) -> bool:
+        f.companions.pop("Reviving", None)
+        if move == self.REATTACH:
+            if f.previous not in self.RING:
+                return not check
+            f.move_index -= 1
+            f.companions["Reviving"] = 1
+            return True
+        if move not in self.RING:
+            return not check
+        if f.previous == self.REATTACH:
+            f.move_index = self.RING.index(move)
+            return True
+        return not check or self.RING[f.move_index % 3] == move
+
+    def force(  # noqa: PLR6301 - Monster's hook, overridden
+        self,
+        f: Fields,
+        move: str,
+        ctx: Context,
+    ) -> None:
+        # CombatEngine.TryReattachSegment: Reviving 2 and a Buff readout.
+        f.companions["Reviving"] = 2
+
+    def announced(self, emu: Mapping[str, Any]) -> str:
+        reviving = _buff_amount(emu, "Reviving")
+        if reviving:
+            return self.DEAD if reviving > 1 else self.REATTACH
+        if _stunned_buff(emu):
+            return STUNNED
+        return self.RING[emu["ai"]["move_index"] % 3]
+
+
 _MODELS: tuple[Monster, ...] = (
     # EnemyAI.cs:1112-1119 -- MoveIndex 0 INCANTATION, then DARK_STRIKE for good.
     Cycle(
@@ -2232,6 +2355,59 @@ _MODELS: tuple[Monster, ...] = (
             "RESPAWN_MOVE": Move("HEAL", "Buff", 0),
         },
         branches=("REVIVE_BRANCH",),
+    ),
+    # Act 2. EnemyAI.cs, case KE.LouseProgenitor: WEB_CANNON -> CURL_AND_GROW -> POUNCE, a
+    # plain ring (decompiled LouseProgenitor.cs). CURL_AND_GROW declares its DefendIntent
+    # first; the block is CurlBlock, the Tough pair, and its Strength 5 rides beside it.
+    Cycle(
+        "LOUSE_PROGENITOR",
+        {
+            "WEB_CANNON_MOVE": attack(deadly(10, 9)),
+            "CURL_AND_GROW_MOVE": defend(tough(18, 14)),
+            "POUNCE_MOVE": attack(deadly(16, 14)),
+        },
+        loop=("WEB_CANNON_MOVE", "CURL_AND_GROW_MOVE", "POUNCE_MOVE"),
+    ),
+    # Act 2 elite. EnemyAI.cs, case KE.Entomancer: `MoveIndex % 3` over PHEROMONE_SPIT,
+    # BEES and SPEAR, built on 1 (CombatFactory.cs) because the machine opens on BEES
+    # (decompiled Entomancer.cs: BEES -> SPEAR -> PHEROMONE_SPIT -> BEES). BEES is
+    # MultiAttackIntent(3, BeesRepeat), whose REPEAT is the Deadly pair; PHEROMONE_SPIT's
+    # Buff carries a 1 that ExecuteIntent never reads.
+    Cycle(
+        "ENTOMANCER",
+        {
+            "PHEROMONE_SPIT_MOVE": buff(1),
+            "BEES_MOVE": attack(3, hits=deadly(8, 7)),
+            "SPEAR_MOVE": attack(deadly(20, 18)),
+        },
+        loop=("PHEROMONE_SPIT_MOVE", "BEES_MOVE", "SPEAR_MOVE"),
+        openers=("BEES_MOVE",),
+    ),
+    # Act 2. See `Exoskeleton`. SKITTER is MultiAttackIntent(1, SkitterRepeats), whose
+    # repeat is the Deadly pair; ENRAGE's Strength 2 is ExecuteIntent's.
+    Exoskeleton(
+        "EXOSKELETON",
+        {
+            "SKITTER_MOVE": attack(1, hits=deadly(4, 3)),
+            "MANDIBLES_MOVE": attack(deadly(9, 8)),
+            "ENRAGE_MOVE": buff(),
+        },
+        branches=("INIT_MOVE", "RAND"),
+    ),
+    # Act 2 elite, and the three live ids of its segments (ids.MONSTER_SUBCLASSES). See
+    # `DecimillipedeSegment`. BULK and CONSTRICT declare their attack first, their
+    # Strength and Weak riding beside it; DEAD_MOVE declares no intent at all, and the
+    # emulator gives the corpse a bare Buff readout for both of its turns.
+    DecimillipedeSegment(
+        "DECIMILLIPEDE_SEGMENT",
+        {
+            "WRITHE_MOVE": attack(deadly(6, 5), hits=2),
+            "CONSTRICT_MOVE": attack(deadly(9, 8)),
+            "BULK_MOVE": attack(deadly(7, 6)),
+            "DEAD_MOVE": Move("NONE", "Buff", 0),
+            "REATTACH_MOVE": Move("HEAL", "Buff", 0),
+        },
+        branches=("RAND",),
     ),
 )
 
