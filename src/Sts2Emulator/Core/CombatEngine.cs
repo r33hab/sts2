@@ -817,6 +817,10 @@ public static class CombatEngine
         // could be taxed, which made the debuff do nothing at all.
         BuffSystem.Remove(state.PlayerBuffs, BuffId.Tangled);
 
+        // `PanachePower.AfterSideTurnEnd` puts `CardsLeft` back to five: the count towards
+        // its burst is per turn, and three cards one turn and two the next are not five.
+        state.CardsPlayedSincePanacheProc = 0;
+
         // `TenderPower.AfterSideTurnEnd` returns the whole turn's tax at once. The power
         // itself stays -- it is a Counter that lasts the combat, and only what it took
         // this turn comes back.
