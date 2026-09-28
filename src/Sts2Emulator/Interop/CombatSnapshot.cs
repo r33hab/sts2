@@ -286,6 +286,7 @@ public static class CombatSnapshot
         "move_history",
         "starts_on_branch",
         "rolls_next_move",
+        "curl_up_armed",
         "last_branch",
         "repeat_streak",
         "branch_cooldown",
@@ -535,6 +536,7 @@ public static class CombatSnapshot
         enemy.MoveHistory = ai.Items("move_history", AsInt);
         enemy.StartsOnBranch = ai.Bool("starts_on_branch", enemy.StartsOnBranch);
         enemy.RollsNextMove = ai.Bool("rolls_next_move", enemy.RollsNextMove);
+        enemy.CurlUpArmed = ai.Bool("curl_up_armed", enemy.CurlUpArmed);
         enemy.LastBranch = ai.Int("last_branch", enemy.LastBranch);
         enemy.RepeatStreak = ai.Int("repeat_streak", enemy.RepeatStreak);
         enemy.BranchCooldown = ai.Int("branch_cooldown", enemy.BranchCooldown);
@@ -1361,6 +1363,7 @@ public static class CombatSnapshot
         );
         w.WriteBoolean("starts_on_branch", enemy.StartsOnBranch);
         w.WriteBoolean("rolls_next_move", enemy.RollsNextMove);
+        w.WriteBoolean("curl_up_armed", enemy.CurlUpArmed);
         w.WriteNumber("last_branch", enemy.LastBranch);
         w.WriteNumber("repeat_streak", enemy.RepeatStreak);
         w.WriteNumber("branch_cooldown", enemy.BranchCooldown);

@@ -151,6 +151,7 @@ EMU_AI_BOOLS = {
     "once_only_move_used",
     "starts_on_branch",
     "rolls_next_move",
+    "curl_up_armed",
     "off_balance",
     "nemesis_intangible_on",
     "escaped",

@@ -214,6 +214,9 @@ def ai_defaults() -> dict[str, Any]:
         "move_history": [],
         "starts_on_branch": False,
         "rolls_next_move": False,
+        # Curl Up's remembered card, owed its block once the card finishes: true only
+        # inside one card's play, which a settled live position never is.
+        "curl_up_armed": False,
         "last_branch": -1,
         "repeat_streak": 0,
         "branch_cooldown": 0,
