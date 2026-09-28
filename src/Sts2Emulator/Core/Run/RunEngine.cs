@@ -948,24 +948,70 @@ public sealed class RunEngine
             return;
         }
 
-        combat.ShuffleRng = Restream(combat.ShuffleRng, State.Rng.Shuffle);
-        combat.NicheHpRng = Restream(combat.NicheHpRng, State.Rng.Niche);
-        combat.TargetRng = Restream(combat.TargetRng, State.Rng.CombatTargets);
-        combat.CardSelectionRng = Restream(combat.CardSelectionRng, State.Rng.CombatCardSelection);
-        combat.EnergyCostRng = Restream(combat.EnergyCostRng, State.Rng.CombatEnergyCosts);
-        combat.CardGenerationRng = Restream(
-            combat.CardGenerationRng,
-            State.Rng.CombatCardGeneration
-        );
+        State.ActiveCombatRng = RestreamCombat(combat, State.ActiveCombatRng, State.Rng);
+        ReshuffleUnknownDrawPile(combat, rng);
+    }
+
+    /// <summary>
+    /// A copy of the fight this run stands in, with the stream its steps draw from, for a
+    /// search that forks combat handles rather than whole runs (DESIGN.md 6.5).
+    /// </summary>
+    /// <param name="resampleSeed">
+    /// When given, the copy is exactly the fight of <see cref="Clone" /> with this seed: its
+    /// streams rebuilt off the resampled run's seed at the same call counts, and the same
+    /// reshuffle of the draw pile the player has not seen, drawn after whatever the Crystal
+    /// Sphere's resample draws first. Only the fight is copied, never the run around it.
+    /// Omit it for a faithful copy, which is an oracle.
+    /// </param>
+    /// <returns>The fight and its combat stream, or null when the run is not in a fight.</returns>
+    public (CombatState Combat, CountingRandom Rng)? ForkActiveCombat(int? resampleSeed = null)
+    {
+        if (
+            State.Phase != RunPhase.Combat
+            || State.ActiveCombat is null
+            || State.ActiveCombatRng is null
+        )
+        {
+            return null;
+        }
+
+        var combat = State.ActiveCombat.Clone();
+        var combatRng = State.ActiveCombatRng.Clone();
+        if (resampleSeed is int seed)
+        {
+            var random = new Random(seed);
+            State.CrystalSphere?.Clone().ResampleUnseenItems(random);
+            var streams = new RunRngSet(ResampledSeedString(seed));
+            combatRng = RestreamCombat(combat, combatRng, streams)!;
+            ReshuffleUnknownDrawPile(combat, random);
+        }
+
+        return (combat, combatRng);
+    }
+
+    /// <summary>
+    /// Point a fight's streams at <paramref name="streams" />, each at its own call count,
+    /// and return its combat stream pointed at theirs the same way.
+    /// </summary>
+    private static CountingRandom? RestreamCombat(
+        CombatState combat,
+        CountingRandom? combatRng,
+        RunRngSet streams
+    )
+    {
+        combat.ShuffleRng = Restream(combat.ShuffleRng, streams.Shuffle);
+        combat.NicheHpRng = Restream(combat.NicheHpRng, streams.Niche);
+        combat.TargetRng = Restream(combat.TargetRng, streams.CombatTargets);
+        combat.CardSelectionRng = Restream(combat.CardSelectionRng, streams.CombatCardSelection);
+        combat.EnergyCostRng = Restream(combat.EnergyCostRng, streams.CombatEnergyCosts);
+        combat.CardGenerationRng = Restream(combat.CardGenerationRng, streams.CombatCardGeneration);
         combat.PotionGenerationRng = Restream(
             combat.PotionGenerationRng,
-            State.Rng.CombatPotionGeneration
+            streams.CombatPotionGeneration
         );
-        combat.OrbGenerationRng = Restream(combat.OrbGenerationRng, State.Rng.CombatOrbs);
-        combat.AiRng = Restream(combat.AiRng as CountingRandom, State.Rng.MonsterAi);
-        State.ActiveCombatRng = Restream(State.ActiveCombatRng, State.Rng.Niche);
-
-        ReshuffleUnknownDrawPile(combat, rng);
+        combat.OrbGenerationRng = Restream(combat.OrbGenerationRng, streams.CombatOrbs);
+        combat.AiRng = Restream(combat.AiRng as CountingRandom, streams.MonsterAi);
+        return Restream(combatRng, streams.Niche);
     }
 
     private static CountingRandom? Restream(CountingRandom? current, GameRng stream)
