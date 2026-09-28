@@ -380,6 +380,8 @@ class PriorLoopTest(unittest.TestCase):
         equal_time = manifest["sets"]["real"]["equal_time"]
         self.assertGreaterEqual(equal_time["no_prior_sims"], 1)
         self.assertEqual(equal_time["comparison"]["all"]["n"], 40)
+        control = manifest["sets"]["real"]["control"]
+        self.assertEqual(control["prior_vs_control"]["all"]["n"], 40)
         self.assertEqual(manifest["trained"]["report"]["best_val_policy"], 0.9876)
 
     def test_the_champion_is_replayed_when_the_api_version_changes(self):
@@ -390,6 +392,10 @@ class PriorLoopTest(unittest.TestCase):
         # The search without a prior on the gate set, again at equal time, and on the
         # design set (the champion, stored).
         self.assertEqual([policy for policy, _ in evaluate.calls].count(None), 3)
+        self.assertEqual(
+            [policy for policy, _ in evaluate.calls].count(loop.HEURISTIC),
+            1,
+        )
         stored = json.loads((self.root / loop.CHAMPION_EVAL).read_text())
         stored["sets"]["design"]["meta"]["native_api_version"] -= 1
         (self.root / loop.CHAMPION_EVAL).write_text(json.dumps(stored))

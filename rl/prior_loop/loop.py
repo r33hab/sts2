@@ -34,6 +34,7 @@ import multiprocessing
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 from collections.abc import Callable, Iterator, Sequence
@@ -161,6 +162,26 @@ def sha256_file(path: Path) -> str:
 
 def native_api_version() -> int:
     return int(native._lib.Sts2_NativeApiVersion())
+
+
+def native_source_commit() -> str | None:
+    """Return the last commit that changed the emulator's C# sources (None without git).
+
+    Combat fixes do not always bump the API version, and a stored evaluation played by
+    other combat rules is stale all the same.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "log", "-1", "--format=%H", "--", "src/Sts2Emulator"],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip() or None
 
 
 def vocab_sha256(vocab: Any = VOCAB) -> str:
@@ -329,10 +350,16 @@ class PriorConfig:
     # The set the gate reads: "real" (`real_fight_set.json`) or "design" (6.3's set).
     gate: str = "real"
     # PUCT asks for a node's prior once the node has this many visits (combat_mcts).
-    prior_min_visits: int = 0
+    # 3 with a 2-layer network keeps a simulation within 1.2x of the plain search's cost.
+    prior_min_visits: int = 3
+    layers: int = 2
+    d_model: int = 128
     # Train without the end-turn probe channels, and play without computing them.
     ablate_endturn: bool = True
     device: str = ""  # training device; "" is train_combat's own choice
+    # Also play the gate set with the tempo heuristic as the prior (no network): what a
+    # lazy prior reads at its rarely visited nodes, and so the bar the network must clear.
+    control: bool = True
 
     def encounter_ids(self) -> list[int]:
         return list(self.encounters) or [encounter for encounter, _ in act_one_pool()]
@@ -1023,8 +1050,8 @@ class PriorLoop:
             batch=64,
             lr=3e-4,
             policy_weight=1.0,
-            d_model=128,
-            layers=4,
+            d_model=cfg.d_model if self.source_of(k) == "real" else 128,
+            layers=cfg.layers if self.source_of(k) == "real" else 4,
             heads=4,
             value_lambda=cfg.value_lambda,
             seed=k,
@@ -1220,6 +1247,7 @@ class PriorLoop:
             "set": name,
             "ascension": cfg.ascension,
             "native_api_version": native_api_version(),
+            "native_source_commit": native_source_commit(),
             "sims": cfg.eval_sims,
             "c": cfg.c,
             "c_puct": cfg.c_puct,
@@ -1338,6 +1366,15 @@ class PriorLoop:
                     "results": equal,
                 }
                 entry["plain"] = {"seconds": plain_seconds, "results": plain}
+                if self.config.control:
+                    heuristic, heuristic_seconds = self._play(HEURISTIC, name)
+                    groups = compare_groups if name == "real" else compare_subsets
+                    entry["control"] = {
+                        "seconds": heuristic_seconds,
+                        "vs_plain": groups(self.sets()[name], plain, heuristic),
+                        "prior_vs_control": groups(self.sets()[name], heuristic, challenger),
+                        "results": heuristic,
+                    }
                 report["decision"] = decide(base, challenger)
                 report["gate"] = name
             report["sets"][name] = entry
@@ -1400,6 +1437,17 @@ class PriorLoop:
                                 },
                             }
                             if "equal_time" in entry
+                            else {}
+                        ),
+                        **(
+                            {
+                                "control": {
+                                    k2: v
+                                    for k2, v in entry["control"].items()
+                                    if k2 != "results"
+                                },
+                            }
+                            if "control" in entry
                             else {}
                         ),
                     }
