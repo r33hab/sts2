@@ -3730,9 +3730,13 @@ public static class CombatEngine
         // ever gained, and announced damage the game never deals.
         enemy.Buffs.RemoveAll(buff => buff.Id is not (BuffId.Reattach or BuffId.Reviving));
 
-        // TWO, not one: the phase it dies in is not the phase it reattaches in. See the
-        // revive loop in EndTurn.
-        BuffSystem.Apply(enemy.Buffs, BuffId.Reviving, 2);
+        // TWO, not one, for a death on the player's turn: the phase it dies in is not the
+        // phase it reattaches in. See the revive loop in EndTurn. A death on the ENEMY turn
+        // (Thorns as it swings, poison as its turn starts) takes ONE: the game's roll at
+        // the next player turn leaves the forced DEAD_MOVE at once -- it carries no
+        // MustPerformOnce -- so REATTACH shows that turn and heals in the next enemy phase.
+        // Either way the loop does not visit this segment again in the phase it died in.
+        BuffSystem.Apply(enemy.Buffs, BuffId.Reviving, state.PlayerTurn ? 2 : 1);
         // A HealIntent, so the readout says what the turn is spent on.
         enemy.CurrentIntent = new Intent(IntentType.Buff, 0);
         enemy.Block = 0;
