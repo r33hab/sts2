@@ -29,4 +29,28 @@ public class FightMeTests
         Assert.Equal(3, BuffSystem.Get(state.PlayerBuffs, BuffId.Strength));
         Assert.Equal(1, BuffSystem.Get(state.Enemies[0].Buffs, BuffId.Strength));
     }
+
+    /// <summary>
+    /// `FightMe.OnPlay` applies the enemy's Strength to `cardPlay.Target` -- the creature it
+    /// hit, which the hits may have killed. It does not move on to another enemy. A live
+    /// capture: Fight Me+ killed a Snapping Jaxfruit and the Slithering Strangler beside it
+    /// stayed at Strength 0, where the emulator handed it the point.
+    /// </summary>
+    [Fact]
+    public void AKilledTargetTakesTheEnemyStrengthWithItAndNoOneElseGetsIt()
+    {
+        var fight = Fight
+            .Hand(new CardInstance(IC.FightMe, true))
+            .Energy(2)
+            .Enemy(hp: 6)
+            .Enemy(hp: 55);
+
+        fight.Play(0, target: 0);
+
+        // The corpse leaves the roster, as it does in the game; the survivor is untouched.
+        var survivor = Assert.Single(fight.State.Enemies);
+        Assert.Equal(55, survivor.Hp);
+        Assert.Equal(0, BuffSystem.Get(survivor.Buffs, BuffId.Strength));
+        Assert.Equal(4, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.Strength));
+    }
 }

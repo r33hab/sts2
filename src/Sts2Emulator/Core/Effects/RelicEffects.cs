@@ -1990,7 +1990,9 @@ public static class RelicEffects
     /// </summary>
     /// <remarks>
     /// `TurnNumber == 3` is exact -- not "from turn three". Block clears at the start of
-    /// the player's turn, so this is the moment turn three begins.
+    /// the player's turn, so this is the moment turn three begins. The hook fires even
+    /// when Barricade, Blur or Sturdy Clamp kept the block: `CombatManager` calls it after
+    /// `ClearBlock` either way.
     /// </remarks>
     internal static void ApplyAfterBlockCleared(CombatState state, int turnNumber)
     {
@@ -2621,16 +2623,29 @@ public static class RelicEffects
     }
 
     /// <summary>
-    /// `GamePiece` (draw after a Power) and `RainbowRing` (one Attack, one Skill and one
-    /// Power in a turn pays Strength and Dexterity, once).
+    /// The relics whose `AfterCardPlayed` answers each PLAY of a card rather than the card:
+    /// `CardModel.OnPlayWrapper` runs `Hook.AfterCardPlayed` once per play, so a card whose
+    /// play count Throwing Axe, Echo Form, Burst or Duplication raised pays it again.
     /// </summary>
-    internal static void ApplyAfterCardPlayedRares(CombatState state, CardDef def, Random? rng)
+    /// <remarks>
+    /// `GamePiece`: draw after a Power. Called right after each resolution, while the card
+    /// is still in play -- as the game's hook is -- so a draw that reshuffles cannot pull
+    /// the card being played back in.
+    /// </remarks>
+    internal static void ApplyAfterEachPlay(CombatState state, CardDef def, Random? rng)
     {
         if (def.Type == CardType.Power && HasRelic(state, GamePiece) && rng is not null)
         {
             CardEffects.DrawCards(state, 1, rng);
         }
+    }
 
+    /// <summary>
+    /// `RainbowRing` (one Attack, one Skill and one Power in a turn pays Strength and
+    /// Dexterity, once).
+    /// </summary>
+    internal static void ApplyAfterCardPlayedRares(CombatState state, CardDef def, Random? rng)
+    {
         if (!HasRelic(state, RainbowRing) || state.RainbowRingPaidThisTurn)
         {
             return;

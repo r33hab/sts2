@@ -106,6 +106,48 @@ public class StateCloningTests
         }
     }
 
+    /// <summary>
+    /// The run-level twin of <see cref="EveryScalarFieldSurvivesTheClone"/>. Search clones
+    /// the run at every decision, so a scalar the clone forgets is a fork that plays a
+    /// different game: `PendingSelectionEnchantAmount` was one, and a search fork opened
+    /// on Beautiful Bracelet's screen enchanted at Swift 2 where the run does Swift 3.
+    /// </summary>
+    [Fact]
+    public void EveryRunStateScalarFieldSurvivesTheClone()
+    {
+        var engine = RunInCombat();
+        var run = engine.State;
+        int stamp = 1;
+        foreach (var field in PublicFields(run))
+        {
+            if (field.FieldType == typeof(int))
+            {
+                field.SetValue(run, stamp++);
+            }
+            else if (field.FieldType == typeof(bool))
+            {
+                field.SetValue(run, !(bool)field.GetValue(run)!);
+            }
+            else if (field.FieldType == typeof(CardType?))
+            {
+                field.SetValue(run, (CardType?)CardType.Power);
+            }
+        }
+
+        var copy = run.Clone();
+
+        var forgotten = PublicFields(run)
+            .Where(field =>
+                field.FieldType == typeof(int)
+                || field.FieldType == typeof(bool)
+                || field.FieldType == typeof(CardType?)
+            )
+            .Where(field => !Equals(field.GetValue(run), field.GetValue(copy)))
+            .Select(field => field.Name)
+            .ToList();
+        Assert.Empty(forgotten);
+    }
+
     [Fact]
     public void EveryCollectionFieldSurvivesTheClone()
     {

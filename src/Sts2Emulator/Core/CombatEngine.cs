@@ -291,6 +291,7 @@ public static class CombatEngine
 
         ApplyEnchantmentOnPlay(state, card, rng);
         Effects.CardEffects.Apply(def, card.Upgraded, state, rng, card);
+        Effects.RelicEffects.ApplyAfterEachPlay(state, def, rng);
         if (burstPlays > 0)
         {
             BuffSystem.Apply(state.PlayerBuffs, BuffId.Burst, -1);
@@ -334,6 +335,7 @@ public static class CombatEngine
         for (int i = 0; i < extraPlays; i++)
         {
             Effects.CardEffects.Apply(def, card.Upgraded, state, rng, card);
+            Effects.RelicEffects.ApplyAfterEachPlay(state, def, rng);
         }
 
         // `DuplicationPower.ModifyCardPlayCount` adds one play to ANY card and then
@@ -345,6 +347,7 @@ public static class CombatEngine
         if (duplication > 0)
         {
             Effects.CardEffects.Apply(def, card.Upgraded, state, rng, card);
+            Effects.RelicEffects.ApplyAfterEachPlay(state, def, rng);
             BuffSystem.Apply(state.PlayerBuffs, BuffId.Duplication, -1);
         }
 
@@ -354,6 +357,7 @@ public static class CombatEngine
             if (oneTwoPunch > 0)
             {
                 Effects.CardEffects.Apply(def, card.Upgraded, state, rng, card);
+                Effects.RelicEffects.ApplyAfterEachPlay(state, def, rng);
                 if (oneTwoPunch == 1)
                 {
                     BuffSystem.Remove(state.PlayerBuffs, BuffId.OneTwoPunch);
@@ -748,10 +752,13 @@ public static class CombatEngine
             Effects.CardEffects.GainBlock(state, metallicize, rng);
         }
         // Plating (Stone Armor): gain block at end of player turn.
+        // `PlatingPower.BeforeSideTurnEndEarly` gains it with `ValueProp.Unpowered`, so
+        // Dexterity and Frail leave it alone (live: Plating 4 under a Speed Potion's
+        // Dexterity 5 blocked 4, not 9).
         int plating = BuffSystem.Get(state.PlayerBuffs, BuffId.Plating);
         if (plating > 0)
         {
-            Effects.CardEffects.GainBlock(state, plating, rng);
+            Effects.CardEffects.GainUnpoweredBlock(state, plating, rng);
         }
 
         // Ritual (Mazaleth's Gift): gain N Strength at end of player turn.
@@ -1499,20 +1506,26 @@ public static class CombatEngine
         else if (BuffSystem.Get(state.PlayerBuffs, BuffId.Barricade) == 0 && blur == 0)
         {
             state.PlayerBlock = 0;
-            // `ToricToughnessPower.AfterBlockCleared`: the block comes straight back, and
-            // the counter -- which is TURNS, not an amount -- ticks down.
-            int toric = BuffSystem.Get(state.PlayerBuffs, BuffId.ToricToughness);
-            if (toric > 0)
-            {
-                Effects.CardEffects.GainUnpoweredBlock(state, state.ToricToughnessBlock, rng);
-                BuffSystem.Apply(state.PlayerBuffs, BuffId.ToricToughness, -1);
-            }
-
-            // `Hook.AfterBlockCleared`, which Sparkling Rouge answers on turn three only.
-            // Barricade and Blur keep the block, and the hook does not fire when it is
-            // not cleared -- so a Barricade run never gets the Rouge's Strength.
-            Effects.RelicEffects.ApplyAfterBlockCleared(state, state.Turn + 1);
         }
+
+        // `Hook.AfterBlockCleared` fires whether or not the block was cleared.
+        // `CombatManager` calls it for every creature starting its turn, straight after
+        // `Creature.AfterTurnStart` has run `ClearBlock` -- and Barricade, Blur and Sturdy
+        // Clamp only stop `ClearBlock` from zeroing the block, not the hook after it.
+        // Gating it on the block clear cost a Barricade run the Rouge's Strength and
+        // Dexterity (seen live: Dexterity 1 -> 2 on turn three, predicted 1).
+        //
+        // `ToricToughnessPower.AfterBlockCleared`: the block comes straight back, and the
+        // counter -- which is TURNS, not an amount -- ticks down.
+        int toric = BuffSystem.Get(state.PlayerBuffs, BuffId.ToricToughness);
+        if (toric > 0)
+        {
+            Effects.CardEffects.GainUnpoweredBlock(state, state.ToricToughnessBlock, rng);
+            BuffSystem.Apply(state.PlayerBuffs, BuffId.ToricToughness, -1);
+        }
+
+        // Sparkling Rouge answers the same hook, on turn three only.
+        Effects.RelicEffects.ApplyAfterBlockCleared(state, state.Turn + 1);
 
         if (blur > 0)
         {
@@ -3235,6 +3248,15 @@ public static class CombatEngine
                 BuffSystem.Remove(fallen.Buffs, BuffId.PossessStrength);
             }
 
+            // `HexPower.AfterDeath` removes the Hex when its APPLIER dies (with removal not
+            // prevented), and `AfterRemoved` clears the Hexed cards. The Spectral Knight is
+            // the only creature that applies Hex, and a Knights fight has one, so its death
+            // is the applier's.
+            if (fallen.DefId == KE.SpectralKnight)
+            {
+                BuffSystem.Remove(state.PlayerBuffs, BuffId.Hex);
+            }
+
             // `DampenPower.AfterDeath`: the power tracks the CASTERS that applied it and
             // lifts once the last of them is gone -- and `AfterRemoved` is what gives the
             // upgrades back. Read off the roster rather than a caster set, because the Magi
@@ -3645,6 +3667,10 @@ public static class CombatEngine
             return true;
         }
 
+        // The death strips every power `Hook.ShouldPowerBeRemovedOnDeath` does not veto, and
+        // `IllusionPower` vetoes only buffs and temporary debuffs: a debuff that is not an
+        // `ITemporaryPower` (Vulnerable, Weak, Poison ...) goes with the death.
+        enemy.Buffs.RemoveAll(buff => BuffSystem.IsDebuff(buff.Id));
         BuffSystem.Apply(enemy.Buffs, BuffId.Reviving, 1);
         // A HealIntent, so the readout says what the turn will be spent on.
         enemy.CurrentIntent = new Intent(IntentType.Buff, 0);
@@ -3913,13 +3939,26 @@ public static class CombatEngine
         enemy.MaxHp = enemy.Hp;
         enemy.Block = 0;
         enemy.MoveIndex = 0;
+        // `StockPower.AfterDeath` adds a NEW Axebot in the slot -- `ModelDb.Monster<Axebot>()
+        // .ToMutable()` with `StockAmount = Amount - 1` -- whose `AfterAddedToRoom` applies
+        // that stock and nothing else. The dead bot's Strength, and every debuff the player
+        // put on it, die with it; so does its move log.
+        enemy.Buffs.Clear();
+        enemy.PoweredHitsThisTurn = 0;
+        enemy.MoveHistory.Clear();
+        enemy.LastMove = -1;
+        enemy.LastMoveRepeats = 0;
         // A respawned Axebot is built with a stock override, which starts its machine on
         // BOOT_UP -- index 0 -- rather than on the HAMMER_UPPERCUT a fresh one opens with.
         enemy.CurrentIntent = new Intent(
             IntentType.Defend,
             Ascension.Value(ascension, Ascension.DeadlyEnemies, 15, 10)
         );
-        BuffSystem.Apply(enemy.Buffs, BuffId.Stock, -1);
+        if (stock > 1)
+        {
+            BuffSystem.Apply(enemy.Buffs, BuffId.Stock, stock - 1);
+        }
+
         return true;
     }
 
