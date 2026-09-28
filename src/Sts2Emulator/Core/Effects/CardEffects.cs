@@ -4943,12 +4943,13 @@ public static class CardEffects
         // doubles UNPOWERED block too -- Afterimage's, for one, which can land in the same
         // turn. That is why it sits here rather than inside IncomingBlock.
         // `Vambrace.ModifyBlockMultiplicative` doubles the first CARD block of a combat,
-        // and `AfterModifyingBlockAmount` latches only once the gain actually lands -- so a
-        // card that would gain nothing does not spend it.
+        // and `AfterModifyingBlockAmount` names the card only once the gain actually lands
+        // -- so a card that would gain nothing does not spend it. The relic is spent when
+        // that card finishes (`AfterCardPlayed`), so all of its gains are doubled.
         if (powered && effective > 0 && RelicEffects.DoublesCardBlock(state))
         {
             effective *= 2;
-            state.VambraceSpent = true;
+            state.VambraceCard = true;
         }
 
         // `PaelsLegion.ModifyBlockMultiplicative` returns 2 while its cooldown is clear,
@@ -4957,7 +4958,7 @@ public static class CardEffects
         if (powered && effective > 0 && RelicEffects.PaelsLegionDoublesBlock(state))
         {
             effective *= 2;
-            state.PaelsLegionCooldown = RelicEffects.PaelsLegionCooldownTurns;
+            state.PaelsLegionCard = true;
         }
 
         int shadowmeld = BuffSystem.Get(state.PlayerBuffs, BuffId.Shadowmeld);

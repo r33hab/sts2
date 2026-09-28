@@ -193,6 +193,8 @@ public static class CombatSnapshot
         new("merc_gold_was_stolen", s => ref s.MercGoldWasStolen),
         new("pen_nib_armed", s => ref s.PenNibArmed),
         new("vambrace_spent", s => ref s.VambraceSpent),
+        new("vambrace_card", s => ref s.VambraceCard),
+        new("paels_legion_card", s => ref s.PaelsLegionCard),
         new("rainbow_ring_paid_this_turn", s => ref s.RainbowRingPaidThisTurn),
         new("unsettling_lamp_spent", s => ref s.UnsettlingLampSpent),
         new("unsettling_lamp_card", s => ref s.UnsettlingLampCard),

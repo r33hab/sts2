@@ -225,6 +225,26 @@ public class PaelsLegionTests
 
         Assert.Equal(doubled, legion.State.PlayerBlock);
     }
+
+    /// <summary>
+    /// The cooldown starts in `AfterCardPlayed`, once the card that gained the block has
+    /// finished, so every gain that card makes is doubled: Second Wind's, one per exhaust.
+    /// </summary>
+    [Fact]
+    public void EveryGainOfTheCardIsDoubled()
+    {
+        var legion = WithLegion();
+        legion.State.Hand =
+        [
+            new CardInstance(IC.SecondWind, false),
+            new CardInstance(DefendIronclad, false),
+            new CardInstance(DefendIronclad, false),
+        ];
+
+        legion.Play(0);
+
+        Assert.Equal(2 * 10, legion.State.PlayerBlock);
+    }
 }
 
 /// <summary>

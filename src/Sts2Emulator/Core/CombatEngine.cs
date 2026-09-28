@@ -4624,6 +4624,7 @@ public static class CombatEngine
         Effects.RelicEffects.ApplyAfterCardPlayed(state, def, rng, energySpent);
         PayCurlUp(state);
         PayRupture(state);
+        Effects.RelicEffects.FinishBlockDoublingCard(state);
 
         // `TenderPower.AfterCardPlayed`: every card the player plays costs 1 Strength and
         // 1 Dexterity, applied `silent: true` -- so it does not go through

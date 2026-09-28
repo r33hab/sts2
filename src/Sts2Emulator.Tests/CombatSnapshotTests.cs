@@ -111,6 +111,8 @@ public class CombatSnapshotTests
           "merc_gold_was_stolen": false,
           "pen_nib_armed": false,
           "vambrace_spent": false,
+          "vambrace_card": false,
+          "paels_legion_card": false,
           "rainbow_ring_paid_this_turn": false,
           "unsettling_lamp_spent": false,
           "unsettling_lamp_card": false,

@@ -2545,7 +2545,8 @@ public static class RelicEffects
 
     /// <summary>
     /// `Vambrace.ModifyBlockMultiplicative`: the FIRST card each combat that gains block
-    /// gains double. `BlockGainedThisCombat` latches once the gain actually lands.
+    /// gains double -- every gain that card makes -- and `BlockGainedThisCombat` latches
+    /// once it finishes (`FinishBlockDoublingCard`).
     /// </summary>
     internal static bool DoublesCardBlock(CombatState state) =>
         HasRelic(state, Vambrace) && !state.VambraceSpent;
@@ -2997,6 +2998,26 @@ public static class RelicEffects
         {
             state.UnsettlingLampCard = false;
             state.UnsettlingLampSpent = true;
+        }
+    }
+
+    /// <summary>
+    /// `Vambrace.AfterCardPlayed` and `PaelsLegion.AfterCardPlayed` on the card whose block
+    /// they doubled: Vambrace is spent for the combat, and the Legion's cooldown starts.
+    /// Until then every gain the card makes is doubled (Second Wind's, one per exhaust).
+    /// </summary>
+    internal static void FinishBlockDoublingCard(CombatState state)
+    {
+        if (state.VambraceCard)
+        {
+            state.VambraceCard = false;
+            state.VambraceSpent = true;
+        }
+
+        if (state.PaelsLegionCard)
+        {
+            state.PaelsLegionCard = false;
+            state.PaelsLegionCooldown = PaelsLegionCooldownTurns;
         }
     }
 
