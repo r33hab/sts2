@@ -1,4 +1,8 @@
 {
+ "game": {
+  "steam_buildid": "23811903",
+  "release": "v0.107.1"
+ },
  "source": "spire-coach coach session logs (map screens), Ironclad, v0.107.1; the map is a pure function of the seed and the act index",
  "runs": {
   "QEY9JXP3KR": {
