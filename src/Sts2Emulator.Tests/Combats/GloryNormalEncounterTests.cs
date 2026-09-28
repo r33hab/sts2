@@ -940,4 +940,44 @@ public class KnightsTests
         Assert.Equal((IntentType.Attack, 6, 1), seen[0]);
         Assert.DoesNotContain((IntentType.Attack, 6, 1), seen.Skip(1));
     }
+
+    /// <summary>
+    /// `HexPower.AfterDeath` removes the Hex when its APPLIER dies, and the Spectral Knight
+    /// is the only creature that applies it (one per Knights fight). Seen live: Fight Me
+    /// killed the Spectral Knight and the player's Hex 2 was gone; the emulator kept it.
+    /// </summary>
+    [Fact]
+    public void KillingTheSpectralKnightLiftsItsHex()
+    {
+        var fight = Trio(2);
+        var spectral = fight.State.Enemies[1];
+        Assert.Equal(KE.SpectralKnight, spectral.DefId);
+        fight.State.PlayerBuffs.Add(new BuffState(BuffId.Hex, 2));
+        fight.State.Hand = [new CardInstance(IC.StrikeIronclad, false)];
+        fight.State.Energy = 3;
+        spectral.Hp = 1;
+        spectral.Block = 0;
+
+        fight.Play(0, target: 1);
+
+        Assert.DoesNotContain(fight.State.Enemies, enemy => enemy.DefId == KE.SpectralKnight);
+        Assert.Equal(0, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.Hex));
+    }
+
+    /// <summary>Another knight's death leaves the Spectral Knight's Hex where it is.</summary>
+    [Fact]
+    public void KillingAnotherKnightLeavesTheHex()
+    {
+        var fight = Trio(2);
+        var flail = fight.State.Enemies[0];
+        fight.State.PlayerBuffs.Add(new BuffState(BuffId.Hex, 2));
+        fight.State.Hand = [new CardInstance(IC.StrikeIronclad, false)];
+        fight.State.Energy = 3;
+        flail.Hp = 1;
+        flail.Block = 0;
+
+        fight.Play(0, target: 0);
+
+        Assert.Equal(2, BuffSystem.Get(fight.State.PlayerBuffs, BuffId.Hex));
+    }
 }

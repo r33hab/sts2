@@ -801,9 +801,9 @@ public static class RunNonCombatEffects
                     : RunFollowUp.None;
 
             case RunConstants.RelicBeautifulBracelet:
-                // `FromDeckForEnchantment` with Swift at THREE, on three cards. Swift only
-                // takes Powers, so a deck with none is offered nothing -- the count is what
-                // the screen asks for, not what it is guaranteed to get.
+                // `FromDeckForEnchantment` with Swift at THREE, on three cards, and no filter
+                // of its own: any card Swift can take, which is any enchantable card. The
+                // count is what the screen asks for, not what it is guaranteed to get.
                 return BeginDeckSelection(
                     state,
                     DeckSelection.Enchant,
@@ -1578,12 +1578,32 @@ public static class RunNonCombatEffects
 
     /// <summary>
     /// The book offers Sharp to Attacks, Nimble to Skills and Swift to Powers, so a card
-    /// is a candidate for SOME page of it when its own type's enchantment would take.
+    /// is a candidate for SOME page of it when its own type's page would take it.
     /// </summary>
     public static bool CardCanReceiveSelfHelpBookEnchantment(CardInstance card) =>
-        Enchantments.CanEnchant(card, Enchantment.Sharp)
-        || Enchantments.CanEnchant(card, Enchantment.Nimble)
-        || Enchantments.CanEnchant(card, Enchantment.Swift);
+        SelfHelpBookPageTakes(card, Enchantment.Sharp)
+        || SelfHelpBookPageTakes(card, Enchantment.Nimble)
+        || SelfHelpBookPageTakes(card, Enchantment.Swift);
+
+    /// <summary>
+    /// The card type each page restricts its enchantment to: the book's own
+    /// `SelectAndEnchant&lt;T&gt;(2, CardType.X, ...)`, whose `DeckFilter` checks the type
+    /// before `CanEnchant`. For Sharp and Nimble it repeats the enchantment's own rule;
+    /// for Swift, which takes any card, it is the whole restriction.
+    /// </summary>
+    public static CardType SelfHelpBookCardType(Enchantment enchantment) =>
+        enchantment switch
+        {
+            Enchantment.Sharp => CardType.Attack,
+            Enchantment.Nimble => CardType.Skill,
+            Enchantment.Swift => CardType.Power,
+            _ => throw new ArgumentOutOfRangeException(nameof(enchantment), enchantment, null),
+        };
+
+    /// <summary>Whether the book's page for <paramref name="enchantment"/> would take this card.</summary>
+    public static bool SelfHelpBookPageTakes(CardInstance card, Enchantment enchantment) =>
+        GeneratedData.Cards.Get(card.DefId).Type == SelfHelpBookCardType(enchantment)
+        && Enchantments.CanEnchant(card, enchantment);
 
     public static Enchantment SelfHelpBookEnchantment(int enchantType) =>
         enchantType switch
@@ -1606,15 +1626,23 @@ public static class RunNonCombatEffects
     /// option and the agent is offered a move it cannot make -- which is the single most
     /// common defect this layer has had.
     /// </summary>
-    public static bool CanBeginDeckSelection(RunState state, DeckSelection kind, int arg)
+    public static bool CanBeginDeckSelection(
+        RunState state,
+        DeckSelection kind,
+        int arg,
+        CardType? cardType = null
+    )
     {
         var savedKind = state.PendingSelectionKind;
         int savedArg = state.PendingSelectionArg;
+        var savedCardType = state.PendingSelectionCardType;
         state.PendingSelectionKind = kind;
         state.PendingSelectionArg = arg;
+        state.PendingSelectionCardType = cardType;
         bool any = Enumerable.Range(0, state.Deck.Count).Any(i => CanSelectCard(state, i));
         state.PendingSelectionKind = savedKind;
         state.PendingSelectionArg = savedArg;
+        state.PendingSelectionCardType = savedCardType;
         return any;
     }
 
@@ -1629,10 +1657,12 @@ public static class RunNonCombatEffects
         int followUpMaxHpGain = 0,
         string? eventEntry = null,
         int enchantAmount = 0,
-        SelectionReturn returnTo = SelectionReturn.EventResult
+        SelectionReturn returnTo = SelectionReturn.EventResult,
+        CardType? cardType = null
     )
     {
         state.PendingSelectionEventEntry = eventEntry;
+        state.PendingSelectionCardType = cardType;
         state.PendingSelectionKind = kind;
         state.PendingSelectionArg = arg;
         state.PendingSelectionCount = count;
@@ -1662,6 +1692,7 @@ public static class RunNonCombatEffects
         state.PendingSelectionFollowUpHpLoss = 0;
         state.PendingSelectionFollowUpMaxHpGain = 0;
         state.PendingSelectionEnchantAmount = 0;
+        state.PendingSelectionCardType = null;
         state.PendingSelectionReturn = SelectionReturn.EventResult;
         state.PendingSelectionReturnsToEvent = false;
     }
@@ -1708,7 +1739,11 @@ public static class RunNonCombatEffects
             DeckSelection.Enchant => Enchantments.CanEnchant(
                 card,
                 (Enchantment)state.PendingSelectionArg
-            ),
+            )
+                && (
+                    state.PendingSelectionCardType is not CardType type
+                    || GeneratedData.Cards.Get(card.DefId).Type == type
+                ),
             // CardSelectCmd.FromDeckGeneric(c => c.IsTransformable && c.Rarity == Basic)
             // -- Wood Carvings carves a Basic card into a Peck or a Toric Toughness.
             DeckSelection.TransformTo => GeneratedData.Cards.Get(card.DefId).Rarity

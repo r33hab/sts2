@@ -449,15 +449,20 @@ public class SlumberingBeetleTests
     }
 
     /// <summary>
-    /// And it sheds it just the same when the player wakes it EARLY with damage. The game
-    /// wakes from either path, so a wake wired into only the turn-end one leaves a beetle
-    /// the player hit armoured for the rest of the fight.
+    /// Woken EARLY by damage, it is STUNNED, and sheds the Plating on the stunned turn.
+    /// `SlumberPower.AfterDamageReceived` at zero calls
+    /// `CreatureCmd.Stun(owner, WakeUpMove, "ROLL_OUT_MOVE")`: `WakeUpMove` -- which removes
+    /// the Plating -- is the body of the stun move the beetle performs on its own turn, and
+    /// the roll-outs start the turn after. Seen live: the Ultimate Strike that woke the
+    /// beetle left its Plating 14 standing and its intent on STUN; the emulator shed the
+    /// Plating on the spot and never stunned it.
     /// </summary>
     [Fact]
-    public void WakingTheBeetleWithDamageAlsoShedsThePlating()
+    public void WakingTheBeetleWithDamageStunsItAndTheStunShedsThePlating()
     {
         var fight = HiveNormal.At(CombatFactory.ActOneEncounter.SlumberingBeetle);
         var beetle = fight.State.Enemies[2];
+        int plating = BuffSystem.Get(beetle.Buffs, BuffId.Plating);
 
         // Block zeroed but the POWER kept: three Strikes land unblocked, and the third
         // takes the sleep to zero.
@@ -474,7 +479,23 @@ public class SlumberingBeetleTests
         fight.Play(0, target: 2);
 
         Assert.Equal(0, BuffSystem.Get(beetle.Buffs, BuffId.Slumber));
+        Assert.Equal(plating, BuffSystem.Get(beetle.Buffs, BuffId.Plating));
+        Assert.Equal(1, BuffSystem.Get(beetle.Buffs, BuffId.Stunned));
+
+        // Only the beetle can hurt the player here: the rock and the silk are parked.
+        foreach (var other in fight.State.Enemies.Where(e => !ReferenceEquals(e, beetle)))
+        {
+            other.Hp = 0;
+        }
+
+        fight.State.Enemies.RemoveAll(e => e.Hp <= 0);
+        fight.State.PlayerHp = 999;
+        fight.EndTurn();
+
+        Assert.Equal(999, fight.State.PlayerHp);
         Assert.Equal(0, BuffSystem.Get(beetle.Buffs, BuffId.Plating));
+        Assert.Equal(0, beetle.Block);
+        Assert.Equal(IntentType.Attack, beetle.CurrentIntent.Type);
     }
 
     /// <summary>

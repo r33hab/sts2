@@ -172,7 +172,10 @@ public enum Enchantment
     /// <summary>Skills only; adds its amount to the card's block.</summary>
     Nimble,
 
-    /// <summary>Powers only.</summary>
+    /// <summary>
+    /// Draws its amount once, the first time the card is played. Any enchantable card
+    /// takes it; only Self-Help Book's page narrows it to Powers.
+    /// </summary>
     Swift,
 
     /// <summary>Grants the Retain keyword.</summary>
@@ -515,7 +518,10 @@ public static class Enchantments
             Enchantment.Sharp or Enchantment.Corrupted or Enchantment.Vigorous => def.Type
                 == CardType.Attack,
             Enchantment.Nimble => def.Type == CardType.Skill,
-            Enchantment.Swift => def.Type == CardType.Power,
+            // `Swift` overrides neither `CanEnchantCardType` nor `CanEnchant`, so it takes
+            // the base rule below like Glam does. Self-Help Book is what narrows it to
+            // Powers, with a filter of its own (`SelectAndEnchant<Swift>(2, CardType.Power)`);
+            // Wing Charm, Beautiful Bracelet and Nonupeipe's count all read Swift itself.
 
             // Instinct.CanEnchantCardType: attacks.
             Enchantment.Instinct => def.Type == CardType.Attack,

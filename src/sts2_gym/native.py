@@ -4,6 +4,7 @@ import ctypes
 import json
 import os
 import platform
+import signal
 import sys
 from pathlib import Path
 
@@ -107,6 +108,62 @@ def _assert_native_api_version(lib: ctypes.CDLL, path: Path) -> None:
         )
 
 
+class _DarwinSigaction(ctypes.Structure):
+    """macOS's `struct sigaction`, as libc's `sigaction()` takes it."""
+
+    _fields_ = [
+        ("handler", ctypes.c_void_p),
+        ("mask", ctypes.c_uint32),
+        ("flags", ctypes.c_int),
+    ]
+
+
+_SA_SIGINFO = 0x40  # <sys/signal.h> on macOS
+
+
+def _clear_stale_activation_siginfo() -> None:
+    """Clear SA_SIGINFO from a SIGUSR1 that has no handler, before the runtime starts.
+
+    On macOS the NativeAOT runtime stops a thread for the GC by sending it SIGUSR1, and
+    its handler then chains to the SIGUSR1 action it found at startup. .NET 9, which
+    builds this library, calls that action's `sa_sigaction` whenever its flags hold
+    SA_SIGINFO, and rules out SIG_DFL and SIG_IGN only on the other branch
+    (dotnet/runtime#132581; fixed by #132900, in .NET 10 from 10.0.13, and not in 9.0).
+    macOS resets a caught signal's handler across execve but keeps its flags, so a
+    process started by one that had loaded this library -- every runner worker, whose
+    parent imports the engine before it spawns them -- inherits SIGUSR1 as
+    {SIG_DFL, SA_SIGINFO}. The first background GC that stopped such a worker's main
+    thread mid-call jumped to address 0: SIGSEGV, exit -11, intermittently, and only
+    once the worker had allocated enough to need one.
+
+    Flags mean nothing on a default or ignored action, so clearing the stale one changes
+    nothing but what the runtime reads. A real handler is left alone; the runtime chains
+    to that correctly.
+
+    Raises:
+        OSError: If SIGUSR1's action cannot be read or rewritten.
+
+    """
+    if sys.platform != "darwin":
+        return  # Linux clears sa_flags on execve, and its activation signal is SIGRTMIN
+    sigaction = ctypes.CDLL(None, use_errno=True).sigaction
+    sigaction.restype = ctypes.c_int
+    sigaction.argtypes = [
+        ctypes.c_int,
+        ctypes.POINTER(_DarwinSigaction),
+        ctypes.POINTER(_DarwinSigaction),
+    ]
+    action = _DarwinSigaction()
+    if sigaction(signal.SIGUSR1, None, ctypes.byref(action)) != 0:
+        raise OSError(ctypes.get_errno(), "sigaction could not read SIGUSR1")
+    no_handler = (action.handler or 0) in (signal.SIG_DFL, signal.SIG_IGN)
+    if not no_handler or not action.flags & _SA_SIGINFO:
+        return
+    action.flags &= ~_SA_SIGINFO
+    if sigaction(signal.SIGUSR1, ctypes.byref(action), None) != 0:
+        raise OSError(ctypes.get_errno(), "sigaction could not rewrite SIGUSR1")
+
+
 def _load_lib() -> ctypes.CDLL:
     name = _LIB_NAMES.get(sys.platform)
     if name is None:
@@ -119,6 +176,7 @@ def _load_lib() -> ctypes.CDLL:
     for path in search:
         if path.exists():
             _assert_native_library_is_fresh(path)
+            _clear_stale_activation_siginfo()  # before the runtime reads SIGUSR1
             lib = ctypes.CDLL(str(path))
             _assert_native_api_version(lib, path)
             return lib

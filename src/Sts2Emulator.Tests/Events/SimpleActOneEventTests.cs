@@ -277,4 +277,29 @@ public class SimpleActOneEventTests
         Assert.Equal(0, engine.Step(2, -1, out _, out _, out _));
         Assert.Equal((int)Enchantment.Swift, engine.State.PendingSelectionArg);
     }
+
+    /// <summary>
+    /// The Swift page offers only Powers, though Swift itself would take any card: the
+    /// book's own `SelectAndEnchant&lt;Swift&gt;(2, CardType.Power, ...)` passes
+    /// `c.Type == typeRestriction` to `FromDeckForEnchantment`. So the restriction lives on
+    /// the page, not on the enchantment.
+    /// </summary>
+    [Fact]
+    public void TheSwiftPageOffersOnlyPowers()
+    {
+        var engine = At(RunConstants.EventSelfHelpBook);
+        int power = GeneratedData
+            .CardPools.Ironclad.ToArray()
+            .First(id => GeneratedData.Cards.Get(id).Type == CardType.Power);
+        engine.State.Deck.Add(new CardInstance(power, Upgraded: false));
+
+        Assert.Equal(0, engine.Step(2, -1, out _, out _, out _));
+
+        var offered = Enumerable
+            .Range(0, engine.State.Deck.Count)
+            .Where(i => RunNonCombatEffects.CanSelectCard(engine.State, i))
+            .Select(i => engine.State.Deck[i].DefId)
+            .ToArray();
+        Assert.Equal(new[] { power }, offered);
+    }
 }

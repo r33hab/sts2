@@ -405,7 +405,7 @@ public static class BuffSystem
         return Math.Max(0, (int)blk);
     }
 
-    private static bool IsDebuff(BuffId id) =>
+    internal static bool IsDebuff(BuffId id) =>
         id
             is BuffId.Vulnerable
                 or BuffId.Weak
