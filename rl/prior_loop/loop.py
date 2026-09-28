@@ -101,6 +101,9 @@ MODEL_JSON = "model.json"
 # only with --prior, and a path that never exists keeps upstream's default out of it.
 NO_PRIOR = "no_prior"
 FIGHT_ID_STRIDE = 1_000_000
+# The equal-time comparison gives the plain search at most this many times the prior's
+# simulations (and at least its inverse).
+MAX_TIME_RATIO = 10.0
 
 PHASES = (
     ("generate", GENERATED_DONE),
@@ -1349,7 +1352,9 @@ class PriorLoop:
                 ),
             )
             if name == self.config.gate:
-                ratio = seconds / max(plain_seconds, 1e-9)
+                # Clamped: a run inside the clock's resolution times as 0, and the ratio
+                # of two such timings asked for billions of simulations.
+                ratio = min(MAX_TIME_RATIO, max(1 / MAX_TIME_RATIO, seconds / max(plain_seconds, 0.1)))
                 sims = max(1, round(self.config.eval_sims * ratio))
                 equal, equal_seconds = self._play(None, name, sims=sims)
                 entry["equal_time"] = {

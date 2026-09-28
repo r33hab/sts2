@@ -10,6 +10,7 @@ import gzip
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -403,6 +404,23 @@ class PriorLoopTest(unittest.TestCase):
             self.assertTrue(self.make(evaluate).run(2))
         # The gate set is replayed for its timing anyway; the stale design result too.
         self.assertEqual([policy for policy, _ in evaluate.calls].count(None), 6)
+
+    def test_equal_time_stays_bounded_when_the_plain_search_is_too_quick_to_time(self):
+        # The plain search can finish inside the clock's resolution; the ratio of the two
+        # timings must not turn that into a billion simulations (a hang, on real fights).
+        evaluate = FakeEval(challenger=better)
+
+        def slow_prior(fights, policy, settings):
+            if policy is not None and policy != loop.HEURISTIC:
+                time.sleep(0.3)
+            return evaluate(fights, policy, settings)
+
+        trainer = FakeTrainer()
+        with trainer.patch():
+            self.assertTrue(self.make(slow_prior).run(1))
+        manifest = json.loads((self.root / "iter_0000" / loop.MANIFEST).read_text())
+        equal_time = manifest["sets"]["real"]["equal_time"]
+        self.assertLessEqual(equal_time["no_prior_sims"], 10 * self.config.eval_sims)
 
     def test_a_restart_may_change_workers_only(self):
         self.assertEqual(loop.resolve_config(self.root, {"workers": 4}).workers, 4)
