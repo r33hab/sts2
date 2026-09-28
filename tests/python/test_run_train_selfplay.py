@@ -182,11 +182,11 @@ class OutcomeTests(unittest.TestCase):
         self.assertEqual([f["won"] for f in bosses], [True] * vocab.ACTS)
         self.assertEqual(bosses[-1], record["fights"][-1])
         self.assertEqual(bosses[-1]["sims"], SIMS)
-        # The boss floors: 17 (Act 1), 34 (Act 2) and 51 (Act 3).
-        self.assertEqual(
-            [f["floor"] for f in bosses],
-            [vocab.FLOORS_PER_ACT * act for act in range(1, vocab.ACTS + 1)],
-        )
+        # The boss floors: 17 (Act 1), 33 (Act 2) and 48 (Act 3). Each act's map is its
+        # own length -- `BaseNumberOfRooms` + 1 rows, 15, 14 and 13 rooms -- and the real
+        # A2 session spire-coach/data/runs/20260926-220853.jsonl fights them on exactly
+        # these floors.
+        self.assertEqual([f["floor"] for f in bosses], [17, 33, 48])
         acts = {d["state"]["act_index"] for d in record["decisions"]}
         self.assertEqual(acts, set(range(vocab.ACTS)))
         # Each act's first normal fights are its weak ones: 3 in act 1, 2 in Hive, Glory.

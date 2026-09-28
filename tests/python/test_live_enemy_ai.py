@@ -1347,6 +1347,21 @@ class ToAiTests(unittest.TestCase):
         self.assertEqual(len(warnings), 1)
         self.assertIn("CallForBackupCount", warnings[0])
 
+    def test_a_pack_that_never_called_reads_the_mods_omitted_zero(self) -> None:
+        # The mod leaves an ai_fields entry out at its type's default (STS2MCP
+        # ReadPrimitiveMembers), and `CallForBackupCount` is set on EVERY rat of the pack
+        # when one calls -- so a count missing while no rat has called is 0, not unknown.
+        rat = enemy(
+            "TWO_TAILED_RAT",
+            ["SCRATCH_MOVE", "DISEASE_BITE_MOVE", "SCREECH_MOVE"],
+            "SCREECH_MOVE",
+            slot=3,
+            ai_fields={"_starterMoveIndex": 0},
+        )
+        _, _, warnings, buffs = to_ai(rat, turn=3, roster=[rat])
+        self.assertNotIn(BUFF["BackupCount"], [b["id"] for b in buffs])
+        self.assertFalse(any("CallForBackupCount" in w for w in warnings), warnings)
+
     def test_the_pressure_gun_grows_with_every_firing(self) -> None:
         # PRESSURE_GUN is MoveIndex 4, 9, 14...; each ring round adds PressureGunIncrease
         # 5 to BasePressureGunDamage 20 (EnemyAI.cs:2879-2886).

@@ -178,7 +178,7 @@ public class AncientBlessingTests
         // All five are QUEUED here; moving the first onto the screen is the caller's job,
         // which is why this asserts five and not four.
         Assert.Equal(5, engine.State.PendingCardOffers.Count);
-        Assert.All(engine.State.PendingCardOffers, offer => Assert.Equal(3, offer.Length));
+        Assert.All(engine.State.PendingCardOffers, offer => Assert.Equal(3, offer.Cards.Length));
     }
 
     [Fact]
@@ -197,7 +197,7 @@ public class AncientBlessingTests
         };
         for (int i = 0; i < rarities.Length; i++)
         {
-            var offer = engine.State.PendingCardOffers[i];
+            var offer = engine.State.PendingCardOffers[i].Cards;
             Assert.Equal(3, offer.Length);
             Assert.All(
                 offer,

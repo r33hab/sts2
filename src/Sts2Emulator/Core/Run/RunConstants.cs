@@ -122,7 +122,20 @@ public static class RunConstants
     /// options, let alone choose among them.
     /// </summary>
     public const int MapChoices = MapWidth;
+
+    /// <summary>
+    /// Act 1's boss row, the tallest standard map (Overgrowth and Underdocks). Later acts
+    /// are shorter: read <see cref="MapBossRowFor" /> for the act the map is drawn for.
+    /// </summary>
     public const int MapBossRow = 16;
+
+    /// <summary>
+    /// <c>StandardActMap</c>'s length: <c>GetNumberOfRooms() + 1</c> rows, with the boss on
+    /// the row past the last -- 16 for Overgrowth and Underdocks (15 rooms), 15 for Hive
+    /// (14) and 14 for Glory (13). The treasure row is seven below it and the rest row one.
+    /// </summary>
+    public static int MapBossRowFor(int act) => ActRoomCounts(act).Rooms + 1;
+
     public const int MapPathIterations = 7;
 
     /// <summary>
@@ -134,7 +147,11 @@ public static class RunConstants
 
     /// <summary>The game's <c>MapPointTypeCounts.NumOfShops</c>.</summary>
     public const int MapShopCount = 3;
+
+    /// <summary>Act 1's treasure row; <see cref="MapBossRowFor" /> less seven in general.</summary>
     public const int MapTreasureRow = MapBossRow - 7;
+
+    /// <summary>Act 1's rest row; <see cref="MapBossRowFor" /> less one in general.</summary>
     public const int MapFinalRestRow = MapBossRow - 1;
     public const int MapStartCol = MapWidth / 2;
     public const int RewardSkipAction = 3;
@@ -276,7 +293,8 @@ public static class RunConstants
     public const int EventResultPending = -1;
     public const int EventUnrestSite = 1;
     public const int EventAromaOfChaos = 2;
-    public const int EventSimpleReward = 3;
+
+    // 3 was EventSimpleReward, an invented stand-in event; no game event has the id.
     public const int EventJungleMazeAdventure = 4;
     public const int EventMorphicGrove = 5;
     public const int EventBrainLeech = 6;

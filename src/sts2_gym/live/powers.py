@@ -219,8 +219,9 @@ _TEMPORARY_BUFFS = frozenset(
 AI_FIELD_POWERS = {"HEIST_POWER": "heist_gold"}
 
 # `ThieveryPower.Amount` is the steal RATE (20), which the emulator holds as the literal in
-# `StealGremlinMercGold` (EnemyAI.cs:4553-4568); what it has taken so far is
-# `EnemyState.StolenGold`, and the live snapshot does not carry it.
+# `StealGremlinMercGold` (EnemyAI.cs:4553-4568); what it has taken so far is its GoldVar
+# (decompiled ThieveryPower.Steal), which a mod from 2026-09-28 sends as
+# `fields.stolen_gold` and the emulator keeps as `EnemyState.StolenGold` (`to_ai_fields`).
 _THIEVERY = "THIEVERY_POWER"
 
 # Powers carried with their live amount, whose OTHER half the emulator keeps in a second
@@ -514,10 +515,11 @@ def to_buffs(
         if entry in AI_FIELD_POWERS:
             continue
         if entry == _THIEVERY:
-            sink.append(
-                f"{where}: {entry}: the gold stolen so far (EnemyState.StolenGold) is not "
-                "in the live snapshot; the emulator starts it from zero",
-            )
+            if _stolen_gold(power, where) is None:
+                sink.append(
+                    f"{where}: {entry}: the gold stolen so far (EnemyState.StolenGold) is "
+                    "not in the live snapshot; the emulator starts it from zero",
+                )
             continue
         ordinal = buff_id(entry)
         if ordinal is None:
@@ -574,6 +576,24 @@ def to_buffs(
     ]
 
 
+def _stolen_gold(power: Mapping[str, Any], where: str) -> int | None:
+    """Thievery's takings so far (`fields.stolen_gold`), or None from an older mod.
+
+    Raises:
+        ConversionError: for anything but a non-negative integer, naming its path.
+
+    """
+    stolen = _fields(power).get("stolen_gold")
+    if stolen is None:
+        return None
+    if not isinstance(stolen, int) or isinstance(stolen, bool) or stolen < 0:
+        raise ConversionError(
+            f"expected a non-negative integer, got {stolen!r}",
+            path=f"{where}.fields.stolen_gold",
+        )
+    return stolen
+
+
 def to_ai_fields(
     live_powers: list[dict[str, Any]],
     *,
@@ -581,9 +601,10 @@ def to_ai_fields(
 ) -> dict[str, Any]:
     """Return the `EnemyState` fields a creature's powers stand for.
 
-    `HEIST_POWER`'s amount is the gold it took; `SWIPE_POWER`'s `stolen_card` field is the
-    card it took, `{"def_id", "upgraded"}` (null when it holds none), and a Swipe without
-    that field leaves the card out, as `to_buffs` warns.
+    `HEIST_POWER`'s amount is the gold it took; `THIEVERY_POWER`'s `stolen_gold` field is
+    the gold the merc has lifted so far; `SWIPE_POWER`'s `stolen_card` field is the card it
+    took, `{"def_id", "upgraded"}` (null when it holds none), and a Swipe without that field
+    leaves the card out, as `to_buffs` warns.
 
     Raises:
         ConversionError: for a stolen card the game does not have, or a malformed one,
@@ -597,6 +618,11 @@ def to_ai_fields(
     }
     for index, power in enumerate(live_powers):
         where = f"{path}[{index}]"
+        if power.get("id") == _THIEVERY:
+            stolen = _stolen_gold(power, where)
+            if stolen is not None:
+                fields["stolen_gold"] = stolen
+            continue
         carried = _fields(power)
         if power.get("id") != _SWIPE or "stolen_card" not in carried:
             continue

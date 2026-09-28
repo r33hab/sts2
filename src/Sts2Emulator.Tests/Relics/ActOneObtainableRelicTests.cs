@@ -575,6 +575,40 @@ public class DreamCatcherTests
         Assert.All(engine.State.RewardCards, id => Assert.NotEqual(0, id));
     }
 
+    /// <summary>
+    /// The reward is `new CardReward(CardCreationOptions.ForRoom(player, RoomType.Monster), 3)`:
+    /// an ENCOUNTER-sourced reward at RegularEncounter odds, so each card is a rarity roll
+    /// that reads and grows the running rare offset, a pick and an upgrade roll -- the same
+    /// three draws, from the same stream position, as a monster room's own card reward. It
+    /// was rolled as an event grid (flat odds, no offset, no upgrade roll: two draws a card),
+    /// which left the Rewards stream three draws behind for every rest a Dream Catcher run
+    /// took.
+    /// </summary>
+    [Fact]
+    public void TheCardIsAMonsterRoomsCardReward()
+    {
+        var engine = new RunEngine();
+        engine.Reset("NXV45HW43K");
+        RunNonCombatEffects.ApplyRelicPickup(
+            engine.State,
+            RunNonCombatEffects.NamedRelic("DreamCatcher")
+        );
+        engine.State.Phase = RunPhase.Rest;
+        engine.State.RestOptionsTaken = 0;
+        var expected = engine.Clone();
+        expected.State.CurrentNodeType = RunConstants.NodeRest;
+        RunRewardGenerator.PopulateCardReward(expected.State);
+
+        engine.Step(RunConstants.RestHealAction, -1, out _, out _, out _);
+
+        Assert.Equal(expected.State.RewardCards, engine.State.RewardCards);
+        Assert.Equal(expected.State.RewardUpgraded, engine.State.RewardUpgraded);
+        Assert.Equal(
+            expected.State.PlayerRng.Rewards.CallCount,
+            engine.State.PlayerRng.Rewards.CallCount
+        );
+    }
+
     /// <summary>Without it, resting is just a rest.</summary>
     [Fact]
     public void WithoutItRestingOffersNothing()

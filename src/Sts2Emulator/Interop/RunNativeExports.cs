@@ -17,7 +17,10 @@ public static class RunNativeExports
     // layout is one number shorter and every offset after the map's node types moves.
     // v20: Sts2Run_Reset takes the run's ascension level, which the engine no longer
     // hardcodes at 8.
-    public const int RUN_NATIVE_API_VERSION = 20;
+    // v21: Sts2Run_DebugResolveCombat and Sts2Run_DebugSetPlayer, the two hooks a real
+    // run's run layer is replayed through (scripts/replay_real_run.py); state lists 22
+    // (shop cards shown upgraded) and 23 (an offer grid's upgrades).
+    public const int RUN_NATIVE_API_VERSION = 21;
     private static readonly RunEngine?[] _pool = new RunEngine?[256];
 
     public static int Sts2Run_NativeApiVersion() => RUN_NATIVE_API_VERSION;
@@ -362,6 +365,10 @@ public static class RunNativeExports
                 [run.State.CurrentMapCoord.Col, run.State.CurrentMapCoord.Row],
                 output
             ),
+            // v21: which shop cards the merchant shows upgraded (an egg's doing), and which
+            // cards on an open offer grid rolled an upgrade.
+            22 => WriteBoolArray(run.State.ShopCardUpgraded, output),
+            23 => WriteBoolArray(run.State.PendingOfferUpgraded, output),
             _ => -3,
         };
     }
@@ -458,6 +465,71 @@ public static class RunNativeExports
             }
         }
 
+        run.WriteObservation(new Span<int>(obsBuf, RunConstants.RunObsSize));
+        return 0;
+    }
+
+    /// <summary>
+    /// Win the fight in progress without playing it -- <see cref="RunEngine.DebugResolveCombat" />,
+    /// with the fight's reward-relevant results (Heist gold, a Gremlin Merc's escape).
+    /// Returns -1 when no fight is in progress.
+    /// </summary>
+    public static unsafe int Sts2Run_DebugResolveCombat(
+        int handle,
+        int stolenBackGold,
+        int fatGremlinEscaped,
+        int mercGoldWasStolen,
+        int* obsBuf
+    )
+    {
+        if (!TryGet(handle, out var run))
+        {
+            return -1;
+        }
+
+        int status = run.DebugResolveCombat(
+            stolenBackGold,
+            fatGremlinEscaped != 0,
+            mercGoldWasStolen != 0
+        );
+        run.WriteObservation(new Span<int>(obsBuf, RunConstants.RunObsSize));
+        return status;
+    }
+
+    /// <summary>
+    /// Set the player's holdings -- <see cref="RunEngine.DebugSetPlayer" />. A negative
+    /// scalar or a negative list length leaves that holding alone; cards are four numbers
+    /// each (id, upgraded, enchantment, amount).
+    /// </summary>
+    public static unsafe int Sts2Run_DebugSetPlayer(
+        int handle,
+        int hp,
+        int maxHp,
+        int gold,
+        int* cards,
+        int cardInts,
+        int* relics,
+        int relicLen,
+        int* potions,
+        int potionLen,
+        int maxPotionSlots,
+        int* obsBuf
+    )
+    {
+        if (!TryGet(handle, out var run))
+        {
+            return -1;
+        }
+
+        run.DebugSetPlayer(
+            hp,
+            maxHp,
+            gold,
+            cardInts < 0 ? null : new ReadOnlySpan<int>(cards, cardInts).ToArray(),
+            relicLen < 0 ? null : new ReadOnlySpan<int>(relics, relicLen).ToArray(),
+            potionLen < 0 ? null : new ReadOnlySpan<int>(potions, potionLen).ToArray(),
+            maxPotionSlots
+        );
         run.WriteObservation(new Span<int>(obsBuf, RunConstants.RunObsSize));
         return 0;
     }

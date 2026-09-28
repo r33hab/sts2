@@ -496,8 +496,8 @@ public static class RunMapGenerator
 
     /// <summary>
     /// The row this map puts its last boss on. The standard map's is
-    /// <see cref="RunConstants.MapBossRow"/>; the golden path is one taller, and A10's
-    /// second boss stands one row above the first.
+    /// <see cref="RunConstants.MapBossRowFor"/> for its act; the golden path is taller, and
+    /// A10's second boss stands one row above the first.
     /// </summary>
     /// <remarks>
     /// Read off the generated nodes rather than computed, so it answers for whatever map
@@ -516,7 +516,7 @@ public static class RunMapGenerator
             }
         }
 
-        return row >= 0 ? row : RunConstants.MapBossRow;
+        return row >= 0 ? row : RunConstants.MapBossRowFor(state.Act);
     }
 
     /// <summary>
@@ -552,6 +552,24 @@ public static class RunMapGenerator
         return true;
     }
 
+    /// <summary>
+    /// <c>ActModel.GetMapPointTypes(mapRng)</c>, each act's own: the rest count first, then
+    /// the Unknowns (<c>StandardRandomUnknownCount</c>, one fewer from Hive on). Overgrowth
+    /// and Underdocks draw rests around seven; Hive around six; Glory flat from
+    /// <c>NextInt(5, 7)</c>. The order of the two draws is the order the game makes them.
+    /// </summary>
+    private static (int Rests, int Unknowns) MapPointTypes(int act, GameRng mapRng)
+    {
+        int rest = act switch
+        {
+            RunConstants.ActHive => mapRng.NextGaussianInt(6, 1, 6, 7),
+            RunConstants.ActGlory => mapRng.NextInt(5, 7),
+            _ => mapRng.NextGaussianInt(7, 1, 6, 7),
+        };
+        int unknown = mapRng.NextGaussianInt(12, 1, 10, 14);
+        return (rest, act is RunConstants.ActHive or RunConstants.ActGlory ? unknown - 1 : unknown);
+    }
+
     public static void GenerateActMap(RunState state)
     {
         if (GenerateGoldenPath(state))
@@ -562,17 +580,16 @@ public static class RunMapGenerator
         state.MapNodes = [];
         state.CurrentMapCoord = (RunConstants.MapStartCol, 0);
         Array.Clear(state.MapOptionCoords);
+        int bossRow = RunConstants.MapBossRowFor(state.Act);
         GetOrCreate(state, RunConstants.MapStartCol, 0).NodeType = RunConstants.NodeNone;
-        GetOrCreate(state, RunConstants.MapStartCol, RunConstants.MapBossRow).NodeType =
-            RunConstants.NodeBoss;
+        GetOrCreate(state, RunConstants.MapStartCol, bossRow).NodeType = RunConstants.NodeBoss;
 
         // The game keys this stream on the act *index* — `act_{CurrentActIndex + 1}_map`
         // — not on which act was rolled. This used to pass `state.Act - 1`, conflating
         // the two: an Underdocks act 1 would have read "act_2_map" instead of
         // "act_1_map" and desynced the entire map.
         var mapRng = state.Rng.ActMapRng(state.CurrentActIndex);
-        int restCount = mapRng.NextGaussianInt(7, 1, 6, 7);
-        int unknownCount = mapRng.NextGaussianInt(12, 1, 10, 14);
+        var (restCount, unknownCount) = MapPointTypes(state.Act, mapRng);
 
         var starts = new List<(int Col, int Row)>();
         for (int path = 0; path < RunConstants.MapPathIterations; path++)
@@ -608,16 +625,12 @@ public static class RunMapGenerator
 
         foreach (
             var node in state
-                .MapNodes.Values.Where(n => n.Row == RunConstants.MapBossRow - 1)
+                .MapNodes.Values.Where(n => n.Row == bossRow - 1)
                 .OrderBy(n => n.Col)
                 .ToArray()
         )
         {
-            AddEdge(
-                state,
-                (node.Col, node.Row),
-                (RunConstants.MapStartCol, RunConstants.MapBossRow)
-            );
+            AddEdge(state, (node.Col, node.Row), (RunConstants.MapStartCol, bossRow));
         }
 
         AssignPointTypes(state, mapRng, restCount, unknownCount);
@@ -1003,7 +1016,8 @@ public static class RunMapGenerator
                 // ancient is never in the grid, so a row-1 node is never skipped on
                 // account of the start point — even when pruning has left it one child.
                 || node.Parents.Any(parent =>
-                    MapNodeAt(state, parent).Children.Count == 1 && !IsRemovedFromGrid(parent)
+                    MapNodeAt(state, parent).Children.Count == 1
+                    && !IsRemovedFromGrid(state, parent)
                 )
             )
             {
@@ -1086,7 +1100,8 @@ public static class RunMapGenerator
 
     // The game's grid holds only the path rows, so the ancient and boss points read as
     // "removed" to any grid lookup — see IsGridRow.
-    private static bool IsRemovedFromGrid((int Col, int Row) coord) => !IsGridRow(coord.Row);
+    private static bool IsRemovedFromGrid(RunState state, (int Col, int Row) coord) =>
+        !IsGridRow(state, coord.Row);
 
     private static bool IsInMap(RunState state, RunMapNode node) =>
         node.NodeType is RunConstants.NodeNone or RunConstants.NodeBoss
@@ -1132,7 +1147,8 @@ public static class RunMapGenerator
     // whatever the body does, which is also why the save writes `start` and `boss`
     // outside `points`. The emulator carries them as ordinary nodes, so every pass has
     // to skip them explicitly or a centered map drags them off-centre with it.
-    private static bool IsGridRow(int row) => row > 0 && row < RunConstants.MapBossRow;
+    private static bool IsGridRow(RunState state, int row) =>
+        row > 0 && row < RunConstants.MapBossRowFor(state.Act);
 
     private static void CenterGrid(RunState state)
     {
@@ -1149,7 +1165,7 @@ public static class RunMapGenerator
             return;
         }
 
-        var gridNodes = state.MapNodes.Values.Where(n => IsGridRow(n.Row));
+        var gridNodes = state.MapNodes.Values.Where(n => IsGridRow(state, n.Row));
         var nodes =
             delta > 0
                 ? gridNodes.OrderByDescending(n => n.Col).ThenBy(n => n.Row).ToList()
@@ -1161,11 +1177,11 @@ public static class RunMapGenerator
     }
 
     private static bool IsColumnEmpty(RunState state, int col) =>
-        !state.MapNodes.Values.Any(node => IsGridRow(node.Row) && node.Col == col);
+        !state.MapNodes.Values.Any(node => IsGridRow(state, node.Row) && node.Col == col);
 
     private static void SpreadAdjacentMapPoints(RunState state)
     {
-        for (int row = 1; row < RunConstants.MapBossRow; row++)
+        for (int row = 1; row < RunConstants.MapBossRowFor(state.Act); row++)
         {
             // Collect the row ONCE, in column order, and keep that list for every pass
             // of the loop below — the game walks its grid columns to build the list
@@ -1256,7 +1272,7 @@ public static class RunMapGenerator
 
     private static void StraightenPaths(RunState state)
     {
-        for (int row = 1; row < RunConstants.MapBossRow; row++)
+        for (int row = 1; row < RunConstants.MapBossRowFor(state.Act); row++)
         {
             for (int col = 0; col < RunConstants.MapWidth; col++)
             {
@@ -1374,7 +1390,7 @@ public static class RunMapGenerator
         RunMapNode current
     )
     {
-        if (current.Row >= RunConstants.MapFinalRestRow || !AllowsFreeTravel(state))
+        if (current.Row >= RunConstants.MapBossRowFor(state.Act) - 1 || !AllowsFreeTravel(state))
         {
             return current.Children;
         }
@@ -1511,7 +1527,7 @@ public static class RunMapGenerator
     private static void GeneratePath(RunState state, GameRng rng, RunMapNode start)
     {
         var current = start;
-        while (current.Row < RunConstants.MapBossRow - 1)
+        while (current.Row < RunConstants.MapBossRowFor(state.Act) - 1)
         {
             var child = GenerateNextCoord(state, rng, current);
             AddEdge(state, (current.Col, current.Row), child);
@@ -1556,21 +1572,22 @@ public static class RunMapGenerator
         int unknownCount
     )
     {
+        // `AssignPointTypes` counts every forced row from the act's own length.
+        int bossRow = RunConstants.MapBossRowFor(state.Act);
+        int treasureRow = bossRow - 7;
+        int restRow = bossRow - 1;
         foreach (var node in state.MapNodes.Values)
         {
-            node.NodeType = node.Row switch
-            {
-                0 => RunConstants.NodeNone,
-                1 => RunConstants.NodeNormal,
-                RunConstants.MapTreasureRow => RunConstants.NodeRelic,
-                RunConstants.MapFinalRestRow => RunConstants.NodeRest,
-                RunConstants.MapBossRow => RunConstants.NodeBoss,
-                _ => RunConstants.NodeNone,
-            };
+            node.NodeType =
+                node.Row == 0 ? RunConstants.NodeNone
+                : node.Row == 1 ? RunConstants.NodeNormal
+                : node.Row == treasureRow ? RunConstants.NodeRelic
+                : node.Row == restRow ? RunConstants.NodeRest
+                : node.Row == bossRow ? RunConstants.NodeBoss
+                : RunConstants.NodeNone;
             // The game sets CanBeModified = false on exactly the forced rows, which
             // keeps their points out of the repair candidate pool.
-            node.CanBeModified =
-                node.Row is not (1 or RunConstants.MapTreasureRow or RunConstants.MapFinalRestRow);
+            node.CanBeModified = node.Row != 1 && node.Row != treasureRow && node.Row != restRow;
         }
 
         var pointTypes = new Queue<int>(
@@ -1590,8 +1607,9 @@ public static class RunMapGenerator
             var candidates = state
                 .MapNodes.Values.Where(n =>
                     n.NodeType == RunConstants.NodeNone
-                    && n.Row is > 1 and < RunConstants.MapFinalRestRow
-                    && n.Row != RunConstants.MapTreasureRow
+                    && n.Row > 1
+                    && n.Row < restRow
+                    && n.Row != treasureRow
                 )
                 .ToList();
             rng.StableShuffle(candidates, CompareNodesByColThenRow);
@@ -1633,7 +1651,7 @@ public static class RunMapGenerator
 
     private static bool IsValidPointType(RunState state, int nodeType, RunMapNode node) =>
         IsValidForLower(nodeType, node)
-        && IsValidForUpper(nodeType, node)
+        && IsValidForUpper(state, nodeType, node)
         && IsValidWithParentsAndChildren(state, nodeType, node)
         && IsValidWithChildren(state, nodeType, node)
         && IsValidWithSiblings(state, nodeType, node);
@@ -1641,8 +1659,9 @@ public static class RunMapGenerator
     private static bool IsValidForLower(int nodeType, RunMapNode node) =>
         node.Row >= 6 || nodeType is not (RunConstants.NodeRest or RunConstants.NodeElite);
 
-    private static bool IsValidForUpper(int nodeType, RunMapNode node) =>
-        node.Row < RunConstants.MapBossRow - 3 || nodeType != RunConstants.NodeRest;
+    // `row >= _mapLength - 3` bars a rest site from the top three rows of THIS act's map.
+    private static bool IsValidForUpper(RunState state, int nodeType, RunMapNode node) =>
+        node.Row < RunConstants.MapBossRowFor(state.Act) - 3 || nodeType != RunConstants.NodeRest;
 
     private static bool IsValidWithParentsAndChildren(
         RunState state,

@@ -1278,6 +1278,52 @@ public static class NativeExports
     public static unsafe int Sts2Run_DebugUpgradeDeck(int handle, int* obsBuf) =>
         RunNativeExports.Sts2Run_DebugUpgradeDeck(handle, obsBuf);
 
+    [UnmanagedCallersOnly(EntryPoint = "Sts2Run_DebugResolveCombat")]
+    public static unsafe int Sts2Run_DebugResolveCombat(
+        int handle,
+        int stolenBackGold,
+        int fatGremlinEscaped,
+        int mercGoldWasStolen,
+        int* obsBuf
+    ) =>
+        RunNativeExports.Sts2Run_DebugResolveCombat(
+            handle,
+            stolenBackGold,
+            fatGremlinEscaped,
+            mercGoldWasStolen,
+            obsBuf
+        );
+
+    [UnmanagedCallersOnly(EntryPoint = "Sts2Run_DebugSetPlayer")]
+    public static unsafe int Sts2Run_DebugSetPlayer(
+        int handle,
+        int hp,
+        int maxHp,
+        int gold,
+        int* cards,
+        int cardInts,
+        int* relics,
+        int relicLen,
+        int* potions,
+        int potionLen,
+        int maxPotionSlots,
+        int* obsBuf
+    ) =>
+        RunNativeExports.Sts2Run_DebugSetPlayer(
+            handle,
+            hp,
+            maxHp,
+            gold,
+            cards,
+            cardInts,
+            relics,
+            relicLen,
+            potions,
+            potionLen,
+            maxPotionSlots,
+            obsBuf
+        );
+
     [UnmanagedCallersOnly(EntryPoint = "Sts2Run_PlayerWon")]
     public static int Sts2Run_PlayerWon(int handle) => RunNativeExports.Sts2Run_PlayerWon(handle);
 
