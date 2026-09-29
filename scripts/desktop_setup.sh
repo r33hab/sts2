@@ -20,7 +20,7 @@ step() { printf '\n== %s\n' "$*"; }
 
 step "packages (asks for your Linux password once)"
 need=()
-for pkg in clang zlib1g-dev git rsync curl tmux ca-certificates procps; do
+for pkg in clang zlib1g-dev libicu-dev git rsync curl tmux ca-certificates procps; do
   dpkg -s "$pkg" >/dev/null 2>&1 || need+=("$pkg")
 done
 if ((${#need[@]})); then
