@@ -1,4 +1,8 @@
 {
+ "game": {
+  "steam_buildid": "23811903",
+  "release": "v0.107.1"
+ },
  "label": "GNM8G0F5RF-a10",
  "sources": [
   "autopilot-20260929-000347.jsonl floors 2-21"
