@@ -370,13 +370,21 @@ class Monster:
     def unlogged_rounds(  # noqa: PLR6301 - the hook a forcing model overrides
         self,
         move: str,
+        moves: Sequence[str],
     ) -> int:
-        """Give how many rounds may have passed unlogged with `move` on display.
+        """Give how many rounds may have passed unlogged, `move` on display after `moves`.
 
-        A creature logs one move a round, its roll at the round's start. Only a forced
-        move the roll cannot leave can take a round without one (`self.forced`).
+        A creature logs one move a round, its roll at the round's start -- unless the roll
+        finds a state it cannot leave: `FindNextMoveState` returns without logging while
+        the current state cannot transition away (MonsterMoveStateMachine.cs). A stun is
+        such a state (`Creature.StunInternal`, MustPerformOnceBeforeTransitioning), and one
+        set after the creature's own move -- a retaliation, its own mechanic -- sits
+        through the next roll, so a stun on display may have taken this round. A stun set
+        on the player's turn does not: that round's roll is already logged, and the move it
+        resumes is logged again after it. A model whose creature forces a state on itself
+        says what else can pass unlogged (`self.forced`).
         """
-        return 0
+        return 1 if move == STUNNED else 0
 
     def stunned(self, f: Fields, pending: str, ctx: Context) -> str | None:
         """Adjust a stunned creature's fields; say why its moves after the stun diverge.
@@ -1075,12 +1083,14 @@ class WaterfallGiant(Cycle):
     def force(self, f: Fields, move: str, ctx: Context) -> None:
         f.move_index = self.ABOUT_TO_BLOW_INDEX
 
-    def unlogged_rounds(self, move: str) -> int:
+    def unlogged_rounds(self, move: str, moves: Sequence[str]) -> int:
         # Killed during its own move (Thorns), it is forced onto ABOUT_TO_BLOW after that
         # round's roll, and the next round's roll leaves it there without logging
         # anything (MonsterMoveStateMachine.cs:62), so its log runs a round short from then
         # on. Killed on the player's turn, it performs ABOUT_TO_BLOW before the next roll.
-        return 1 if move in (self.ABOUT_TO_BLOW, self.EXPLODE) else 0
+        if move in (self.ABOUT_TO_BLOW, self.EXPLODE):
+            return 1
+        return super().unlogged_rounds(move, moves)
 
     def intent(
         self,
@@ -1348,6 +1358,14 @@ class BowlbugRock(Monster):
     ) -> str | None:
         return None
 
+    def unlogged_rounds(self, move: str, moves: Sequence[str]) -> int:
+        # Fully blocked, HEADBUTT stuns the rock inside its own move (decompiled
+        # BowlbugRock.HeadbuttMove: `CreatureCmd.Stun(Creature, DizzyMove)`), so the next
+        # roll is left on STUNNED and logs nothing; the stun then resumes HEADBUTT, which
+        # is logged. Every unlogged round follows a logged HEADBUTT, the one on display
+        # included.
+        return moves.count(self.HEADBUTT)
+
     def announced(self, emu: Mapping[str, Any]) -> str:
         if _stunned_buff(emu):
             return STUNNED
@@ -1416,6 +1434,15 @@ class TestSubject(Monster):
     ) -> None:
         # CombatEngine.TryRespawnTestSubject: Reviving 1 and a Buff readout.
         f.companions["Reviving"] = 1
+
+    def unlogged_rounds(self, move: str, moves: Sequence[str]) -> int:
+        # Killed during its own move (Thorns on MULTI_CLAW), it is forced onto RESPAWN_MOVE
+        # after that round's roll, and the next roll leaves it there without logging
+        # (MonsterMoveStateMachine.cs), so its log runs a round short from then on; killed
+        # on the player's turn, it respawns before the next roll. Each respawn so far --
+        # the form its log has reached -- and one on display may each have taken a round.
+        respawns = (self.CLAW in moves) + (self.THIRD[0] in moves)
+        return respawns + (move == self.RESPAWN) + super().unlogged_rounds(move, moves)
 
     def settle(  # noqa: PLR6301 - Monster's hook, overridden
         self,
@@ -3229,7 +3256,8 @@ def _reconstruct(
             )
     rounds = ctx.turn + 1
     if len(moves) > rounds or (
-        not model.summoned and len(moves) < rounds - model.unlogged_rounds(move_id)
+        not model.summoned
+        and len(moves) < rounds - model.unlogged_rounds(move_id, moves)
     ):
         warnings.append(
             f"{label}: state_log holds {len(moves)} moves at round {rounds}; a "

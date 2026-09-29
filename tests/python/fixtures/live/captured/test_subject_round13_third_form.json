@@ -1,0 +1,567 @@
+{
+  "schema": "sts2-live-snapshot/1",
+  "game_version": "v0.107.1",
+  "character": "IRONCLAD",
+  "ascension": 10,
+  "act": 3,
+  "floor": 49,
+  "room_type": "boss",
+  "round": 13,
+  "player": {
+    "hp": 8216,
+    "max_hp": 9000,
+    "block": 0,
+    "energy": 3,
+    "max_energy": 3,
+    "gold": 399,
+    "stars": 0,
+    "osty": null,
+    "orbs": {
+      "slots": 0,
+      "list": []
+    },
+    "powers": [
+      {
+        "id": "THORNS_POWER",
+        "amount": 3
+      }
+    ],
+    "relics": [
+      {
+        "id": "BURNING_BLOOD",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "FISHING_ROD",
+        "counter": 2,
+        "fields": {
+          "_combatsSeen": 14,
+          "CombatsSeen": 14
+        }
+      },
+      {
+        "id": "BRONZE_SCALES",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "ALCHEMICAL_COFFER",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "MR_STRUGGLES",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "RIPPLE_BASIN",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "WHETSTONE",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "RUNIC_PYRAMID",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "GAME_PIECE",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "RED_SKULL",
+        "counter": null,
+        "fields": {}
+      }
+    ],
+    "potions": [
+      {
+        "slot": 0,
+        "id": null
+      },
+      {
+        "slot": 1,
+        "id": null
+      },
+      {
+        "slot": 2,
+        "id": null
+      },
+      {
+        "slot": 3,
+        "id": null
+      },
+      {
+        "slot": 4,
+        "id": null
+      },
+      {
+        "slot": 5,
+        "id": null
+      }
+    ],
+    "max_potion_slots": 6
+  },
+  "hand": [
+    {
+      "id": "MAD_SCIENCE",
+      "upgraded": true,
+      "uid": "MAD_SCIENCE#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#0",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#1",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#2",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#3",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#4",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#10",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#13",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#9",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#5",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    }
+  ],
+  "draw_pile": [
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": true,
+      "uid": "DEFEND_IRONCLAD#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": true,
+      "uid": "DEFEND_IRONCLAD#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": true,
+      "uid": "DEFEND_IRONCLAD#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": true,
+      "uid": "DEFEND_IRONCLAD#3",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": true,
+      "uid": "STRIKE_IRONCLAD#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": true,
+      "uid": "STRIKE_IRONCLAD#0",
+      "cost": 1,
+      "enchantment": "CORRUPTED",
+      "enchant_amount": 1,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#11",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#12",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#6",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#7",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#8",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    }
+  ],
+  "discard_pile": [
+    {
+      "id": "BASH",
+      "upgraded": true,
+      "uid": "BASH#0",
+      "cost": 2,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": true,
+      "uid": "STRIKE_IRONCLAD#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#14",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#15",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#16",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#17",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#18",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#19",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#20",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#21",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#22",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#23",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#24",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#25",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#26",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WOUND",
+      "upgraded": false,
+      "uid": "WOUND#27",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    }
+  ],
+  "exhaust_pile": [
+    {
+      "id": "ASCENDERS_BANE",
+      "upgraded": false,
+      "uid": "ASCENDERS_BANE#0",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    }
+  ],
+  "known_draw_top": [],
+  "known_draw_bottom": [],
+  "enemies": [
+    {
+      "entity_id": "TEST_SUBJECT_0",
+      "id": "TEST_SUBJECT",
+      "slot": 0,
+      "hp": 296,
+      "max_hp": 313,
+      "block": 0,
+      "powers": [
+        {
+          "id": "NEMESIS_POWER",
+          "amount": 1
+        }
+      ],
+      "intents": [
+        {
+          "type": "ATTACK",
+          "damage": 45,
+          "base_damage": 45,
+          "hits": 1
+        }
+      ],
+      "move_id": "BIG_POUNCE",
+      "state_log": [
+        "BITE_MOVE",
+        "SKULL_BASH_MOVE",
+        "BITE_MOVE",
+        "SKULL_BASH_MOVE",
+        "MULTI_CLAW_MOVE",
+        "MULTI_CLAW_MOVE",
+        "MULTI_CLAW_MOVE",
+        "MULTI_CLAW_MOVE",
+        "MULTI_CLAW_MOVE",
+        "MULTI_CLAW_MOVE",
+        "PHASE3_LACERATE_MOVE",
+        "BIG_POUNCE"
+      ],
+      "ai_fields": {
+        "_respawns": 2,
+        "_extraMultiClawCount": 6,
+        "FirstFormHp": 111,
+        "SecondFormHp": 212,
+        "ThirdFormHp": 313,
+        "EnrageAmount": 3,
+        "BiteDamage": 22,
+        "SkullBashDamage": 16,
+        "MultiClawDamage": 11,
+        "BaseMultiClawCount": 3,
+        "Phase3LacerateDamage": 11,
+        "BigPounceDamage": 45,
+        "BurningGrowlBurnCount": 5,
+        "BurningGrowlStrengthGain": 3,
+        "Respawns": 2,
+        "ExtraMultiClawCount": 6,
+        "MultiClawTotalCount": 9
+      }
+    }
+  ],
+  "history": {
+    "cards_played_this_turn": 0,
+    "cards_played_this_combat": 20,
+    "attacks_played_this_turn": 0,
+    "skills_played_this_turn": 0
+  },
+  "pending_selection": null
+}

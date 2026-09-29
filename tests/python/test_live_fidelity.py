@@ -131,6 +131,27 @@ REAL_PAIRS: dict[str, tuple[str, str | None, str | None, str]] = {
         "TORCH_HEAD_AMALGAM_0",
         "captured/queen_round4_after_strike",
     ),
+    # `autopilot-20260929-100556.jsonl`: the Bowlbug Rock stuns itself when its headbutt
+    # is fully blocked, and each stun leaves its log a round short; the Test Subject's
+    # second death came on its own turn, so its third form logs a round short.
+    "a Strike on a Bowlbug Rock stunned twice": (
+        "captured/bowlbug_rock_round4_stunned",
+        "STRIKE_IRONCLAD#0",
+        "BOWLBUG_ROCK_0",
+        "captured/bowlbug_rock_round4_after_strike",
+    ),
+    "a Defend after the Bowlbug Rock's second stun": (
+        "captured/bowlbug_rock_round5",
+        "DEFEND_IRONCLAD#0",
+        None,
+        "captured/bowlbug_rock_round5_after_defend",
+    ),
+    "End turn against the Test Subject's third form": (
+        "captured/test_subject_round13_third_form",
+        None,
+        None,
+        "captured/test_subject_round14",
+    ),
 }
 CARD_PLAYS = [name for name, pair in REAL_PAIRS.items() if pair[1] is not None]
 
