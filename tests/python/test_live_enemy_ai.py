@@ -867,6 +867,7 @@ class Act23SelfConsistencyTests(_Rebuilds):
                 with self.subTest(monster=entry, move=move):
                     self.assertGreater(shown[f"{entry} {move}"], 0)
 
+    @unittest.skipUnless(DECOMPILED.is_dir(), "decompiled sources not present (gitignored)")
     def test_the_act23_fights_are_walks_the_game_machines_can_make(self) -> None:
         walked: set[str] = set()
         for fight in act23_fights():

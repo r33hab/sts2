@@ -3059,6 +3059,7 @@ class BoundTests(unittest.TestCase):
             convert.convert(doc)
         self.assertEqual(caught.exception.path, "hand[0].affliction")
 
+    @unittest.skipUnless(DECOMPILED.is_dir(), "decompiled sources not present (gitignored)")
     def test_the_afflictions_are_the_games(self) -> None:
         folder = DECOMPILED / "MegaCrit.Sts2.Core.Models.Afflictions"
         self.assertEqual(

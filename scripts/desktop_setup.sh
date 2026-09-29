@@ -20,7 +20,7 @@ step() { printf '\n== %s\n' "$*"; }
 
 step "packages (asks for your Linux password once)"
 need=()
-for pkg in clang zlib1g-dev git rsync curl tmux ca-certificates; do
+for pkg in clang zlib1g-dev git rsync curl tmux ca-certificates procps; do
   dpkg -s "$pkg" >/dev/null 2>&1 || need+=("$pkg")
 done
 if ((${#need[@]})); then
@@ -46,12 +46,14 @@ fi
 
 step "uv and .NET 9 (in your home folder)"
 export PATH="$HOME/.local/bin:$HOME/.dotnet:$PATH" DOTNET_ROOT="$HOME/.dotnet" DOTNET_CLI_TELEMETRY_OPTOUT=1
+export PYTHONUTF8=1 LANG=C.UTF-8 UV_PYTHON=3.12  # the code needs 3.12 (PEP 701 f-strings)
 command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
 [ -x "$HOME/.dotnet/dotnet" ] ||
   curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 9.0 --install-dir "$HOME/.dotnet"
 grep -q '# sts2 desktop' "$HOME/.bashrc" 2>/dev/null || cat >>"$HOME/.bashrc" <<'EOF'
 # sts2 desktop
 export PATH="$HOME/.local/bin:$HOME/.dotnet:$PATH" DOTNET_ROOT="$HOME/.dotnet" DOTNET_CLI_TELEMETRY_OPTOUT=1
+export PYTHONUTF8=1 LANG=C.UTF-8 UV_PYTHON=3.12
 EOF
 
 step "build the simulator ($RID)"
@@ -59,7 +61,10 @@ cd "$REPO"
 bash scripts/build.sh "$RID"
 
 step "tests"
-uv run python -m unittest discover -s tests/python 2>&1 | tail -3 ||
+# Known on Linux (2026-09-29): test_every_offer_the_history_names_is_the_emulators
+# (the replay maps one recorded Sapphire Seed choice differently; run-level only) and,
+# on a slow machine, the timing test test_a_pooled_call_takes_its_budget.
+uv run python -m unittest discover -s tests/python 2>&1 | grep -E "^(FAIL|ERROR): |^Ran |^OK|^FAILED" ||
   echo "SOME TESTS FAILED: paste the lines above to Claude"
 
 step "smoke run: 20 fights of the budget test, $(nproc) workers"
