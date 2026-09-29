@@ -152,6 +152,21 @@ REAL_PAIRS: dict[str, tuple[str, str | None, str | None, str]] = {
         None,
         "captured/test_subject_round14",
     ),
+    # `autopilot-20260929-095244.jsonl`: Brand opens its exhaust screen, and the same
+    # screen once Defend is picked on it -- the mod takes a picked card off the
+    # candidates, and the converter refused the position until it offered it again.
+    "Brand opens its exhaust screen": (
+        "captured/corpse_slugs_round1_before_brand",
+        "BRAND#0",
+        None,
+        "captured/corpse_slugs_round1_brand_open",
+    ),
+    "Brand's screen with Defend already picked": (
+        "captured/corpse_slugs_round1_before_brand",
+        "BRAND#0",
+        None,
+        "captured/corpse_slugs_round1_brand_defend_picked",
+    ),
 }
 CARD_PLAYS = [name for name, pair in REAL_PAIRS.items() if pair[1] is not None]
 

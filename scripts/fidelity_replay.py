@@ -19,10 +19,13 @@ reason given, before anything is simulated:
   (`sts2_gym.live.sessionlog.tainted_checks`) -- the autopilot's `debug_gain_max_hp`
   top-ups (kind `buffer`), its `debug_kill_enemy` (kind `debug`), a `debug_*` command in
   the mod's action log -- so the position after is not the one the move made;
-- "same position": the position after is the position before (the same fingerprint), so
-  the game did not act on the move -- a card it refused, a pick it ignored, a toggle it
-  has not confirmed. The replay could not tell the two positions apart either: both are
-  the one state record the fingerprint names last.
+- "same position": the position after has the position before's fingerprint (its
+  state_type, battle, player and run unchanged), so the game did not act on the move --
+  a card it refused, a pick it ignored, a toggle it has not confirmed.
+
+A check's two positions are the state records logged around it
+(`sessionlog.check_positions`), not whichever record its fingerprint names last: a
+selection screen keeps its fingerprint while picks are made on it.
 
 The mod reports each card's `affliction`, which the coach's snapshot builder does not copy
 yet; it is copied here off the same raw card by uid (`sessionlog.carry_afflictions`) --
@@ -105,11 +108,16 @@ class _Endpoint:
         self.act = run.get("act")
 
 
-def _index_states(records: list[dict[str, Any]]) -> dict[str, _Endpoint]:
-    """Replay `coach.live._on_settled`'s room_type bookkeeping over the whole log."""
-    endpoints: dict[str, _Endpoint] = {}
+def _index_states(records: list[dict[str, Any]]) -> dict[int, _Endpoint]:
+    """Replay `coach.live._on_settled`'s room_type bookkeeping over the whole log.
+
+    Keyed by the state record's index: a fingerprint can name several records (a position
+    reached twice, a selection screen whose picks it leaves out), and a check's positions
+    are the ones logged around it (`sessionlog.check_positions`).
+    """
+    endpoints: dict[int, _Endpoint] = {}
     running_room_type: str | None = None
-    for rec in records:
+    for index, rec in enumerate(records):
         if rec["kind"] != "state":
             continue
         payload = rec["payload"]
@@ -123,7 +131,7 @@ def _index_states(records: list[dict[str, Any]]) -> dict[str, _Endpoint]:
             running_room_type = decision["room_type"]
         elif kind == _NON_COMBAT:
             running_room_type = None
-        endpoints[payload["fingerprint"]] = _Endpoint(payload["state"], room_type)
+        endpoints[index] = _Endpoint(payload["state"], room_type)
     return endpoints
 
 
@@ -344,6 +352,7 @@ def evaluate(
     snapshot/converter/simulator walk that produced them.
     """
     endpoints = _index_states(records)
+    positions = sessionlog.check_positions(records)
     checks = [
         (index, rec) for index, rec in enumerate(records) if rec["kind"] == "check"
     ]
@@ -363,11 +372,10 @@ def evaluate(
             else:
                 skipped_no_post += 1
             continue
-        pre_ep = endpoints.get(payload["pre_fingerprint"])
-        post_ep = endpoints.get(payload["post_fingerprint"])
-        if pre_ep is None or post_ep is None:
+        if index not in positions:
             skipped_no_endpoint += 1
             continue
+        pre_ep, post_ep = (endpoints[at] for at in positions[index])
 
         act_key = _act_key(pre_ep.act)
         act_stats = stats[act_key]

@@ -1,0 +1,354 @@
+{
+  "schema": "sts2-live-snapshot/1",
+  "game_version": "v0.107.1",
+  "character": "IRONCLAD",
+  "ascension": 10,
+  "act": 3,
+  "floor": 35,
+  "room_type": "monster",
+  "round": 2,
+  "player": {
+    "hp": 8945,
+    "max_hp": 9000,
+    "block": 0,
+    "energy": 1,
+    "max_energy": 3,
+    "gold": 497,
+    "stars": 0,
+    "osty": null,
+    "orbs": {
+      "slots": 0,
+      "list": []
+    },
+    "powers": [],
+    "relics": [
+      {
+        "id": "BURNING_BLOOD",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "LEAD_PAPERWEIGHT",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "ANCHOR",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "SWORD_OF_STONE",
+        "counter": 2,
+        "fields": {
+          "_elitesDefeated": 2,
+          "ElitesDefeated": 2
+        }
+      },
+      {
+        "id": "ASTROLABE",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "RIPPLE_BASIN",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "LUCKY_FYSH",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "VENERABLE_TEA_SET",
+        "counter": null,
+        "fields": {
+          "GainEnergyInNextCombat": false
+        }
+      },
+      {
+        "id": "SERE_TALON",
+        "counter": null,
+        "fields": {}
+      }
+    ],
+    "potions": [
+      {
+        "slot": 0,
+        "id": "GAMBLERS_BREW"
+      },
+      {
+        "slot": 1,
+        "id": null
+      }
+    ],
+    "max_potion_slots": 2
+  },
+  "hand": [
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "SHAME",
+      "upgraded": false,
+      "uid": "SHAME#0",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WISH",
+      "upgraded": false,
+      "uid": "WISH#1",
+      "cost": 0,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    }
+  ],
+  "draw_pile": [
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "DOMINATE",
+      "upgraded": true,
+      "uid": "DOMINATE#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "ENLIGHTENMENT",
+      "upgraded": false,
+      "uid": "ENLIGHTENMENT#0",
+      "cost": 0,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "ENLIGHTENMENT",
+      "upgraded": false,
+      "uid": "ENLIGHTENMENT#1",
+      "cost": 0,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "REGRET",
+      "upgraded": false,
+      "uid": "REGRET#0",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "RUPTURE",
+      "upgraded": false,
+      "uid": "RUPTURE#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "THE_BOMB",
+      "upgraded": false,
+      "uid": "THE_BOMB#0",
+      "cost": 2,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "TREMBLE",
+      "upgraded": false,
+      "uid": "TREMBLE#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WISH",
+      "upgraded": false,
+      "uid": "WISH#0",
+      "cost": 0,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "WISH",
+      "upgraded": false,
+      "uid": "WISH#2",
+      "cost": 0,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    }
+  ],
+  "discard_pile": [
+    {
+      "id": "UNRELENTING",
+      "upgraded": true,
+      "uid": "UNRELENTING#0",
+      "cost": 2,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#3",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "BASH",
+      "upgraded": false,
+      "uid": "BASH#0",
+      "cost": 2,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "STOMP",
+      "upgraded": true,
+      "uid": "STOMP#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {
+        "cost_this_turn": 1
+      },
+      "affliction": null
+    }
+  ],
+  "exhaust_pile": [
+    {
+      "id": "ASCENDERS_BANE",
+      "upgraded": false,
+      "uid": "ASCENDERS_BANE#0",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    }
+  ],
+  "known_draw_top": [],
+  "known_draw_bottom": [],
+  "enemies": [
+    {
+      "entity_id": "DEVOTED_SCULPTOR_0",
+      "id": "DEVOTED_SCULPTOR",
+      "slot": 0,
+      "hp": 122,
+      "max_hp": 172,
+      "block": 0,
+      "powers": [
+        {
+          "id": "RITUAL_POWER",
+          "amount": 9
+        },
+        {
+          "id": "VULNERABLE_POWER",
+          "amount": 2
+        }
+      ],
+      "intents": [
+        {
+          "type": "ATTACK",
+          "damage": 15,
+          "base_damage": 15,
+          "hits": 1
+        }
+      ],
+      "move_id": "SAVAGE_MOVE",
+      "state_log": [
+        "FORBIDDEN_INCANTATION_MOVE",
+        "SAVAGE_MOVE"
+      ],
+      "ai_fields": {
+        "_ritualGain": 9,
+        "SavageDamage": 15
+      }
+    }
+  ],
+  "history": {
+    "cards_played_this_turn": 2,
+    "cards_played_this_combat": 3,
+    "attacks_played_this_turn": 2,
+    "skills_played_this_turn": 0
+  },
+  "pending_selection": null
+}

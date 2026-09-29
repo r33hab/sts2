@@ -106,6 +106,17 @@ class DebugActionTests(unittest.TestCase):
         )
 
 
+class CheckPositionTests(unittest.TestCase):
+    def test_a_check_reads_the_positions_logged_around_it(self) -> None:
+        # autopilot-20260929-095244.jsonl: Gambler's Brew opened its screen (d598a3f6),
+        # and 7,800 lines later the screen was still up with Shame picked -- the same
+        # fingerprint, which leaves the selection out. The check is the first position.
+        log = records("gamblers_brew_picked_later")
+        self.assertEqual(sessionlog.check_positions(log), {2: (0, 1)})
+        self.assertIsNone(log[1]["payload"]["state"]["hand_select"]["selected_cards"])
+        self.assertTrue(log[3]["payload"]["state"]["hand_select"]["selected_cards"])
+
+
 class CarryAfflictionTests(unittest.TestCase):
     """The mod's per-card `affliction`, copied onto the coach's snapshot by uid."""
 

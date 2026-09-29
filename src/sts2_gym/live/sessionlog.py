@@ -84,49 +84,62 @@ def _max_hp(record: Mapping[str, Any]) -> object:
     return (state.get("player") or {}).get("max_hp")
 
 
-def tainted_checks(records: Sequence[Mapping[str, Any]]) -> dict[int, DebugAction]:
-    """Map each `check` record's index to a debug action between its two positions.
+def check_positions(records: Sequence[Mapping[str, Any]]) -> dict[int, tuple[int, int]]:
+    """Map each `check` record's index to its positions' `state` record indices.
 
-    A check compares the position before a move (the last `state` record with its
-    `pre_fingerprint` ahead of its position after) with the position after (the last one
-    with its `post_fingerprint` ahead of the check). A debug action logged between the
-    two landed inside the move's interval. So may one logged just BEFORE the position
-    before: the autopilot reads a fight's opening position, posts its HP buffer, logs it,
-    and only then logs that opening -- read before the buffer landed. Such an action counts
-    from the state record before the position before, except an HP buffer the position
-    before already shows: its max HP is the one after, where a buffer inside the interval
-    would have raised it (the fight lab reads the opening after its buffer).
+    The position after is the last state record with the check's `post_fingerprint` ahead
+    of the check, and the position before the last one with its `pre_fingerprint` ahead
+    of that. A fingerprint can name several records -- a position reached twice, or a
+    selection screen whose picks it leaves out -- and only the ones logged around the
+    check are the positions its move went between. A check with either position not
+    logged ahead of it has no entry -- unless its two fingerprints are one and the same
+    record's, a move the game did not act on.
     """
-    actions = debug_actions(records)
-    if not actions:
-        return {}
-    at = [action.index for action in actions]
-    last_seen: dict[str, int] = {}
-    # Each state record's index, and the index of the state record before it.
-    previous_state: dict[int, int] = {}
-    last_state = -1
-    tainted: dict[int, DebugAction] = {}
     history: dict[str, list[int]] = {}
+    positions: dict[int, tuple[int, int]] = {}
     for index, record in enumerate(records):
         kind = record.get("kind")
         payload = record.get("payload") or {}
         if kind == "state":
             fingerprint = payload.get("fingerprint")
-            previous_state[index] = last_state
-            last_state = index
             if isinstance(fingerprint, str):
-                last_seen[fingerprint] = index
                 history.setdefault(fingerprint, []).append(index)
             continue
         if kind != "check":
             continue
-        post = last_seen.get(payload.get("post_fingerprint"))
-        if post is None:
+        post_seen = history.get(payload.get("post_fingerprint"))
+        if not post_seen:
             continue
-        seen = history.get(payload.get("pre_fingerprint"), [])
-        where = bisect.bisect_left(seen, post)
-        pre = seen[where - 1] if where else post
-        start = previous_state.get(pre, -1)
+        post = post_seen[-1]
+        pre_seen = history.get(payload.get("pre_fingerprint"), [])
+        where = bisect.bisect_left(pre_seen, post)
+        if where:
+            positions[index] = (pre_seen[where - 1], post)
+        elif payload.get("pre_fingerprint") == payload.get("post_fingerprint"):
+            positions[index] = (post, post)
+    return positions
+
+
+def tainted_checks(records: Sequence[Mapping[str, Any]]) -> dict[int, DebugAction]:
+    """Map each `check` record's index to a debug action between its two positions.
+
+    The positions are `check_positions`'. A debug action logged between the two landed
+    inside the move's interval. So may one logged just BEFORE the position before: the
+    autopilot reads a fight's opening position, posts its HP buffer, logs it, and only
+    then logs that opening -- read before the buffer landed. Such an action counts from
+    the state record before the position before, except an HP buffer the position before
+    already shows: its max HP is the one after, where a buffer inside the interval would
+    have raised it (the fight lab reads the opening after its buffer).
+    """
+    actions = debug_actions(records)
+    if not actions:
+        return {}
+    at = [action.index for action in actions]
+    states = [i for i, record in enumerate(records) if record.get("kind") == "state"]
+    tainted: dict[int, DebugAction] = {}
+    for index, (pre, post) in check_positions(records).items():
+        before = bisect.bisect_left(states, pre)
+        start = states[before - 1] if before else -1
         low, high = bisect.bisect_right(at, start), bisect.bisect_left(at, post)
         for action in actions[low:high]:
             if (

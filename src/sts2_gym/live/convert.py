@@ -657,16 +657,23 @@ def _bound_turn(
     return counters, warnings
 
 
-def _pending_selection(value: object) -> dict[str, Any] | None:
+def _pending_selection(
+    value: object,
+    piles: tuple[list[dict[str, Any]], ...] = (),
+) -> dict[str, Any] | None:
     """Check a pending in-combat selection against schema section 1.1.
 
     `played_card` is optional: a coach that predates it leaves it out, which reads as
-    null, the card unknown.
+    null, the card unknown. `piles` are the validated live piles: a card the player has
+    picked leaves the mod's candidates but stays in its pile until the screen is
+    confirmed, so a toggled uid is a candidate's or a pile card's (`selection.to_pending`
+    offers it again).
 
     Raises:
         ConversionError: for an undefined field, a malformed value, an unknown source or
             candidate id, more than one source, a played card that is not the source card,
-            or a toggled uid no candidate carries.
+            or a toggled uid no candidate carries and, outside a CHOOSE screen, no pile
+            card either.
 
     """
     if value is None:
@@ -737,10 +744,14 @@ def _pending_selection(value: object) -> dict[str, Any] | None:
         raise ConversionError(f"min {low} is above max {high}", path=f"{path}.min")
     _bool(pending["can_skip"], f"{path}.can_skip")
     offered = {card["uid"] for card in candidates if card["uid"] is not None}
+    # A CHOOSE screen's cards are generated and in no pile, so a pick off its offer
+    # cannot be found; `selection.to_pending` says so rather than refusing the document.
+    if kind != "CHOOSE":
+        offered |= {card["uid"] for pile in piles for card in pile if card["uid"]}
     for i, uid in enumerate(_list(pending["selected_uids"], f"{path}.selected_uids")):
-        if _str(uid, f"{path}.selected_uids[{i}]") not in offered:
+        if _str(uid, f"{path}.selected_uids[{i}]") not in offered and kind != "CHOOSE":
             raise ConversionError(
-                "not the uid of a candidate",
+                "not the uid of a candidate, or of a card in the piles",
                 path=f"{path}.selected_uids[{i}]",
             )
     return pending
@@ -870,7 +881,10 @@ def convert(live: dict[str, Any]) -> ConversionResult:
     discard = _cards(top["discard_pile"], "discard_pile")
     exhaust = _cards(top["exhaust_pile"], "exhaust_pile")
     draw = _draw_regions(top)
-    live_pending = _pending_selection(top["pending_selection"])
+    live_pending = _pending_selection(
+        top["pending_selection"],
+        (hand, discard, exhaust, [*draw[0], *(card for _, card in draw[1]), *draw[2]]),
+    )
     pending = None
     # The live selection, once it maps; a card that opened it has a play to finish.
     opened: dict[str, Any] | None = None
