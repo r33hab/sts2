@@ -4843,27 +4843,35 @@ public static class CardEffects
                     state.ShuffleRng ?? new Random(0)
                 );
             }
+        }
 
-            // `PersonalHivePower.AfterDamageReceived` adds its Dazed at
-            // `CardPilePosition.Random`, which `CardPileCmd` resolves as one
-            // `Rng.Shuffle.NextInt(pile.Count + 1)` per card. Bottom-decking them is wrong
-            // twice over: the card arrives on a different turn, and the placement SPENDS A
-            // SHUFFLE DRAW that the emulator was not making -- the same stream desync as
-            // E427, and it moves every later shuffle in the fight.
-            int personalHive = BuffSystem.Get(target.Buffs, BuffId.PersonalHive);
-            if (personalHive > 0)
-            {
-                // No rng parameter reaches this far down the damage path, and the helper
-                // prefers `state.ShuffleRng` anyway; the fallback is only for a state
-                // built without one, which is a hand-made test fight rather than a run.
-                AddCardToDrawPileRandomly(
-                    state,
-                    ST.Dazed,
-                    personalHive,
-                    state.ShuffleRng ?? new Random(0)
-                );
-            }
+        // `PersonalHivePower.AfterDamageReceived` adds its Dazed at
+        // `CardPilePosition.Random`, which `CardPileCmd` resolves as one
+        // `Rng.Shuffle.NextInt(pile.Count + 1)` per card. Bottom-decking them is wrong
+        // twice over: the card arrives on a different turn, and the placement SPENDS A
+        // SHUFFLE DRAW that the emulator was not making -- the same stream desync as
+        // E427, and it moves every later shuffle in the fight.
+        //
+        // Outside the `hpLoss > 0` branch: the power asks only that the hit was a powered
+        // attack on its owner and never reads the damage result, and `CreatureCmd.Damage`
+        // calls `AfterDamageReceived` for every result whose target was not killed -- a
+        // fully blocked hit included, the killing one not.
+        int personalHive = BuffSystem.Get(target.Buffs, BuffId.PersonalHive);
+        if (personalHive > 0 && target.Hp > 0)
+        {
+            // No rng parameter reaches this far down the damage path, and the helper
+            // prefers `state.ShuffleRng` anyway; the fallback is only for a state
+            // built without one, which is a hand-made test fight rather than a run.
+            AddCardToDrawPileRandomly(
+                state,
+                ST.Dazed,
+                personalHive,
+                state.ShuffleRng ?? new Random(0)
+            );
+        }
 
+        if (hpLoss > 0)
+        {
             // SkittishPower.AfterAttack: the FIRST card each turn to land unblocked
             // damage on the gardener makes it flinch behind N block. Unlike Curl Up the
             // power stays -- it is spent for the turn, not consumed -- and the flag

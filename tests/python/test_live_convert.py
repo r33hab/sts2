@@ -1431,6 +1431,7 @@ class PowerFieldTests(unittest.TestCase):
         owner: str,
         *,
         no_card_played: bool = False,
+        cards_played_this_combat: int | None = None,
     ) -> tuple[list, list]:
         warnings: list[str] = []
         out = powers.to_buffs(
@@ -1438,8 +1439,36 @@ class PowerFieldTests(unittest.TestCase):
             owner=owner,
             warnings=warnings,
             no_card_played=no_card_played,
+            cards_played_this_combat=cards_played_this_combat,
         )
         return out, warnings
+
+    def test_withering_presence_counts_down_the_plays_of_the_combat(self) -> None:
+        # `WitheringPresencePower.AfterCardPlayed` takes one off `CardsLeft` for every card
+        # the player plays, and at zero hands over a Wither and resets it to
+        # `_baseCardsLeft`, 6 (decompiled WitheringPresencePower.cs). The Aeonglass applies
+        # it as it enters the room, before any play, so the plays history counts this
+        # combat say where it stands -- and the cards left are the emulator's magnitude
+        # (CombatEngine.cs, `ApplyAfterCardPlayedPowers`). The live amount stays 6 all
+        # fight: it is `Amount`, and `CardsLeft` is only the display.
+        for played, left in ((0, 6), (1, 5), (5, 1), (6, 6), (14, 4)):
+            with self.subTest(played=played):
+                out, warnings = self.to_buffs(
+                    [{"id": "WITHERING_PRESENCE_POWER", "amount": 6}],
+                    "enemy",
+                    cards_played_this_combat=played,
+                )
+                expected = [buff("WitheringPresence", left)]
+                self.assertEqual((out, warnings), (expected, []))
+
+    def test_withering_presence_without_the_combat_play_count_warns(self) -> None:
+        out, warnings = self.to_buffs(
+            [{"id": "WITHERING_PRESENCE_POWER", "amount": 6}],
+            "enemy",
+        )
+        self.assertEqual(out, [buff("WitheringPresence", 6)])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("WITHERING_PRESENCE_POWER", warnings[0])
 
     def test_skittish_spent_comes_from_its_field(self) -> None:
         # SkittishPower.HasGainedBlockThisTurn is the emulator's SkittishSpent

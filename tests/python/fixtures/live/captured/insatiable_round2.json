@@ -1,0 +1,249 @@
+{
+  "schema": "sts2-live-snapshot/1",
+  "game_version": "v0.107.1",
+  "character": "IRONCLAD",
+  "ascension": 10,
+  "act": 2,
+  "floor": 2,
+  "room_type": "boss",
+  "round": 2,
+  "player": {
+    "hp": 5076,
+    "max_hp": 5080,
+    "block": 0,
+    "energy": 3,
+    "max_energy": 3,
+    "gold": 99,
+    "stars": 0,
+    "osty": null,
+    "orbs": {
+      "slots": 0,
+      "list": []
+    },
+    "powers": [],
+    "relics": [
+      {
+        "id": "BURNING_BLOOD",
+        "counter": null,
+        "fields": {}
+      }
+    ],
+    "potions": [
+      {
+        "slot": 0,
+        "id": null
+      },
+      {
+        "slot": 1,
+        "id": null
+      }
+    ],
+    "max_potion_slots": 2
+  },
+  "hand": [
+    {
+      "id": "FRANTIC_ESCAPE",
+      "upgraded": false,
+      "uid": "FRANTIC_ESCAPE#3",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "FRANTIC_ESCAPE",
+      "upgraded": false,
+      "uid": "FRANTIC_ESCAPE#5",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    }
+  ],
+  "draw_pile": [
+    {
+      "id": "BASH",
+      "upgraded": false,
+      "uid": "BASH#0",
+      "cost": 2,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "FRANTIC_ESCAPE",
+      "upgraded": false,
+      "uid": "FRANTIC_ESCAPE#4",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#4",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    }
+  ],
+  "discard_pile": [
+    {
+      "id": "FRANTIC_ESCAPE",
+      "upgraded": false,
+      "uid": "FRANTIC_ESCAPE#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#3",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "FRANTIC_ESCAPE",
+      "upgraded": false,
+      "uid": "FRANTIC_ESCAPE#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "FRANTIC_ESCAPE",
+      "upgraded": false,
+      "uid": "FRANTIC_ESCAPE#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#3",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    }
+  ],
+  "exhaust_pile": [
+    {
+      "id": "ASCENDERS_BANE",
+      "upgraded": false,
+      "uid": "ASCENDERS_BANE#0",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    }
+  ],
+  "known_draw_top": [],
+  "known_draw_bottom": [],
+  "enemies": [
+    {
+      "entity_id": "THE_INSATIABLE_0",
+      "id": "THE_INSATIABLE",
+      "slot": 0,
+      "hp": 335,
+      "max_hp": 341,
+      "block": 0,
+      "powers": [
+        {
+          "id": "SANDPIT_POWER",
+          "amount": 4
+        }
+      ],
+      "intents": [
+        {
+          "type": "ATTACK",
+          "damage": 9,
+          "base_damage": 9,
+          "hits": 2
+        }
+      ],
+      "move_id": "THRASH_MOVE",
+      "state_log": [
+        "LIQUIFY_GROUND_MOVE",
+        "THRASH_MOVE"
+      ],
+      "ai_fields": {
+        "_hasLiquified": true,
+        "ThrashDamage": 9,
+        "BiteDamage": 31,
+        "SalivateStrength": 3,
+        "HasLiquified": true
+      }
+    }
+  ],
+  "history": {
+    "cards_played_this_turn": 0,
+    "cards_played_this_combat": 3,
+    "attacks_played_this_turn": 0,
+    "skills_played_this_turn": 0
+  },
+  "pending_selection": null
+}

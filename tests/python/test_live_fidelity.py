@@ -13,6 +13,7 @@ made at all.
 from __future__ import annotations
 
 import copy
+import ctypes
 import importlib
 import json
 import sys
@@ -87,6 +88,32 @@ REAL_PAIRS: dict[str, tuple[str, str | None, str | None, str]] = {
         "THUNDERCLAP#0",
         None,
         "captured/waterfall_giant_about_to_blow_after_thunderclap",
+    ),
+    # A10 fight lab, 5000 HP buffer (`fightlab-20260928-220909.jsonl`, the Aeonglass).
+    # Withering Presence hands over a Wither every sixth card, and the live amount stays 6:
+    # the cards left are only its display, so the plays history counts carry them. Before
+    # the converter read that count, every Aeonglass position was not comparable.
+    "Defend is the Aeonglass fight's sixth card and hands over a Wither": (
+        "captured/aeonglass_round2_fifth_card_played",
+        "DEFEND_IRONCLAD#1",
+        None,
+        "captured/aeonglass_round2_after_sixth_card",
+    ),
+    # `fightlab-20260928-213922.jsonl`: the Insatiable's Sandpit at 4, and the first
+    # Frantic Escape pushes it to 5 and costs 2 from then on, that copy only.
+    "Frantic Escape buys a turn against the Insatiable's Sandpit": (
+        "captured/insatiable_round2",
+        "FRANTIC_ESCAPE#3",
+        None,
+        "captured/insatiable_round2_after_frantic_escape",
+    ),
+    # The same session: the Entomancer's Personal Hive shuffles a Dazed into the draw
+    # pile for each powered hit it takes.
+    "Bash on the Entomancer stirs its hive": (
+        "captured/entomancer_round1",
+        "BASH#0",
+        "ENTOMANCER_0",
+        "captured/entomancer_round1_after_bash",
     ),
 }
 CARD_PLAYS = [name for name, pair in REAL_PAIRS.items() if pair[1] is not None]
@@ -268,6 +295,28 @@ class RealPairTests(unittest.TestCase):
         # Five cards drawn from six in an unknown order; the Spinner's attack, the Weak it
         # leaves and the pile sizes are the same in every resample.
         self.assertEqual(check(*real_pair("End turn"))["random_fields"], ["hand"])
+
+    def test_the_insatiable_eats_the_player_as_its_sandpit_empties(self) -> None:
+        # The recorded fight's last position (`fightlab-20260928-213922.jsonl`, round 16):
+        # the Sandpit at 1 and the player at 4771 HP. `SandpitPower` counts down as the
+        # enemy side's turn starts, and at zero `AfterRemoved` kills the player outright
+        # (decompiled SandpitPower.cs) -- the game ended the fight on this End Turn, which
+        # no check could compare, since there is no position after it.
+        converted = convert.convert(load("captured/insatiable_round16_sandpit_at_one"))
+        self.assertTrue(converted.reliable, converted.warnings)
+        for seed in range(3):
+            with self.subTest(seed=seed):
+                handle = native.load_combat_snapshot(converted.doc, seed)
+                try:
+                    hand = len(native.get_state_json(handle)["piles"]["hand"])
+                    obs = (ctypes.c_int * native.OBS_SIZE)()
+                    reward = (ctypes.c_float * 1)()
+                    done = native.step(handle, hand, obs, reward)
+                    self.assertTrue(done)
+                    self.assertEqual(reward[0], -1.0)
+                    self.assertEqual(native.get_state_json(handle)["player"]["hp"], 0)
+                finally:
+                    native.destroy(handle)
 
     def test_a_block_the_simulator_did_not_predict_is_a_deterministic_mismatch(
         self,

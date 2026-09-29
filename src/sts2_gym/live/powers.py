@@ -324,6 +324,20 @@ _FACING = {"Right": 1, "Left": 2}
 _POSSESS = frozenset({"POSSESS_SPEED_POWER", "POSSESS_STRENGTH_POWER"})
 # `SwipePower.StolenCard`, the emulator's `EnemyState.StolenCard` (`to_ai_fields`).
 _SWIPE = "SWIPE_POWER"
+# `WitheringPresencePower`'s `CardsLeft`, the emulator's magnitude, is no field: the live
+# amount is `Amount`, 6 all fight, and `CardsLeft` is only its display. It counts down one
+# per card the player plays and resets to `_baseCardsLeft` as it hands over a Wither
+# (decompiled WitheringPresencePower.cs), from the Aeonglass entering the room
+# (`AfterAddedToRoom`) before any play -- so the plays history counts this combat say it.
+_WITHERING_PRESENCE = "WITHERING_PRESENCE_POWER"
+_WITHERING_PRESENCE_CARDS = 6
+
+
+def _withering_cards_left(cards_played_this_combat: int) -> int:
+    """Give Withering Presence's cards left before the next Wither, after that many plays."""
+    return (
+        _WITHERING_PRESENCE_CARDS - cards_played_this_combat % _WITHERING_PRESENCE_CARDS
+    )
 
 
 def _fields(power: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -482,6 +496,7 @@ def to_buffs(
     path: str = "powers",
     warnings: list[str] | None = None,
     no_card_played: bool = False,
+    cards_played_this_combat: int | None = None,
 ) -> list[dict[str, int]]:
     """Translate one creature's live powers into emulator buffs, `[{"id", "amount"}]`.
 
@@ -490,6 +505,8 @@ def to_buffs(
     total of zero is dropped, the way the emulator sheds a spent buff. `warnings`, when
     given, collects what could not be carried. `no_card_played` says no card has finished
     this turn and none is waiting on a selection, which settles Skittish (`_spent`).
+    `cards_played_this_combat` is the live history's count, None when it has none, which
+    settles Withering Presence (`_withering_cards_left`).
 
     Raises:
         ConversionError: for a power the game does not have, an amount that is not an
@@ -544,6 +561,9 @@ def to_buffs(
         elif entry == _SWIPE:
             # Read and checked by `to_ai_fields`; null is a Swipe with nothing stolen.
             carried = "stolen_card" in _fields(power)
+        elif entry == _WITHERING_PRESENCE and cards_played_this_combat is not None:
+            magnitude = _withering_cards_left(cards_played_this_combat)
+            carried = True
         _add(totals, ordinal, magnitude)
         if spent:
             _add(totals, _ORDINAL_OF["SkittishSpent"], 1)
