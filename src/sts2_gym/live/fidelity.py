@@ -153,7 +153,7 @@ def _still_in_hand(
         return None
     try:
         card = pre["hand"][moves.hand_index(pre, move)]
-    except (moves.MappingError, IndexError):
+    except moves.MappingError:
         return None  # the check proper names what the move does not hold
 
     def copies(hand: Iterable[Mapping[str, Any]]) -> int:
