@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import operator
 import statistics
 import time
 from collections.abc import Sequence
@@ -53,7 +52,11 @@ def choose(
     count: int,
     seed: int = 0,
 ) -> list[dict[str, Any]]:
-    """Draw `count` fights split by room kind as the gate set is, in a seeded order."""
+    """Draw `count` fights split by room kind as the gate set is, in a seeded order.
+
+    The order is the draw's, not the set's (which lists every hallway fight first), so a
+    run stopped early for time still holds every kind of fight in its share.
+    """
     order = np.random.default_rng(seed).permutation(len(fights))
     quotas = {group: round(count * share) for group, share in GROUP_SHARES.items()}
     quotas["hallway"] += count - sum(quotas.values())
@@ -63,7 +66,7 @@ def choose(
         if quotas.get(fight["group"], 0) > 0:
             quotas[fight["group"]] -= 1
             chosen.append(fight)
-    return sorted(chosen, key=operator.itemgetter("index"))
+    return chosen
 
 
 def true_action(combat: Any, best: Any) -> tuple[int, int]:
