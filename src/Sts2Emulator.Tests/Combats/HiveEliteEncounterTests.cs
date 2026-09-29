@@ -322,6 +322,30 @@ public class EntomancerTests
 
         Assert.Equal(1, BuffSystem.Get(fight.State.Enemies[0].Buffs, BuffId.PersonalHive));
     }
+
+    /// <summary>
+    /// `PersonalHivePower.AfterDamageReceived` asks only that the hit was a powered attack
+    /// on its owner -- it never reads the damage result, and `CreatureCmd.Damage` calls the
+    /// hook for every result whose target survived, a fully blocked one included. So a
+    /// Strike into block still shuffles the hive's Dazed into the draw pile; the emulator
+    /// only did it for a hit that took HP.
+    /// </summary>
+    [Fact]
+    public void AHitItBlocksStillStirsTheHive()
+    {
+        var fight = Fight.Encounter(CombatFactory.ActOneEncounter.Entomancer);
+        var entomancer = fight.State.Enemies[0];
+        BuffSystem.Apply(entomancer.Buffs, BuffId.PersonalHive, 1);
+        entomancer.Block = 50;
+        fight.State.Hand = [new CardInstance(IC.StrikeIronclad, false)];
+        fight.State.Energy = 3;
+        int dazedBefore = fight.State.DrawPile.Count(card => card.DefId == ST.Dazed);
+
+        fight.Play(0, 0);
+
+        Assert.Equal(entomancer.MaxHp, entomancer.Hp);
+        Assert.Equal(dazedBefore + 2, fight.State.DrawPile.Count(card => card.DefId == ST.Dazed));
+    }
 }
 
 public class InfestedPrismsTests

@@ -1,0 +1,213 @@
+{
+  "schema": "sts2-live-snapshot/1",
+  "game_version": "v0.107.1",
+  "character": "IRONCLAD",
+  "ascension": 10,
+  "act": 3,
+  "floor": 2,
+  "room_type": "boss",
+  "round": 2,
+  "player": {
+    "hp": 5054,
+    "max_hp": 5080,
+    "block": 5,
+    "energy": 0,
+    "max_energy": 3,
+    "gold": 99,
+    "stars": 0,
+    "osty": null,
+    "orbs": {
+      "slots": 0,
+      "list": []
+    },
+    "powers": [],
+    "relics": [
+      {
+        "id": "BURNING_BLOOD",
+        "counter": null,
+        "fields": {}
+      }
+    ],
+    "potions": [
+      {
+        "slot": 0,
+        "id": null
+      },
+      {
+        "slot": 1,
+        "id": null
+      }
+    ],
+    "max_potion_slots": 2
+  },
+  "hand": [
+    {
+      "id": "BASH",
+      "upgraded": false,
+      "uid": "BASH#0",
+      "cost": 2,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "ASCENDERS_BANE",
+      "upgraded": false,
+      "uid": "ASCENDERS_BANE#0",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "WITHER",
+      "upgraded": false,
+      "uid": "WITHER#0",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    }
+  ],
+  "draw_pile": [
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    }
+  ],
+  "discard_pile": [
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#4",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#3",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#3",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {}
+    }
+  ],
+  "exhaust_pile": [],
+  "known_draw_top": [],
+  "known_draw_bottom": [],
+  "enemies": [
+    {
+      "entity_id": "AEONGLASS_0",
+      "id": "AEONGLASS",
+      "slot": 0,
+      "hp": 529,
+      "max_hp": 535,
+      "block": 21,
+      "powers": [
+        {
+          "id": "WITHERING_PRESENCE_POWER",
+          "amount": 6
+        },
+        {
+          "id": "ARTIFACT_POWER",
+          "amount": 3
+        }
+      ],
+      "intents": [
+        {
+          "type": "ATTACK",
+          "damage": 12,
+          "base_damage": 12,
+          "hits": 2
+        }
+      ],
+      "move_id": "EYE_LASERS_MOVE",
+      "state_log": [
+        "EBB_MOVE",
+        "EYE_LASERS_MOVE"
+      ],
+      "ai_fields": {
+        "_additionalStrength": 0,
+        "_witherUpgradeCount": 0,
+        "EbbDamage": 32,
+        "EbbBlock": 33,
+        "EyeLasersDamage": 12,
+        "EyeLasersRepeat": 2,
+        "IncreasingIntensityBaseStrength": 4,
+        "WitherAmount": 2,
+        "AdditionalStrength": 0,
+        "WitherUpgradeCount": 0,
+        "IncreasingIntensityTotalStrength": 4
+      }
+    }
+  ],
+  "history": {
+    "cards_played_this_turn": 3,
+    "cards_played_this_combat": 6,
+    "attacks_played_this_turn": 2,
+    "skills_played_this_turn": 1
+  },
+  "pending_selection": null
+}

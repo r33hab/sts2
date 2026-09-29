@@ -102,6 +102,37 @@ public class AeonglassTests
     }
 
     /// <summary>
+    /// The sixth card's Wither is the Aeonglass's card, not the player's:
+    /// `AddToCombatAndPreview&lt;Wither&gt;(..., creator: null)`. Every
+    /// `AfterCardGeneratedForCombat` listener -- Arsenal, Pillar of Creation, Regalite,
+    /// Smokestack, Trash to Treasure -- asks `creator == Owner`, and Supermassive counts
+    /// only the entries its owner created, so none of them sees it. The emulator handed it
+    /// over as the player's own generated card, which paid Arsenal's Strength for it.
+    /// </summary>
+    [Fact]
+    public void TheSixthCardsWitherIsNotThePlayersCreation()
+    {
+        var fight = Glass();
+        fight.State.PlayerHp = 900;
+        fight.State.Hand.Clear();
+        for (int i = 0; i < 6; i++)
+        {
+            fight.State.Hand.Add(new CardInstance(IC.DefendIronclad, false));
+        }
+
+        BuffSystem.Apply(fight.State.PlayerBuffs, BuffId.Arsenal, 1);
+        fight.State.Energy = 9;
+        for (int i = 0; i < 6; i++)
+        {
+            fight.Play(0);
+        }
+
+        Assert.Contains(fight.State.Hand, card => card.DefId == ST.Wither);
+        Assert.Equal(0, fight.PlayerBuffAmount(BuffId.Strength));
+        Assert.Equal(0, fight.State.CardsGeneratedThisCombat);
+    }
+
+    /// <summary>
     /// EBB -> EYE_LASERS -> INCREASING_INTENSITY, cycling.
     ///
     /// INCREASING_INTENSITY declares StatusIntent before BuffIntent, so it announces as a

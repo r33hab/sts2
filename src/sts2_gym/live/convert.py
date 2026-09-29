@@ -474,6 +474,7 @@ def _enemies(
     warnings: list[str],
     *,
     no_card_played: bool,
+    cards_played_this_combat: int | None,
 ) -> list[dict[str, Any]]:
     listed = _list(live["enemies"], "enemies")
     if len(listed) > MAX_ENEMIES:
@@ -492,6 +493,7 @@ def _enemies(
             path=f"{where}.powers",
             warnings=warnings,
             no_card_played=no_card_played,
+            cards_played_this_combat=cards_played_this_combat,
         )
         # The per-monster tables rebuild the AI block and the intent, and set the
         # emulator-only BuffIds that carry AI state on `buffs`.
@@ -855,6 +857,8 @@ def convert(live: dict[str, Any]) -> ConversionResult:
             # No card has finished this turn and none is waiting on a selection.
             no_card_played=live_pending is None
             and history.get("cards_played_this_turn") == 0,
+            # With the play a selection is waiting on counted, as the emulator has.
+            cards_played_this_combat=history.get("cards_played_this_combat"),
         ),
         "counters": {**history, **power_counters, **relic_state.counters, **_ALWAYS},
         "pending_selection": pending,
