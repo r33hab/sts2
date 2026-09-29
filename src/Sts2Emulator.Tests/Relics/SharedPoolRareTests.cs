@@ -35,6 +35,29 @@ public class TungstenRodTests
 
         Assert.Equal(hp, fight.State.PlayerHp);
     }
+
+    /// <summary>
+    /// A monster's hit too: `CreatureCmd.Damage` runs the `ModifyHpLostAfterOsty` phase on
+    /// every damage instance, an enemy attack's included. A live A10 fight
+    /// (spire-coach autopilot-20260929-000347.jsonl, four slimes, round 2): 10 block
+    /// against hits of 12, 9, 5 and 4 took the player from 60080 to 60064 HP -- 1, 8, 4
+    /// and 3 -- where the emulator's attack path, without the rod, took 20.
+    /// </summary>
+    [Fact]
+    public void AnEnemyHitIsOneSmallerToo()
+    {
+        var fight = Fight.WithRelics(RelicEffects.TungstenRod);
+        fight.State.PlayerBlock = 10;
+        int hp = fight.State.PlayerHp;
+        var enemy = fight.State.Enemies[0];
+
+        foreach (int hit in new[] { 12, 9, 5, 4 })
+        {
+            EnemyAI.DealAttackDamageForTests(enemy, fight.State, hit);
+        }
+
+        Assert.Equal(hp - 16, fight.State.PlayerHp);
+    }
 }
 
 public class BeatingRemnantTests
@@ -56,6 +79,29 @@ public class BeatingRemnantTests
 
         // Only five of the next fifteen can land.
         CardEffects.DealDamageToPlayer(fight.State, 15);
+        Assert.Equal(480, fight.State.PlayerHp);
+
+        CardEffects.DealDamageToPlayer(fight.State, 15);
+        Assert.Equal(480, fight.State.PlayerHp);
+    }
+
+    /// <summary>
+    /// A monster's hit is capped and counted like any other: `ModifyHpLostAfterOsty` and
+    /// `AfterDamageReceived` do not ask who dealt the damage (decompiled BeatingRemnant.cs).
+    /// </summary>
+    [Fact]
+    public void AnEnemyHitIsCappedAndCountedToo()
+    {
+        var fight = Fight.WithRelics(RelicEffects.BeatingRemnant);
+        fight.State.PlayerHp = 500;
+        fight.State.PlayerMaxHp = 500;
+        fight.State.PlayerBlock = 0;
+        var enemy = fight.State.Enemies[0];
+
+        EnemyAI.DealAttackDamageForTests(enemy, fight.State, 15);
+        Assert.Equal(485, fight.State.PlayerHp);
+
+        EnemyAI.DealAttackDamageForTests(enemy, fight.State, 15);
         Assert.Equal(480, fight.State.PlayerHp);
 
         CardEffects.DealDamageToPlayer(fight.State, 15);

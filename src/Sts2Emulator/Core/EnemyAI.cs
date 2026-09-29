@@ -4445,6 +4445,17 @@ public static class EnemyAI
             unblocked -= toOsty;
         }
 
+        // `ModifyHpLostAfterOsty` on what reaches the player: `CreatureCmd.Damage` runs the
+        // phase on every damage instance, so Tungsten Rod's 1 less and Beating Remnant's
+        // 20-a-turn cap apply to a monster's hit exactly as to any other HP loss, and
+        // Beating Remnant's `AfterDamageReceived` counts what landed. This path skipped
+        // both, so a live A10 fight with the rod lost 1 HP more per hit than the game.
+        if (unblocked > 0)
+        {
+            unblocked = Effects.RelicEffects.ModifyHpLost(state, unblocked);
+            state.UnblockedDamageThisTurn += unblocked;
+        }
+
         if (unblocked > 0)
         {
             state.UnblockedDamageHitCount++;
@@ -4501,8 +4512,10 @@ public static class EnemyAI
         // ImbalancedPower.AfterDamageGiven, which only the Bowlbug Rock carries: an
         // attack of its own that block swallowed WHOLE knocks it off balance, and it
         // spends the following turn dizzy. `damage > 0` matters -- a zeroed attack was
-        // not blocked, it was nothing.
-        if (enemy.DefId == KE.BowlbugRock && damage > 0 && unblocked == 0)
+        // not blocked, it was nothing. `WasFullyBlocked` is block taking part and no HP
+        // lost after the HP-loss hooks (CreatureCmd.Damage), so a remainder Tungsten Rod
+        // takes to 0 counts, and a hit Osty soaks without block does not.
+        if (enemy.DefId == KE.BowlbugRock && damage > 0 && absorbed > 0 && unblocked == 0)
         {
             enemy.OffBalance = true;
         }

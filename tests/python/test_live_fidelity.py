@@ -152,6 +152,15 @@ REAL_PAIRS: dict[str, tuple[str, str | None, str | None, str]] = {
         None,
         "captured/test_subject_round14",
     ),
+    # `autopilot-20260929-000347.jsonl`, four slimes, round 2: Tungsten Rod takes 1 off
+    # each of the four hits that get through 10 block (60080 -> 60064 HP). The monster
+    # attack path skipped the rod, and the emulator took 20.
+    "End turn against four slimes with Tungsten Rod": (
+        "captured/slimes_round2_tungsten_rod",
+        None,
+        None,
+        "captured/slimes_round3_tungsten_rod",
+    ),
     # `autopilot-20260929-095244.jsonl`: Brand opens its exhaust screen. The replay read
     # this check's position after as the same screen with Defend picked 7,900 lines on
     # (one fingerprint), which the converter refused.
