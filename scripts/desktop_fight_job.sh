@@ -40,7 +40,7 @@ if tmux has-session -t fight 2>/dev/null; then
   echo "already running"
 else
   tmux new-session -d -s fight \
-    "cd '$REPO' && PYTHONPATH=src uv run python -m rl.prior_loop run --root '$ROOT' --workers $WORKERS --no-export 2>&1 | tee -a '$HOME/fight_loop.log'"
+    "cd '$REPO' && PYTHONUNBUFFERED=1 PYTHONPATH=src uv run python -m rl.prior_loop run --root '$ROOT' --workers $WORKERS --no-export 2>&1 | tee -a '$HOME/fight_loop.log'"
   echo "started"
 fi
 
