@@ -2098,6 +2098,136 @@ class DecompiledConsistencyTests(unittest.TestCase):
         self.assertEqual(game - emulator, cards.UNMODELLED_ENCHANTMENTS)
 
 
+# Relic bars read off real Act 2-3 positions (spire-coach autopilot sessions of
+# 2026-09-29, through the coach's own snapshot builder), each holding relics the table had
+# no entry for -- which made every position of theirs not comparable.
+REAL_LATE_RELIC_BARS = {
+    # autopilot-20260929-094048.jsonl, act 3, the Queen, round 4.
+    "the Queen fight": [
+        {"id": "BURNING_BLOOD", "counter": None, "fields": {}},
+        {"id": "SCROLL_BOXES", "counter": None, "fields": {}},
+        {
+            "id": "PENDULUM",
+            "counter": None,
+            "fields": {"_isActivating": True, "TurnsSeen": 0},
+        },
+        {"id": "BAG_OF_PREPARATION", "counter": None, "fields": {}},
+        {"id": "PAELS_TEARS", "counter": None, "fields": {"_hadLeftoverEnergy": True}},
+        {"id": "FROZEN_EGG", "counter": None, "fields": {}},
+        {"id": "VEXING_PUZZLEBOX", "counter": None, "fields": {}},
+        {"id": "LOST_WISP", "counter": None, "fields": {}},
+        {"id": "CLAWS", "counter": None, "fields": {}},
+        {"id": "ETERNAL_FEATHER", "counter": None, "fields": {}},
+    ],
+    # autopilot-20260929-100556.jsonl, act 3, floor 35.
+    "the Test Subject run": [
+        {"id": "BURNING_BLOOD", "counter": None, "fields": {}},
+        {
+            "id": "FISHING_ROD",
+            "counter": 1,
+            "fields": {"_combatsSeen": 10, "CombatsSeen": 10},
+        },
+        {"id": "BRONZE_SCALES", "counter": None, "fields": {}},
+        {"id": "ALCHEMICAL_COFFER", "counter": None, "fields": {}},
+        {"id": "MR_STRUGGLES", "counter": None, "fields": {}},
+        {"id": "RIPPLE_BASIN", "counter": None, "fields": {}},
+        {"id": "WHETSTONE", "counter": None, "fields": {}},
+        {"id": "RUNIC_PYRAMID", "counter": None, "fields": {}},
+    ],
+    # autopilot-20260929-004603.jsonl, act 3, floor 45.
+    "the Whispering Earring run": [
+        {"id": "BURNING_BLOOD", "counter": None, "fields": {}},
+        {"id": "GOLDEN_PEARL", "counter": None, "fields": {}},
+        {"id": "BONE_TEA", "counter": None, "fields": {"CombatsLeft": 0}},
+        {"id": "TOXIC_EGG", "counter": None, "fields": {}},
+        {"id": "KUSARIGAMA", "counter": 1, "fields": {"_attacksPlayedThisTurn": 1}},
+        {"id": "RUNIC_PYRAMID", "counter": None, "fields": {}},
+        {"id": "BAG_OF_MARBLES", "counter": None, "fields": {}},
+        {"id": "WHISPERING_EARRING", "counter": None, "fields": {}},
+        {"id": "BRONZE_SCALES", "counter": None, "fields": {}},
+        {"id": "BIG_MUSHROOM", "counter": None, "fields": {}},
+    ],
+    # autopilot-20260929-095244.jsonl, act 3, floor 35.
+    "the Sere Talon run": [
+        {"id": "BURNING_BLOOD", "counter": None, "fields": {}},
+        {"id": "LEAD_PAPERWEIGHT", "counter": None, "fields": {}},
+        {"id": "ANCHOR", "counter": None, "fields": {}},
+        {
+            "id": "SWORD_OF_STONE",
+            "counter": 2,
+            "fields": {"_elitesDefeated": 2, "ElitesDefeated": 2},
+        },
+        {"id": "ASTROLABE", "counter": None, "fields": {}},
+        {"id": "RIPPLE_BASIN", "counter": None, "fields": {}},
+        {"id": "LUCKY_FYSH", "counter": None, "fields": {}},
+        {
+            "id": "VENERABLE_TEA_SET",
+            "counter": None,
+            "fields": {"GainEnergyInNextCombat": False},
+        },
+        {"id": "SERE_TALON", "counter": None, "fields": {}},
+    ],
+    # autopilot-20260929-002615.jsonl, act 2, floor 19.
+    "the Pael's Horn run": [
+        {"id": "BURNING_BLOOD", "counter": None, "fields": {}},
+        {"id": "PHIAL_HOLSTER", "counter": None, "fields": {}},
+        {"id": "LIZARD_TAIL", "counter": None, "fields": {"WasUsed": False}},
+        {"id": "PAELS_HORN", "counter": None, "fields": {}},
+    ],
+}
+
+
+class LateActRelicTests(unittest.TestCase):
+    """The relics the Act 2-3 sessions held, read against their decompiled classes."""
+
+    def test_every_real_late_act_relic_bar_translates_without_a_warning(self) -> None:
+        for name, bar in REAL_LATE_RELIC_BARS.items():
+            with self.subTest(bar=name):
+                self.assertEqual(relics.translate(bar, turn=3).warnings, [])
+
+    def test_paels_tears_counter_is_last_turns_leftover_energy_flag(self) -> None:
+        # Decompiled PaelsTears.cs: BeforeSideTurnEnd sets `_hadLeftoverEnergy` from the
+        # energy left, AfterSideTurnStart pays 2 energy off it. RelicEffects.cs keeps the
+        # same flag as the Counter, written at turn end and read at the next turn's start.
+        # The mod leaves a false bool out.
+        for fields, counter in (({"_hadLeftoverEnergy": True}, 1), ({}, 0)):
+            with self.subTest(fields=fields):
+                result = relics.translate(
+                    [{"id": "PAELS_TEARS", "counter": None, "fields": fields}],
+                )
+                self.assertEqual(
+                    result.relics,
+                    [{"id": ids.relic_id("PAELS_TEARS"), "counter": counter}],
+                )
+                self.assertEqual(result.warnings, [])
+
+    def test_the_pickup_and_turn_clock_relics_keep_no_counter(self) -> None:
+        # Claws, Astrolabe, Sere Talon, Pael's Horn and Alchemical Coffer act only in
+        # AfterObtained; Lost Wisp (a Power played), Mr. Struggles (the turn number),
+        # Runic Pyramid (no flush), Big Mushroom (turn one's draw) and Whispering Earring
+        # (max energy, and a turn-one auto-play a loaded position is past) read nothing
+        # of their own in combat (decompiled Models.Relics).
+        for entry in (
+            "ALCHEMICAL_COFFER",
+            "ASTROLABE",
+            "BIG_MUSHROOM",
+            "CLAWS",
+            "LOST_WISP",
+            "MR_STRUGGLES",
+            "PAELS_HORN",
+            "RUNIC_PYRAMID",
+            "SERE_TALON",
+            "WHISPERING_EARRING",
+        ):
+            with self.subTest(relic=entry):
+                result = relics.translate([{"id": entry, "counter": 3, "fields": {}}])
+                self.assertEqual(
+                    result.relics,
+                    [{"id": ids.relic_id(entry), "counter": 0}],
+                )
+                self.assertEqual(result.warnings, [])
+
+
 # ── Carried from the Task 1 review (Task 2's addendum) ───────────────────────
 
 

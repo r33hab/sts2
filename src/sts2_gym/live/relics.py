@@ -374,6 +374,38 @@ RELICS: dict[str, Relic] = {
     # The refined Burning Blood. `BlackBlood.AfterCombatVictory` heals 12 once the fight
     # is won -- the run pays it (RunRewardGenerator), and no combat reads anything of it.
     "BLACK_BLOOD": _STATELESS,
+    # ── Act 2-3 Ancient and event relics the autopilot's sessions held (2026-09-29),
+    # each read off its decompiled class. Pickup-only: all each does is in
+    # `AfterObtained`, on the run -- Claws turns up to 6 cards into Maul, Astrolabe
+    # transforms and upgrades 3, Sere Talon adds 2 curses and 3 Wishes, Pael's Horn 2
+    # Relax, Alchemical Coffer 4 potion slots and their potions (the slots ride on
+    # `max_potion_slots`).
+    **dict.fromkeys(
+        ("CLAWS", "ASTROLABE", "SERE_TALON", "PAELS_HORN", "ALCHEMICAL_COFFER"),
+        _STATELESS,
+    ),
+    # Combat hooks that keep no field: Lost Wisp's AfterCardPlayed deals 8 unpowered to
+    # every enemy per Power played (RelicEffects.cs, `LostWisp`); Mr. Struggles'
+    # AfterPlayerTurnStart deals the TURN NUMBER unpowered (`MrStruggles`); Runic
+    # Pyramid's ShouldFlush keeps the hand every turn (`RunicPyramid`); Big Mushroom's
+    # ModifyHandDraw takes 2 off turn one's draw (`BigMushroom`); Whispering Earring's
+    # ModifyMaxEnergy is a `MaxEnergyRelics` entry, and its turn-one auto-play is behind
+    # `whispering_earring_spent`, which a loaded position is always past (convert.py).
+    **dict.fromkeys(
+        (
+            "LOST_WISP",
+            "MR_STRUGGLES",
+            "RUNIC_PYRAMID",
+            "BIG_MUSHROOM",
+            "WHISPERING_EARRING",
+        ),
+        _STATELESS,
+    ),
+    # `PaelsTears._hadLeftoverEnergy`: BeforeSideTurnEnd records whether energy was left,
+    # AfterSideTurnStart pays 2 energy off it. The emulator's Counter is the same flag,
+    # written at turn end and read at the next turn's start (RelicEffects.cs,
+    # `PaelsTears`), so mid-turn both hold last turn's verdict.
+    "PAELS_TEARS": Relic(counter=_flag("_hadLeftoverEnergy")),
     # ── Per-turn counts: PerTurnCounters, cleared at turn start (RelicEffects.cs:990-993,
     # :1364-1371). The game resets `AttacksPlayedThisTurn` in BeforeSideTurnStart too.
     "KUNAI": Relic(counter=_residue("_attacksPlayedThisTurn", 3)),  # :1430
