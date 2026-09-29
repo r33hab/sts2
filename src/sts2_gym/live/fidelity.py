@@ -143,10 +143,10 @@ def _still_in_hand(
 ) -> str | None:
     """Say why a card move did not make the position after: no copy of it left the hand.
 
-    A card played leaves the hand as its play begins. Copies of one card are the same card
-    to the simulator, and a log can name another copy than the one the game played -- a
-    person's action log did -- so what is asked is whether the hand after holds fewer of
-    the card than before. When it holds as many, the game did not play it: it refused it,
+    A card played leaves the hand as its play begins. Copies of one card (its id, upgrade
+    and affliction) are the same card to the simulator, and a log can name another copy
+    than the one the game played -- a person's action log did -- so what is asked is
+    whether the hand after holds fewer of the card than before. When it holds as many, the game did not play it: it refused it,
     or played something else, and the position after is not this move's.
     """
     if move.kind != "card":
@@ -157,8 +157,10 @@ def _still_in_hand(
         return None  # the check proper names what the move does not hold
 
     def copies(hand: Iterable[Mapping[str, Any]]) -> int:
+        # A Bound copy is not an unbound one: the game can refuse the one alone.
         return sum(
-            (held["id"], held["upgraded"]) == (card["id"], card["upgraded"])
+            (held["id"], held["upgraded"], held.get("affliction"))
+            == (card["id"], card["upgraded"], card.get("affliction"))
             for held in hand
         )
 

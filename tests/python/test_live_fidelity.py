@@ -845,6 +845,15 @@ class NotTheMoveTests(unittest.TestCase):
         self.assertTrue(result["comparable"], result)
         self.assertEqual(result["deterministic_mismatches"], [])
 
+    def test_a_bound_copy_is_not_an_unbound_one(self) -> None:
+        # The fight lab logged its Bound Strike, blocked for the turn, and the game shows
+        # two unbound Strikes played instead: the Bound one is still in hand.
+        pre = load("captured/queen_lab_round10_bound_strike_logged")
+        post = load("captured/queen_lab_round10_after_two_unlogged_strikes")
+        result = check(pre, played(pre, "STRIKE_IRONCLAD#2", "QUEEN_0"), post)
+        self.assertFalse(result["comparable"])
+        self.assertIn("left the hand", result["warnings"][0])
+
     def test_a_count_that_explains_no_mismatch_changes_nothing(self) -> None:
         # A person's act 3 session (`20260926-220853.jsonl`): the mod of the day counted a
         # combat's first card twice (0 cards played before Hemokinesis, 2 after), and the
