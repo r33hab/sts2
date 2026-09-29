@@ -531,7 +531,8 @@ def to_pending(
     - a CHOOSE candidate becomes a `generated_candidates` id;
     - the source decides the kind and what the answer does next.
     `selected_uids` are toggles the game has not acted on, so the emulator's screen
-    starts with no pick made. Anything that cannot be carried exactly is appended to
+    starts with no pick made -- and a picked card, which the mod takes off the
+    candidates, is offered again (`_picked_back`). Anything that cannot be carried exactly is appended to
     `warnings` and maps to None, and a choice the mapping had to guess is appended to
     `warnings` beside the selection it made. A candidate card id the emulator does not
     know is refused, as `ConversionError`.
@@ -577,6 +578,12 @@ def _map(
         return f"{what}: it opens a {opens.screen} screen, not a {live['kind']}"
     if live["kind"] == "GRID" and live["pile"] not in (None, opens.pile):
         return f"{what}: its grid is over the {opens.pile} pile, not {live['pile']}"
+    picked = _picked_back(opens, live, screen.hand, discard, exhaust, draw)
+    if isinstance(picked, str):
+        return f"{what}: {picked}"
+    if picked:
+        live = {**live, "candidates": [*live["candidates"], *picked]}
+        screen = Screen(live, screen.hand)
     candidates = live["candidates"]
     if not candidates:
         return f"{what}: it offers no card"
@@ -624,6 +631,45 @@ def _map(
         "after_selection_to_hand": [],
         "end_turn_awaiting_selection": False,
     }
+
+
+def _picked_back(
+    opens: Opens,
+    live: Mapping[str, Any],
+    hand: Sequence[Mapping[str, Any]],
+    discard: Sequence[Mapping[str, Any]],
+    exhaust: Sequence[Mapping[str, Any]],
+    draw: Draw,
+) -> list[Mapping[str, Any]] | str:
+    """Return the cards picked on the screen that its candidates no longer list.
+
+    The mod lists a card the player has picked in `selected_uids` and takes it off the
+    candidates, while the card stays in its pile until the screen is confirmed. The
+    emulator's screen starts with no pick made, so each such card is offered again, found
+    by uid in the pile the screen is over. It has no live candidate index, so a search
+    that picks it again names no live move for it (`moves.UnmappedSelectionError`): on
+    the game's screen it is picked already. A CHOOSE screen's cards are generated and in
+    no pile, so a pick off its offer cannot be found, which is said instead.
+    """
+    offered = {card["uid"] for card in live["candidates"]}
+    missing = [uid for uid in live["selected_uids"] if uid not in offered]
+    if not missing:
+        return []
+    if opens.screen == "HAND":
+        pile, where = hand, "hand"
+    elif opens.pile == "DISCARD":
+        pile, where = discard, "discard pile"
+    elif opens.pile == "EXHAUST":
+        pile, where = exhaust, "exhaust pile"
+    elif opens.pile == "DRAW":
+        pile, where = [*draw.top, *draw.middle, *draw.bottom], "draw pile"
+    else:
+        return f"{missing} picked off its offer, and a generated card is in no pile"
+    by_uid = {card["uid"]: card for card in pile if card["uid"] is not None}
+    lost = [uid for uid in missing if uid not in by_uid]
+    if lost:
+        return f"{lost} picked off its offer, and not in the {where}"
+    return [by_uid[uid] for uid in missing]
 
 
 def _bounds(opens: Opens, live: Mapping[str, Any]) -> str | None:

@@ -115,6 +115,61 @@ REAL_PAIRS: dict[str, tuple[str, str | None, str | None, str]] = {
         "ENTOMANCER_0",
         "captured/entomancer_round1_after_bash",
     ),
+    # An A10 autopilot run's act 3 boss (`autopilot-20260929-094048.jsonl`, the Queen):
+    # Chains of Binding 3 bound the first three cards drawn, and Pael's Tears, Lost Wisp
+    # and Claws are on the relic bar. Every position of the fight was not comparable
+    # until the relics had entries and the cards carried their Bound.
+    "a Bound Shrug It Off against the Queen": (
+        "captured/queen_round4",
+        "SHRUG_IT_OFF#0",
+        None,
+        "captured/queen_round4_after_shrug_it_off",
+    ),
+    "a Strike once a Bound card is spent": (
+        "captured/queen_round4_after_shrug_it_off",
+        "STRIKE_IRONCLAD#0",
+        "TORCH_HEAD_AMALGAM_0",
+        "captured/queen_round4_after_strike",
+    ),
+    # `autopilot-20260929-100556.jsonl`: the Bowlbug Rock stuns itself when its headbutt
+    # is fully blocked, and each stun leaves its log a round short; the Test Subject's
+    # second death came on its own turn, so its third form logs a round short.
+    "a Strike on a Bowlbug Rock stunned twice": (
+        "captured/bowlbug_rock_round4_stunned",
+        "STRIKE_IRONCLAD#0",
+        "BOWLBUG_ROCK_0",
+        "captured/bowlbug_rock_round4_after_strike",
+    ),
+    "a Defend after the Bowlbug Rock's second stun": (
+        "captured/bowlbug_rock_round5",
+        "DEFEND_IRONCLAD#0",
+        None,
+        "captured/bowlbug_rock_round5_after_defend",
+    ),
+    "End turn against the Test Subject's third form": (
+        "captured/test_subject_round13_third_form",
+        None,
+        None,
+        "captured/test_subject_round14",
+    ),
+    # `autopilot-20260929-000347.jsonl`, four slimes, round 2: Tungsten Rod takes 1 off
+    # each of the four hits that get through 10 block (60080 -> 60064 HP). The monster
+    # attack path skipped the rod, and the emulator took 20.
+    "End turn against four slimes with Tungsten Rod": (
+        "captured/slimes_round2_tungsten_rod",
+        None,
+        None,
+        "captured/slimes_round3_tungsten_rod",
+    ),
+    # `autopilot-20260929-095244.jsonl`: Brand opens its exhaust screen. The replay read
+    # this check's position after as the same screen with Defend picked 7,900 lines on
+    # (one fingerprint), which the converter refused.
+    "Brand opens its exhaust screen": (
+        "captured/corpse_slugs_round1_before_brand",
+        "BRAND#0",
+        None,
+        "captured/corpse_slugs_round1_brand_open",
+    ),
 }
 CARD_PLAYS = [name for name, pair in REAL_PAIRS.items() if pair[1] is not None]
 
@@ -672,9 +727,13 @@ class NotComparableTests(unittest.TestCase):
         pre = load(f"{SPINNER}_after_two_defends")
         self.assertEqual(pre["player"]["energy"], 0)
         move = played(pre, "BASH#0", "SLUDGE_SPINNER_0")
+        # A position after where the Bash has left the hand, as a played card does.
+        post = copy.deepcopy(pre)
+        bash = next(i for i, card in enumerate(post["hand"]) if card["uid"] == "BASH#0")
+        post["discard_pile"].append(post["hand"].pop(bash))
 
         self.assertEqual(
-            check(pre, move, pre),
+            check(pre, move, post),
             {
                 "comparable": True,
                 "deterministic_mismatches": [
@@ -751,6 +810,78 @@ class NotComparableTests(unittest.TestCase):
 
 
 # ── Refusals ─────────────────────────────────────────────────────────────────
+
+
+class NotTheMoveTests(unittest.TestCase):
+    """A position after that the logged move did not make is not comparable.
+
+    The old fight lab's Queen fight (`fightlab-20260928-220909.jsonl`) played cards its
+    log does not hold: its position after a move is sometimes another card's, or the
+    move's and one more. The simulator then looks wrong where it is not -- the emulator
+    rightly refused the Bound Strike, and rightly played one card, not two.
+    """
+
+    def test_no_copy_leaving_the_hand_means_the_card_was_not_played(self) -> None:
+        pre = load("captured/queen_lab_round3_bound_strike_blocked")
+        post = load("captured/queen_lab_round3_after_an_unlogged_defend")
+        result = check(
+            pre, played(pre, "STRIKE_IRONCLAD#1", "TORCH_HEAD_AMALGAM_0"), post
+        )
+        self.assertFalse(result["comparable"])
+        self.assertEqual(result["deterministic_mismatches"], [])
+        self.assertEqual(len(result["warnings"]), 1)
+        self.assertIn("left the hand", result["warnings"][0])
+
+    def test_a_copy_leaving_the_hand_is_the_move_whichever_copy_the_log_named(
+        self,
+    ) -> None:
+        # A person's session (`20260928-190511.jsonl`): the action log names Strike #2,
+        # and Strike #3 is the copy the game put in the discard pile. The same card to the
+        # simulator: one Strike left the hand, as the move says.
+        pre = load("captured/corpse_slugs_a_strike_logged_by_another_copy")
+        post = load("captured/corpse_slugs_after_the_strike")
+        self.assertIn("STRIKE_IRONCLAD#2", [card["uid"] for card in post["hand"]])
+        result = check(pre, played(pre, "STRIKE_IRONCLAD#2", "CORPSE_SLUG_1"), post)
+        self.assertTrue(result["comparable"], result)
+        self.assertEqual(result["deterministic_mismatches"], [])
+
+    def test_a_bound_copy_is_not_an_unbound_one(self) -> None:
+        # The fight lab logged its Bound Strike, blocked for the turn, and the game shows
+        # two unbound Strikes played instead: the Bound one is still in hand.
+        pre = load("captured/queen_lab_round10_bound_strike_logged")
+        post = load("captured/queen_lab_round10_after_two_unlogged_strikes")
+        result = check(pre, played(pre, "STRIKE_IRONCLAD#2", "QUEEN_0"), post)
+        self.assertFalse(result["comparable"])
+        self.assertIn("left the hand", result["warnings"][0])
+
+    def test_a_count_that_explains_no_mismatch_changes_nothing(self) -> None:
+        # A person's act 3 session (`20260926-220853.jsonl`): the mod of the day counted a
+        # combat's first card twice (0 cards played before Hemokinesis, 2 after), and the
+        # simulator predicts every field the game shows.
+        pre = load("captured/scrolls_first_play_counted_twice")
+        post = load("captured/scrolls_after_hemokinesis")
+        self.assertEqual(post["history"]["cards_played_this_combat"], 2)
+        result = check(pre, played(pre, "HEMOKINESIS#0", "SCROLL_OF_BITING_0"), post)
+        self.assertTrue(result["comparable"], result)
+        self.assertEqual(result["deterministic_mismatches"], [])
+
+    def test_more_cards_played_than_the_move_plays_is_not_comparable(self) -> None:
+        # Defend is played and so is a Strike nobody logged: 8 cards this combat before,
+        # 10 after, where the Defend makes 9.
+        pre = load("captured/queen_lab_round4_before_defend")
+        post = load("captured/queen_lab_round4_after_defend_and_an_unlogged_strike")
+        self.assertEqual(
+            (
+                pre["history"]["cards_played_this_combat"],
+                post["history"]["cards_played_this_combat"],
+            ),
+            (8, 10),
+        )
+        result = check(pre, played(pre, "DEFEND_IRONCLAD#0"), post)
+        self.assertFalse(result["comparable"])
+        self.assertEqual(result["deterministic_mismatches"], [])
+        self.assertEqual(len(result["warnings"]), 1)
+        self.assertIn("more cards", result["warnings"][0])
 
 
 class RefusalTests(unittest.TestCase):

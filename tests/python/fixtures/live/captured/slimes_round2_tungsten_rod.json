@@ -1,0 +1,330 @@
+{
+  "schema": "sts2-live-snapshot/1",
+  "game_version": "v0.107.1",
+  "character": "IRONCLAD",
+  "ascension": 10,
+  "act": 1,
+  "floor": 14,
+  "room_type": "monster",
+  "round": 2,
+  "player": {
+    "hp": 60080,
+    "max_hp": 60080,
+    "block": 10,
+    "energy": 0,
+    "max_energy": 3,
+    "gold": 174,
+    "stars": 0,
+    "osty": null,
+    "orbs": {
+      "slots": 0,
+      "list": []
+    },
+    "powers": [],
+    "relics": [
+      {
+        "id": "BURNING_BLOOD",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "NEOWS_TALISMAN",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "HAPPY_FLOWER",
+        "counter": 2,
+        "fields": {
+          "_turnsSeen": 2,
+          "TurnsSeen": 2
+        }
+      },
+      {
+        "id": "TUNGSTEN_ROD",
+        "counter": null,
+        "fields": {}
+      }
+    ],
+    "potions": [
+      {
+        "slot": 0,
+        "id": null
+      },
+      {
+        "slot": 1,
+        "id": null
+      }
+    ],
+    "max_potion_slots": 2
+  },
+  "hand": [
+    {
+      "id": "BASH",
+      "upgraded": false,
+      "uid": "BASH#0",
+      "cost": 2,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": true,
+      "uid": "STRIKE_IRONCLAD#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    }
+  ],
+  "draw_pile": [
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": true,
+      "uid": "DEFEND_IRONCLAD#3",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    }
+  ],
+  "discard_pile": [
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#3",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": true,
+      "uid": "STRIKE_IRONCLAD#4",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "SLIMED",
+      "upgraded": false,
+      "uid": "SLIMED#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "SLIMED",
+      "upgraded": false,
+      "uid": "SLIMED#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "SLIMED",
+      "upgraded": false,
+      "uid": "SLIMED#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "SLIMED",
+      "upgraded": false,
+      "uid": "SLIMED#3",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    }
+  ],
+  "exhaust_pile": [
+    {
+      "id": "ASCENDERS_BANE",
+      "upgraded": false,
+      "uid": "ASCENDERS_BANE#0",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    }
+  ],
+  "known_draw_top": [],
+  "known_draw_bottom": [],
+  "enemies": [
+    {
+      "entity_id": "TWIG_SLIME_M_0",
+      "id": "TWIG_SLIME_M",
+      "slot": 0,
+      "hp": 11,
+      "max_hp": 29,
+      "block": 0,
+      "powers": [],
+      "intents": [
+        {
+          "type": "ATTACK",
+          "damage": 12,
+          "base_damage": 12,
+          "hits": 1
+        }
+      ],
+      "move_id": "POKEY_POUNCE_MOVE",
+      "state_log": [
+        "STICKY_SHOT_MOVE",
+        "POKEY_POUNCE_MOVE"
+      ],
+      "ai_fields": {
+        "ClumpDamage": 12
+      }
+    },
+    {
+      "entity_id": "LEAF_SLIME_M_0",
+      "id": "LEAF_SLIME_M",
+      "slot": 1,
+      "hp": 35,
+      "max_hp": 35,
+      "block": 0,
+      "powers": [],
+      "intents": [
+        {
+          "type": "ATTACK",
+          "damage": 9,
+          "base_damage": 9,
+          "hits": 1
+        }
+      ],
+      "move_id": "CLUMP_SHOT",
+      "state_log": [
+        "STICKY_SHOT",
+        "CLUMP_SHOT"
+      ],
+      "ai_fields": {
+        "ClumpDamage": 9
+      }
+    },
+    {
+      "entity_id": "TWIG_SLIME_S_0",
+      "id": "TWIG_SLIME_S",
+      "slot": 2,
+      "hp": 12,
+      "max_hp": 12,
+      "block": 0,
+      "powers": [],
+      "intents": [
+        {
+          "type": "ATTACK",
+          "damage": 5,
+          "base_damage": 5,
+          "hits": 1
+        }
+      ],
+      "move_id": "TACKLE_MOVE",
+      "state_log": [
+        "TACKLE_MOVE",
+        "TACKLE_MOVE"
+      ],
+      "ai_fields": {
+        "TackleDamage": 5
+      }
+    },
+    {
+      "entity_id": "LEAF_SLIME_S_0",
+      "id": "LEAF_SLIME_S",
+      "slot": 3,
+      "hp": 16,
+      "max_hp": 16,
+      "block": 0,
+      "powers": [],
+      "intents": [
+        {
+          "type": "ATTACK",
+          "damage": 4,
+          "base_damage": 4,
+          "hits": 1
+        }
+      ],
+      "move_id": "TACKLE_MOVE",
+      "state_log": [
+        "GOOP_MOVE",
+        "TACKLE_MOVE"
+      ],
+      "ai_fields": {
+        "TackleDamage": 4
+      }
+    }
+  ],
+  "history": {
+    "cards_played_this_turn": 3,
+    "cards_played_this_combat": 6,
+    "attacks_played_this_turn": 1,
+    "skills_played_this_turn": 2
+  },
+  "pending_selection": null
+}

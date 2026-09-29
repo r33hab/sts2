@@ -25,6 +25,7 @@ import copy
 import ctypes
 import importlib
 import inspect
+import json
 import re
 import sys
 import unittest
@@ -1615,6 +1616,71 @@ class ToAiTests(unittest.TestCase):
         for name in ("ascension", "buffs"):
             self.assertIs(parameters[name].kind, inspect.Parameter.KEYWORD_ONLY, name)
             self.assertIs(parameters[name].default, inspect.Parameter.empty, name)
+
+
+CAPTURED = Path(__file__).resolve().parent / "fixtures" / "live" / "captured"
+
+
+def captured(name: str, entity_id: str) -> tuple[dict[str, Any], int]:
+    """A real position's live enemy, and the emulator's 0-based turn it was at."""
+    doc = json.loads((CAPTURED / f"{name}.json").read_text(encoding="utf-8"))
+    live = next(e for e in doc["enemies"] if e["entity_id"] == entity_id)
+    return live, doc["round"] - 1
+
+
+class UnloggedRoundTests(unittest.TestCase):
+    """A round passes with nothing logged when a forced state sits through its roll:
+    `FindNextMoveState` returns without logging while the current state cannot transition
+    away (MonsterMoveStateMachine.cs), which a stun (`Creature.StunInternal`,
+    MustPerformOnceBeforeTransitioning) or a death-forced move set after the creature's
+    own move is. The real positions are autopilot-20260929-100556.jsonl's."""
+
+    def test_a_rock_its_own_headbutt_stunned_logs_a_round_short_per_stun(self) -> None:
+        # Decompiled BowlbugRock.HeadbuttMove: fully blocked, it stuns itself inside its
+        # own move, so the next round's roll is left on STUNNED. Round 4, stunned again:
+        # HEADBUTT, stun, HEADBUTT, stun -- two moves logged.
+        for name, turn_round in (
+            ("bowlbug_rock_round4_stunned", (4, 2)),
+            ("bowlbug_rock_round5", (5, 3)),
+        ):
+            live, turn = captured(name, "BOWLBUG_ROCK_0")
+            with self.subTest(position=name):
+                self.assertEqual((turn + 1, len(live["state_log"])), turn_round)
+                _, _, warnings, _ = to_ai(live, turn, ascension=10)
+                self.assertEqual(warnings, [])
+
+    def test_a_rock_cannot_log_fewer_moves_than_its_stuns_allow(self) -> None:
+        # Every stun follows a logged HEADBUTT, so three headbutts leave at most three
+        # rounds unlogged: three moves at round 7 cannot be the game's.
+        live, _ = captured("bowlbug_rock_round5", "BOWLBUG_ROCK_0")
+        _, _, warnings, _ = to_ai(live, 6, ascension=10)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("3 moves at round 7", warnings[0])
+
+    def test_a_test_subject_killed_on_its_own_turn_respawns_a_round_unlogged(
+        self,
+    ) -> None:
+        # Thorns killed it during its round-10 MULTI_CLAW: RESPAWN_MOVE is forced after
+        # that round's roll and sits through round 11's (TestSubject.cs), ten moves at
+        # round 11; its third form logs a round short from then on.
+        for name, turn_round in (
+            ("test_subject_round11_respawning", (11, 10)),
+            ("test_subject_round13_third_form", (13, 12)),
+            ("test_subject_round14", (14, 13)),
+        ):
+            live, turn = captured(name, "TEST_SUBJECT_0")
+            with self.subTest(position=name):
+                self.assertEqual((turn + 1, len(live["state_log"])), turn_round)
+                _, _, warnings, _ = to_ai(live, turn, ascension=10)
+                self.assertEqual(warnings, [])
+
+    def test_a_respawn_takes_at_most_one_round(self) -> None:
+        # Two respawns, so two rounds at most: twelve moves at round 15 are one short too
+        # many.
+        live, _ = captured("test_subject_round13_third_form", "TEST_SUBJECT_0")
+        _, _, warnings, _ = to_ai(live, 14, ascension=10)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("12 moves at round 15", warnings[0])
 
 
 class Act23ToAiTests(unittest.TestCase):

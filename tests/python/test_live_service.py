@@ -1785,7 +1785,9 @@ class StrategyLabelTests(unittest.TestCase):
         deck = [self.card("StrikeIronclad"), self.card("Bash")]
         label = strategy.label
         self.assertEqual(label({"kind": "rest.heal"}), "Rest")
-        self.assertEqual(label({"kind": "rest.smith", "deck_index": 1}, deck), "Smith Bash")
+        self.assertEqual(
+            label({"kind": "rest.smith", "deck_index": 1}, deck), "Smith Bash"
+        )
         self.assertEqual(
             label({"kind": "shop.remove", "deck_index": 0, "price": 75}, deck),
             "Remove Strike (75g)",
@@ -2156,7 +2158,13 @@ class AnalyzeTests(unittest.TestCase):
             recording = RecordingSearcher(self.searcher)
             with self.subTest(position=path.stem):
                 result = self.analyze(live, recording)
-                self.assertEqual((result["reliable"], result["warnings"]), (True, []))
+                # The search pool's note that its line is the merged best move alone says
+                # nothing about the position (service._LINE_FROM_NO_SEARCH); positions with
+                # many near-equal moves, such as the Queen's, draw it.
+                warnings = [
+                    w for w in result["warnings"] if w != service._LINE_FROM_NO_SEARCH
+                ]
+                self.assertEqual((result["reliable"], warnings), (True, []))
                 self.assertEqual(result["select_mapping_failures"], 0)
                 raw = recording.results[-1]
                 # With one legal move (no energy left: End turn) the search answers at

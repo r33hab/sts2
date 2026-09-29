@@ -2098,6 +2098,136 @@ class DecompiledConsistencyTests(unittest.TestCase):
         self.assertEqual(game - emulator, cards.UNMODELLED_ENCHANTMENTS)
 
 
+# Relic bars read off real Act 2-3 positions (spire-coach autopilot sessions of
+# 2026-09-29, through the coach's own snapshot builder), each holding relics the table had
+# no entry for -- which made every position of theirs not comparable.
+REAL_LATE_RELIC_BARS = {
+    # autopilot-20260929-094048.jsonl, act 3, the Queen, round 4.
+    "the Queen fight": [
+        {"id": "BURNING_BLOOD", "counter": None, "fields": {}},
+        {"id": "SCROLL_BOXES", "counter": None, "fields": {}},
+        {
+            "id": "PENDULUM",
+            "counter": None,
+            "fields": {"_isActivating": True, "TurnsSeen": 0},
+        },
+        {"id": "BAG_OF_PREPARATION", "counter": None, "fields": {}},
+        {"id": "PAELS_TEARS", "counter": None, "fields": {"_hadLeftoverEnergy": True}},
+        {"id": "FROZEN_EGG", "counter": None, "fields": {}},
+        {"id": "VEXING_PUZZLEBOX", "counter": None, "fields": {}},
+        {"id": "LOST_WISP", "counter": None, "fields": {}},
+        {"id": "CLAWS", "counter": None, "fields": {}},
+        {"id": "ETERNAL_FEATHER", "counter": None, "fields": {}},
+    ],
+    # autopilot-20260929-100556.jsonl, act 3, floor 35.
+    "the Test Subject run": [
+        {"id": "BURNING_BLOOD", "counter": None, "fields": {}},
+        {
+            "id": "FISHING_ROD",
+            "counter": 1,
+            "fields": {"_combatsSeen": 10, "CombatsSeen": 10},
+        },
+        {"id": "BRONZE_SCALES", "counter": None, "fields": {}},
+        {"id": "ALCHEMICAL_COFFER", "counter": None, "fields": {}},
+        {"id": "MR_STRUGGLES", "counter": None, "fields": {}},
+        {"id": "RIPPLE_BASIN", "counter": None, "fields": {}},
+        {"id": "WHETSTONE", "counter": None, "fields": {}},
+        {"id": "RUNIC_PYRAMID", "counter": None, "fields": {}},
+    ],
+    # autopilot-20260929-004603.jsonl, act 3, floor 45.
+    "the Whispering Earring run": [
+        {"id": "BURNING_BLOOD", "counter": None, "fields": {}},
+        {"id": "GOLDEN_PEARL", "counter": None, "fields": {}},
+        {"id": "BONE_TEA", "counter": None, "fields": {"CombatsLeft": 0}},
+        {"id": "TOXIC_EGG", "counter": None, "fields": {}},
+        {"id": "KUSARIGAMA", "counter": 1, "fields": {"_attacksPlayedThisTurn": 1}},
+        {"id": "RUNIC_PYRAMID", "counter": None, "fields": {}},
+        {"id": "BAG_OF_MARBLES", "counter": None, "fields": {}},
+        {"id": "WHISPERING_EARRING", "counter": None, "fields": {}},
+        {"id": "BRONZE_SCALES", "counter": None, "fields": {}},
+        {"id": "BIG_MUSHROOM", "counter": None, "fields": {}},
+    ],
+    # autopilot-20260929-095244.jsonl, act 3, floor 35.
+    "the Sere Talon run": [
+        {"id": "BURNING_BLOOD", "counter": None, "fields": {}},
+        {"id": "LEAD_PAPERWEIGHT", "counter": None, "fields": {}},
+        {"id": "ANCHOR", "counter": None, "fields": {}},
+        {
+            "id": "SWORD_OF_STONE",
+            "counter": 2,
+            "fields": {"_elitesDefeated": 2, "ElitesDefeated": 2},
+        },
+        {"id": "ASTROLABE", "counter": None, "fields": {}},
+        {"id": "RIPPLE_BASIN", "counter": None, "fields": {}},
+        {"id": "LUCKY_FYSH", "counter": None, "fields": {}},
+        {
+            "id": "VENERABLE_TEA_SET",
+            "counter": None,
+            "fields": {"GainEnergyInNextCombat": False},
+        },
+        {"id": "SERE_TALON", "counter": None, "fields": {}},
+    ],
+    # autopilot-20260929-002615.jsonl, act 2, floor 19.
+    "the Pael's Horn run": [
+        {"id": "BURNING_BLOOD", "counter": None, "fields": {}},
+        {"id": "PHIAL_HOLSTER", "counter": None, "fields": {}},
+        {"id": "LIZARD_TAIL", "counter": None, "fields": {"WasUsed": False}},
+        {"id": "PAELS_HORN", "counter": None, "fields": {}},
+    ],
+}
+
+
+class LateActRelicTests(unittest.TestCase):
+    """The relics the Act 2-3 sessions held, read against their decompiled classes."""
+
+    def test_every_real_late_act_relic_bar_translates_without_a_warning(self) -> None:
+        for name, bar in REAL_LATE_RELIC_BARS.items():
+            with self.subTest(bar=name):
+                self.assertEqual(relics.translate(bar, turn=3).warnings, [])
+
+    def test_paels_tears_counter_is_last_turns_leftover_energy_flag(self) -> None:
+        # Decompiled PaelsTears.cs: BeforeSideTurnEnd sets `_hadLeftoverEnergy` from the
+        # energy left, AfterSideTurnStart pays 2 energy off it. RelicEffects.cs keeps the
+        # same flag as the Counter, written at turn end and read at the next turn's start.
+        # The mod leaves a false bool out.
+        for fields, counter in (({"_hadLeftoverEnergy": True}, 1), ({}, 0)):
+            with self.subTest(fields=fields):
+                result = relics.translate(
+                    [{"id": "PAELS_TEARS", "counter": None, "fields": fields}],
+                )
+                self.assertEqual(
+                    result.relics,
+                    [{"id": ids.relic_id("PAELS_TEARS"), "counter": counter}],
+                )
+                self.assertEqual(result.warnings, [])
+
+    def test_the_pickup_and_turn_clock_relics_keep_no_counter(self) -> None:
+        # Claws, Astrolabe, Sere Talon, Pael's Horn and Alchemical Coffer act only in
+        # AfterObtained; Lost Wisp (a Power played), Mr. Struggles (the turn number),
+        # Runic Pyramid (no flush), Big Mushroom (turn one's draw) and Whispering Earring
+        # (max energy, and a turn-one auto-play a loaded position is past) read nothing
+        # of their own in combat (decompiled Models.Relics).
+        for entry in (
+            "ALCHEMICAL_COFFER",
+            "ASTROLABE",
+            "BIG_MUSHROOM",
+            "CLAWS",
+            "LOST_WISP",
+            "MR_STRUGGLES",
+            "PAELS_HORN",
+            "RUNIC_PYRAMID",
+            "SERE_TALON",
+            "WHISPERING_EARRING",
+        ):
+            with self.subTest(relic=entry):
+                result = relics.translate([{"id": entry, "counter": 3, "fields": {}}])
+                self.assertEqual(
+                    result.relics,
+                    [{"id": ids.relic_id(entry), "counter": 0}],
+                )
+                self.assertEqual(result.warnings, [])
+
+
 # ── Carried from the Task 1 review (Task 2's addendum) ───────────────────────
 
 
@@ -2854,6 +2984,103 @@ class MalformedPileTests(Refusals):
                     doc = load("player")
                     doc[key] = [value]
                     self.assert_refused(doc, f"{key}[0]")
+
+
+# ── The Queen's Bound ────────────────────────────────────────────────────────
+
+# Real positions of the Queen fight (autopilot-20260929-094048.jsonl, act 3, round 4):
+# Chains of Binding 3 has bound the first three cards drawn; the next position is after the
+# bound Shrug It Off was played, which shuts the other two for the turn. The mod marks a
+# bound card with `affliction: "BOUND"`, which the coach's snapshot carries per card.
+QUEEN = "captured/queen_round4"
+QUEEN_AFTER_SHRUG = "captured/queen_round4_after_shrug_it_off"
+
+
+def _without_afflictions(doc: dict[str, Any]) -> dict[str, Any]:
+    for key in ("hand", "draw_pile", "discard_pile", "exhaust_pile"):
+        for held in doc[key]:
+            held.pop("affliction", None)
+    return doc
+
+
+class BoundTests(unittest.TestCase):
+    """`ChainsOfBindingPower` (decompiled): the first `Amount` cards drawn each turn are
+    afflicted with Bound, and once one Bound card is played `ShouldPlay` refuses the rest
+    until `BeforeSideTurnEnd` clears them. The emulator keeps the affliction on
+    `CardInstance.Bound` and the turn on `BoundCardsThisTurn`/`BoundCardPlayedThisTurn`.
+    """
+
+    @staticmethod
+    def chains_warnings(result: Any) -> list[str]:
+        return [w for w in result.warnings if "CHAINS_OF_BINDING_POWER" in w]
+
+    def test_the_bound_cards_ride_the_cards_and_the_turn_rides_the_counters(
+        self,
+    ) -> None:
+        result = convert.convert(load(QUEEN))
+        self.assertEqual(
+            [held.get("bound", False) for held in result.doc["piles"]["hand"]],
+            [True, True, True, False, False, False],
+        )
+        self.assertEqual(result.doc["counters"]["bound_cards_this_turn"], 3)
+        self.assertFalse(result.doc["counters"]["bound_card_played_this_turn"])
+        self.assertEqual(self.chains_warnings(result), [])
+
+    def test_a_bound_card_played_this_turn_shuts_the_others(self) -> None:
+        # The played Shrug It Off sits in the discard pile still Bound: only a play can
+        # have put it there this turn, and the mod's own verdict agrees -- the two left in
+        # hand read `can_play: false`, "BlockedByHook".
+        result = convert.convert(load(QUEEN_AFTER_SHRUG))
+        self.assertEqual(result.doc["counters"]["bound_cards_this_turn"], 3)
+        self.assertTrue(result.doc["counters"]["bound_card_played_this_turn"])
+        self.assertEqual(
+            [held.get("bound", False) for held in result.doc["piles"]["discard"]],
+            [False, False, False, False, False, True],
+        )
+        self.assertEqual(self.chains_warnings(result), [])
+
+    def test_no_card_played_this_turn_means_no_bound_card_was(self) -> None:
+        doc = load(QUEEN_AFTER_SHRUG)
+        doc["history"]["cards_played_this_turn"] = 0
+        result = convert.convert(doc)
+        self.assertFalse(result.doc["counters"]["bound_card_played_this_turn"])
+
+    def test_a_snapshot_without_afflictions_still_warns(self) -> None:
+        result = convert.convert(_without_afflictions(load(QUEEN_AFTER_SHRUG)))
+        self.assertEqual(len(self.chains_warnings(result)), 1)
+        self.assertFalse(
+            any(held.get("bound") for held in result.doc["piles"]["hand"]),
+        )
+
+    def test_an_unknown_affliction_is_refused(self) -> None:
+        doc = load(QUEEN)
+        doc["hand"][0]["affliction"] = "NOT_AN_AFFLICTION"
+        with self.assertRaises(live.ConversionError) as caught:
+            convert.convert(doc)
+        self.assertEqual(caught.exception.path, "hand[0].affliction")
+
+    def test_the_afflictions_are_the_games(self) -> None:
+        folder = DECOMPILED / "MegaCrit.Sts2.Core.Models.Afflictions"
+        self.assertEqual(
+            {ids.game_entry(path.stem) for path in folder.glob("*.cs")},
+            set(convert.AFFLICTIONS),
+        )
+
+    def test_the_emulator_refuses_a_second_bound_card(self) -> None:
+        # What the search may play is what the game allows: the mod read MAUL and BASH as
+        # `can_play: false` ("BlockedByHook") and DECAY as unplayable, the rest playable.
+        live_doc = load(QUEEN_AFTER_SHRUG)
+        doc = convert.convert(live_doc).doc
+        handle = native.load_combat_snapshot(doc, 0)
+        try:
+            legal = native.valid_actions(handle, len(doc["piles"]["hand"]) + 1)
+            shown = [held["id"] for held in live_doc["hand"]]
+            self.assertEqual(
+                [shown[i] for i in range(len(shown)) if legal[i]],
+                ["DEFEND_IRONCLAD", "DEFEND_IRONCLAD", "STRIKE_IRONCLAD"],
+            )
+        finally:
+            native.destroy(handle)
 
 
 if __name__ == "__main__":

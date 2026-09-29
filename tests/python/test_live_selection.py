@@ -1463,6 +1463,65 @@ class SchemaTests(unittest.TestCase):
         self.assertIsNotNone(convert.convert(live_doc).doc["pending_selection"])
 
 
+# Real screens with a card already picked (autopilot-20260929-095244.jsonl): the mod
+# lists a picked card in `selected_uids` and no longer among the candidates, while it
+# stays in its pile until the screen is confirmed.
+LIVE = FIXTURES.parent
+
+
+def picked_screen(name: str) -> dict[str, Any]:
+    return json.loads((LIVE / "picked" / f"{name}.json").read_text(encoding="utf-8"))
+
+
+class PickedCardTests(unittest.TestCase):
+    """A card picked on the screen is accepted and offered again: `selected_uids` are
+    toggles the game has not acted on, so the emulator's screen starts with no pick made
+    (`to_pending`) and offers every card the game offered."""
+
+    def test_gamblers_brew_offers_the_picked_shame_again(self) -> None:
+        live_doc = picked_screen("devoted_sculptor_round2_gamblers_brew_shame_picked")
+        self.assertEqual(live_doc["pending_selection"]["selected_uids"], ["SHAME#0"])
+        result = convert.convert(live_doc)
+        self.assertEqual(result.warnings, [])
+        # Strike, Shame and Wish: the whole hand, as the potion offered it.
+        self.assertEqual(result.doc["pending_selection"]["candidates"], [0, 1, 2])
+
+    def test_brand_offers_the_picked_defend_again(self) -> None:
+        live_doc = picked_screen("corpse_slugs_round1_brand_defend_picked")
+        self.assertEqual(
+            live_doc["pending_selection"]["selected_uids"],
+            ["DEFEND_IRONCLAD#1"],
+        )
+        result = convert.convert(live_doc)
+        self.assertEqual(result.warnings, [])
+        self.assertEqual(
+            [
+                live_doc["hand"][i]["uid"]
+                for i in result.doc["pending_selection"]["candidates"]
+            ],
+            ["STRIKE_IRONCLAD#1", "STRIKE_IRONCLAD#3", "DEFEND_IRONCLAD#1"],
+        )
+
+    def test_the_picked_screen_converts_as_the_screen_before_the_pick(self) -> None:
+        picked = convert.convert(
+            picked_screen("devoted_sculptor_round2_gamblers_brew_shame_picked"),
+        )
+        opened = convert.convert(
+            json.loads(
+                (
+                    LIVE
+                    / "captured"
+                    / "devoted_sculptor_round2_gamblers_brew_open.json"
+                ).read_text(encoding="utf-8"),
+            ),
+        )
+        self.assertEqual(opened.warnings, [])
+        self.assertEqual(
+            picked.doc["pending_selection"],
+            opened.doc["pending_selection"],
+        )
+
+
 # ── The table ────────────────────────────────────────────────────────────────
 
 

@@ -1,0 +1,258 @@
+{
+  "schema": "sts2-live-snapshot/1",
+  "game_version": "v0.107.1",
+  "character": "IRONCLAD",
+  "ascension": 10,
+  "act": 2,
+  "floor": 23,
+  "room_type": "monster",
+  "round": 4,
+  "player": {
+    "hp": 8974,
+    "max_hp": 9000,
+    "block": 8,
+    "energy": 1,
+    "max_energy": 3,
+    "gold": 62,
+    "stars": 0,
+    "osty": null,
+    "orbs": {
+      "slots": 0,
+      "list": []
+    },
+    "powers": [
+      {
+        "id": "THORNS_POWER",
+        "amount": 3
+      },
+      {
+        "id": "WEAK_POWER",
+        "amount": 1
+      }
+    ],
+    "relics": [
+      {
+        "id": "BURNING_BLOOD",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "FISHING_ROD",
+        "counter": 1,
+        "fields": {
+          "_combatsSeen": 7,
+          "CombatsSeen": 7
+        }
+      },
+      {
+        "id": "BRONZE_SCALES",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "ALCHEMICAL_COFFER",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "MR_STRUGGLES",
+        "counter": null,
+        "fields": {}
+      }
+    ],
+    "potions": [
+      {
+        "slot": 0,
+        "id": null
+      },
+      {
+        "slot": 1,
+        "id": null
+      },
+      {
+        "slot": 2,
+        "id": null
+      },
+      {
+        "slot": 3,
+        "id": null
+      },
+      {
+        "slot": 4,
+        "id": "BLESSING_OF_THE_FORGE"
+      },
+      {
+        "slot": 5,
+        "id": null
+      }
+    ],
+    "max_potion_slots": 6
+  },
+  "hand": [
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": true,
+      "uid": "STRIKE_IRONCLAD#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "BASH",
+      "upgraded": true,
+      "uid": "BASH#0",
+      "cost": 2,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": true,
+      "uid": "DEFEND_IRONCLAD#3",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    }
+  ],
+  "draw_pile": [
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": true,
+      "uid": "DEFEND_IRONCLAD#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": true,
+      "uid": "DEFEND_IRONCLAD#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": true,
+      "uid": "STRIKE_IRONCLAD#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    }
+  ],
+  "discard_pile": [
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": true,
+      "uid": "DEFEND_IRONCLAD#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": true,
+      "uid": "STRIKE_IRONCLAD#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    }
+  ],
+  "exhaust_pile": [
+    {
+      "id": "ASCENDERS_BANE",
+      "upgraded": false,
+      "uid": "ASCENDERS_BANE#0",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    }
+  ],
+  "known_draw_top": [],
+  "known_draw_bottom": [],
+  "enemies": [
+    {
+      "entity_id": "BOWLBUG_ROCK_0",
+      "id": "BOWLBUG_ROCK",
+      "slot": 0,
+      "hp": 24,
+      "max_hp": 46,
+      "block": 0,
+      "powers": [
+        {
+          "id": "IMBALANCED_POWER",
+          "amount": 1
+        }
+      ],
+      "intents": [
+        {
+          "type": "STUN",
+          "damage": null,
+          "base_damage": null,
+          "hits": null
+        }
+      ],
+      "move_id": "STUNNED",
+      "state_log": [
+        "HEADBUTT_MOVE",
+        "HEADBUTT_MOVE"
+      ],
+      "ai_fields": {
+        "_isOffBalance": true,
+        "IsOffBalance": true
+      }
+    },
+    {
+      "entity_id": "BOWLBUG_SILK_0",
+      "id": "BOWLBUG_SILK",
+      "slot": 1,
+      "hp": 27,
+      "max_hp": 43,
+      "block": 0,
+      "powers": [],
+      "intents": [
+        {
+          "type": "ATTACK",
+          "damage": 5,
+          "base_damage": 5,
+          "hits": 2
+        }
+      ],
+      "move_id": "THRASH_MOVE",
+      "state_log": [
+        "TOXIC_SPIT_MOVE",
+        "THRASH_MOVE",
+        "TOXIC_SPIT_MOVE",
+        "THRASH_MOVE"
+      ],
+      "ai_fields": {
+        "ThrashDamage": 5
+      }
+    }
+  ],
+  "history": {
+    "cards_played_this_turn": 2,
+    "cards_played_this_combat": 11,
+    "attacks_played_this_turn": 1,
+    "skills_played_this_turn": 1
+  },
+  "pending_selection": null
+}

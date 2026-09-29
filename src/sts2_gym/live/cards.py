@@ -97,6 +97,10 @@ def to_emu_card(
     if info is None:  # pragma: no cover - card_id only returns generated ids
         raise ConversionError(f"card {card['id']!r} has no CardDef", path=f"{path}.id")
     emu: dict[str, Any] = {"def_id": def_id, "upgraded": card["upgraded"]}
+    # Bound is the one affliction the emulator keeps on the copy (`CardInstance.Bound`);
+    # the others act through the power that afflicts the cards (convert.AFFLICTIONS).
+    if card.get("affliction") == "BOUND":
+        emu["bound"] = True
 
     enchantment, amount = card["enchantment"], card["enchant_amount"]
     if enchantment is None and amount is not None:

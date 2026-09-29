@@ -93,6 +93,19 @@ _ALWAYS = {"whispering_earring_spent": True}
 # The one card that reads an enemy's powered hits this turn (CardEffects.cs:7076-7087).
 _BEAT_INTO_SHAPE = "BEAT_INTO_SHAPE"
 
+# The game's card afflictions (decompiled MegaCrit.Sts2.Core.Models.Afflictions), which
+# the mod reports per card as `affliction` and the coach's snapshot carries as the card's
+# optional `affliction` key (schema section 1, amended 2026-09-29). Only Bound rides the
+# emulator's card (`CardInstance.Bound`, the snapshot's `bound`); each of the others says
+# its logic lives in the power that afflicts the cards (TangledPower, GalvanicPower,
+# HexPower, RingingPower, SmoggyPower, TaintedPower), which is what the converter carries.
+AFFLICTIONS = frozenset(
+    {"BOUND", "ENTANGLED", "GALVANIZED", "HEXED", "RINGING", "SMOG", "TAINTED"},
+)
+_BOUND = "BOUND"
+_CHAINS_OF_BINDING = "CHAINS_OF_BINDING_POWER"
+_BOUND_COUNTERS = ("bound_cards_this_turn", "bound_card_played_this_turn")
+
 
 @dataclass
 class ConversionResult:
@@ -111,6 +124,7 @@ def counter_names() -> frozenset[str]:
         | powers.COMBAT_COUNTER_NAMES
         | relics.combat_counter_names()
         | frozenset(_ALWAYS)
+        | frozenset(_BOUND_COUNTERS)
     )
 
 
@@ -207,6 +221,7 @@ def _card(value: object, path: str) -> dict[str, Any]:
         value,
         path,
         ("id", "upgraded", "uid", "cost", "enchantment", "enchant_amount", "fields"),
+        ("affliction",),
     )
     _str(card["id"], _at(path, "id"))
     _bool(card["upgraded"], _at(path, "upgraded"))
@@ -215,6 +230,12 @@ def _card(value: object, path: str) -> dict[str, Any]:
     _str_or_none(card["enchantment"], _at(path, "enchantment"))
     _int_or_none(card["enchant_amount"], _at(path, "enchant_amount"))
     _primitives(card["fields"], _at(path, "fields"))
+    affliction = _str_or_none(card.get("affliction"), _at(path, "affliction"))
+    if affliction is not None and affliction not in AFFLICTIONS:
+        raise ConversionError(
+            f"unknown affliction {affliction!r}",
+            path=_at(path, "affliction"),
+        )
     return card
 
 
@@ -557,16 +578,102 @@ def _powered_hits(piles: dict[str, Any], history: dict[str, int]) -> list[str]:
     ]
 
 
-def _pending_selection(value: object) -> dict[str, Any] | None:
+def _afflictions_carried(top: dict[str, Any]) -> bool:
+    """Say whether the snapshot carries every card's affliction (the optional key).
+
+    A coach from before the key sends none, and then which cards are Bound is unknown.
+    Read before the piles are validated, which happens later and refuses a malformed one.
+    """
+    piles = [
+        top.get(key) for key in ("hand", "draw_pile", "discard_pile", "exhaust_pile")
+    ]
+    return all(
+        isinstance(pile, list)
+        and all(isinstance(card, dict) and "affliction" in card for card in pile)
+        for pile in piles
+    )
+
+
+def _bound_turn(
+    player_powers: list[dict[str, Any]],
+    piles: tuple[list[dict[str, Any]], ...],
+    played: dict[str, Any] | None,
+    history: dict[str, int],
+) -> tuple[dict[str, int | bool], list[str]]:
+    """Rebuild the Chains of Binding turn off the Bound cards: its counters and warnings.
+
+    `piles` is the validated hand, whole draw pile, discard and exhaust piles, and `played`
+    the card a selection is waiting on, still in the play pile. Bound is only ever put on a
+    card drawn this turn and cleared from every card at the turn's end
+    (`ChainsOfBindingPower.AfterCardDrawn`, `BeforeSideTurnEnd`), so the Bound cards held
+    are the ones the power bound this turn -- the game counts its afflictions this turn
+    off the combat history, `BoundCardsThisTurn` in the emulator. A Bound card that has
+    left the hand for the discard or exhaust pile was played, and a play is what latches
+    `BeforeCardPlayed`'s `boundCardPlayed` (`BoundCardPlayedThisTurn`); with no card played
+    this turn, none was. The live mod agrees wherever both can be seen: the Bound cards
+    still in hand read `can_play: false`, "BlockedByHook", exactly when one sits in those
+    piles.
+
+    What the cards cannot show is a Bound Power card played, which leaves every pile; when
+    one could have been (something other than an Attack or Skill was played this turn) and
+    fewer cards are Bound than the power binds, the count may be short, and a warning says
+    so.
+    """
+    amount = sum(
+        power["amount"] for power in player_powers if power["id"] == _CHAINS_OF_BINDING
+    )
+    if amount <= 0:
+        return {}, []
+    hand, draw, discard, exhaust = piles
+    played_bound = played is not None and played.get("affliction") == _BOUND
+    bound = played_bound + sum(
+        card.get("affliction") == _BOUND
+        for pile in (hand, draw, discard, exhaust)
+        for card in pile
+    )
+    left_the_hand = played_bound or any(
+        card.get("affliction") == _BOUND for card in (*discard, *exhaust)
+    )
+    counters: dict[str, int | bool] = {
+        "bound_cards_this_turn": bound,
+        "bound_card_played_this_turn": left_the_hand
+        and history.get("cards_played_this_turn") != 0,
+    }
+    warnings = []
+    kinds = ("cards_played_this_turn", "attack_cards_played_this_turn")
+    if bound < amount and all(key in history for key in kinds):
+        other = (
+            history["cards_played_this_turn"]
+            - history["attack_cards_played_this_turn"]
+            - history.get("skill_cards_played_this_turn", 0)
+        )
+        if other > 0:
+            warnings.append(
+                f"player.powers: {_CHAINS_OF_BINDING}: {bound} Bound card(s) held of the "
+                f"{amount} it binds a turn, and a card other than an Attack or Skill was "
+                "played this turn: a Bound Power card leaves every pile once played, so "
+                "BoundCardsThisTurn may be short",
+            )
+    return counters, warnings
+
+
+def _pending_selection(
+    value: object,
+    piles: tuple[list[dict[str, Any]], ...] = (),
+) -> dict[str, Any] | None:
     """Check a pending in-combat selection against schema section 1.1.
 
     `played_card` is optional: a coach that predates it leaves it out, which reads as
-    null, the card unknown.
+    null, the card unknown. `piles` are the validated live piles: a card the player has
+    picked leaves the mod's candidates but stays in its pile until the screen is
+    confirmed, so a toggled uid is a candidate's or a pile card's (`selection.to_pending`
+    offers it again).
 
     Raises:
         ConversionError: for an undefined field, a malformed value, an unknown source or
             candidate id, more than one source, a played card that is not the source card,
-            or a toggled uid no candidate carries.
+            or a toggled uid no candidate carries and, outside a CHOOSE screen, no pile
+            card either.
 
     """
     if value is None:
@@ -637,10 +744,14 @@ def _pending_selection(value: object) -> dict[str, Any] | None:
         raise ConversionError(f"min {low} is above max {high}", path=f"{path}.min")
     _bool(pending["can_skip"], f"{path}.can_skip")
     offered = {card["uid"] for card in candidates if card["uid"] is not None}
+    # A CHOOSE screen's cards are generated and in no pile, so a pick off its offer
+    # cannot be found; `selection.to_pending` says so rather than refusing the document.
+    if kind != "CHOOSE":
+        offered |= {card["uid"] for pile in piles for card in pile if card["uid"]}
     for i, uid in enumerate(_list(pending["selected_uids"], f"{path}.selected_uids")):
-        if _str(uid, f"{path}.selected_uids[{i}]") not in offered:
+        if _str(uid, f"{path}.selected_uids[{i}]") not in offered and kind != "CHOOSE":
             raise ConversionError(
-                "not the uid of a candidate",
+                "not the uid of a candidate, or of a card in the piles",
                 path=f"{path}.selected_uids[{i}]",
             )
     return pending
@@ -740,11 +851,15 @@ def convert(live: dict[str, Any]) -> ConversionResult:
         for key in ("hp", "max_hp", "block", "energy", "max_energy", "gold", "stars")
     }
     player_powers = _powers(player["powers"], "player.powers")
+    # With every card's affliction carried, the Bound cards are known, and the rest of
+    # the Chains of Binding turn is rebuilt off them once the piles are read (`_bound_turn`).
+    afflictions_carried = _afflictions_carried(top)
     buffs = powers.to_buffs(
         player_powers,
         owner="player",
         path="player.powers",
         warnings=warnings,
+        afflictions_carried=afflictions_carried,
     )
 
     live_relics = _list(player["relics"], "player.relics")
@@ -766,7 +881,10 @@ def convert(live: dict[str, Any]) -> ConversionResult:
     discard = _cards(top["discard_pile"], "discard_pile")
     exhaust = _cards(top["exhaust_pile"], "exhaust_pile")
     draw = _draw_regions(top)
-    live_pending = _pending_selection(top["pending_selection"])
+    live_pending = _pending_selection(
+        top["pending_selection"],
+        (hand, discard, exhaust, [*draw[0], *(card for _, card in draw[1]), *draw[2]]),
+    )
     pending = None
     # The live selection, once it maps; a card that opened it has a play to finish.
     opened: dict[str, Any] | None = None
@@ -791,6 +909,15 @@ def convert(live: dict[str, Any]) -> ConversionResult:
         path="player.powers",
     )
     warnings.extend(power_warnings)
+    bound_counters: dict[str, int | bool] = {}
+    if afflictions_carried:
+        bound_counters, bound_warnings = _bound_turn(
+            player_powers,
+            (hand, _cards(top["draw_pile"], "draw_pile"), discard, exhaust),
+            opened.get("played_card") if opened is not None else None,
+            history,
+        )
+        warnings.extend(bound_warnings)
 
     osty_hp, osty_max_hp = _osty(player["osty"])
     corruption = any(buff["id"] == powers.buff_id("CORRUPTION_POWER") for buff in buffs)
@@ -860,7 +987,13 @@ def convert(live: dict[str, Any]) -> ConversionResult:
             # With the play a selection is waiting on counted, as the emulator has.
             cards_played_this_combat=history.get("cards_played_this_combat"),
         ),
-        "counters": {**history, **power_counters, **relic_state.counters, **_ALWAYS},
+        "counters": {
+            **history,
+            **power_counters,
+            **relic_state.counters,
+            **bound_counters,
+            **_ALWAYS,
+        },
         "pending_selection": pending,
     }
     if opened is not None and played is not None:

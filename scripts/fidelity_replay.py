@@ -12,6 +12,26 @@ those, how many matched or mismatched), and -- for the checks that were not comp
 -- the reasons grouped by template, each with the enemy/power/card/relic ids seen and
 how many checks hit it. A mismatched field is also listed with its count.
 
+Two kinds of check are not the game playing a move, and are not comparable, with the
+reason given, before anything is simulated:
+
+- "debug action": a debug or HP-buffer action lands between the check's positions
+  (`sts2_gym.live.sessionlog.tainted_checks`) -- the autopilot's `debug_gain_max_hp`
+  top-ups (kind `buffer`), its `debug_kill_enemy` (kind `debug`), a `debug_*` command in
+  the mod's action log -- so the position after is not the one the move made;
+- "same position": the position after has the position before's fingerprint (its
+  state_type, battle, player and run unchanged), so the game did not act on the move --
+  a card it refused, a pick it ignored, a toggle it has not confirmed.
+
+A check's two positions are the state records logged around it
+(`sessionlog.check_positions`), not whichever record its fingerprint names last: a
+selection screen keeps its fingerprint while picks are made on it.
+
+The mod reports each card's `affliction`, which the coach's snapshot builder does not copy
+yet; it is copied here off the same raw card by uid (`sessionlog.carry_afflictions`) --
+a no-op once the coach carries it -- so a position under Chains of Binding converts with
+its Bound cards.
+
 `evaluate()` is the reusable half of this: the same replay, minus the printing, as a
 list of per-check `CheckOutcome`s a caller can regroup its own way. `coach.
 fidelity_scoreboard` (spire-coach) is that caller: it reruns this over every captured
@@ -41,14 +61,16 @@ from typing import Any
 _REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO / "src"))
 _SPIRE_COACH = Path(
-    os.environ.get("SPIRE_COACH_REPO", Path.home() / "Documents" / "git" / "spire-coach"),
+    os.environ.get(
+        "SPIRE_COACH_REPO", Path.home() / "Documents" / "git" / "spire-coach"
+    ),
 )
 sys.path.insert(0, str(_SPIRE_COACH))
 
 from coach.snapshot import SnapshotError, build_live_snapshot  # noqa: E402
 
 from sts2_gym import native  # noqa: E402
-from sts2_gym.live import ConversionError, fidelity, moves  # noqa: E402
+from sts2_gym.live import ConversionError, fidelity, moves, sessionlog  # noqa: E402
 
 # The service's own target (`service.GAME_VERSION_TARGET`); convert() only type-checks
 # this field, so any string works, but this is what a healthy coach would have sent.
@@ -86,11 +108,16 @@ class _Endpoint:
         self.act = run.get("act")
 
 
-def _index_states(records: list[dict[str, Any]]) -> dict[str, _Endpoint]:
-    """Replay `coach.live._on_settled`'s room_type bookkeeping over the whole log."""
-    endpoints: dict[str, _Endpoint] = {}
+def _index_states(records: list[dict[str, Any]]) -> dict[int, _Endpoint]:
+    """Replay `coach.live._on_settled`'s room_type bookkeeping over the whole log.
+
+    Keyed by the state record's index: a fingerprint can name several records (a position
+    reached twice, a selection screen whose picks it leaves out), and a check's positions
+    are the ones logged around it (`sessionlog.check_positions`).
+    """
+    endpoints: dict[int, _Endpoint] = {}
     running_room_type: str | None = None
-    for rec in records:
+    for index, rec in enumerate(records):
         if rec["kind"] != "state":
             continue
         payload = rec["payload"]
@@ -104,7 +131,7 @@ def _index_states(records: list[dict[str, Any]]) -> dict[str, _Endpoint]:
             running_room_type = decision["room_type"]
         elif kind == _NON_COMBAT:
             running_room_type = None
-        endpoints[payload["fingerprint"]] = _Endpoint(payload["state"], room_type)
+        endpoints[index] = _Endpoint(payload["state"], room_type)
     return endpoints
 
 
@@ -298,9 +325,25 @@ def _mark_not_comparable(
 
 _MOVE_FIELDS = frozenset(f.name for f in dataclasses.fields(moves.Move))
 
+_SAME_POSITION = (
+    "same position: the game shows the position before the move again (the same "
+    "fingerprint), so it did not act on the move"
+)
+
+
+def _debug_reason(action: sessionlog.DebugAction) -> str:
+    """The not-comparable reason for a check a debug or HP-buffer action lands inside."""
+    what = f"an HP buffer ({action.name})" if action.hp_buffer else action.name
+    return (
+        f"debug action: {what} lands between the positions before and after the move, "
+        "so the position after is not the one the move made"
+    )
+
 
 def evaluate(
-    records: list[dict[str, Any]], *, resamples: int = fidelity.DEFAULT_RESAMPLES,
+    records: list[dict[str, Any]],
+    *,
+    resamples: int = fidelity.DEFAULT_RESAMPLES,
 ) -> ReplayResult:
     """Replay every `check` record in `records`, the same loop `main` used to run inline.
 
@@ -309,7 +352,11 @@ def evaluate(
     snapshot/converter/simulator walk that produced them.
     """
     endpoints = _index_states(records)
-    checks = [rec for rec in records if rec["kind"] == "check"]
+    positions = sessionlog.check_positions(records)
+    checks = [
+        (index, rec) for index, rec in enumerate(records) if rec["kind"] == "check"
+    ]
+    tainted = sessionlog.tainted_checks(records)
 
     stats: dict[str, _ActStats] = defaultdict(_ActStats)
     outcomes: list[CheckOutcome] = []
@@ -317,7 +364,7 @@ def evaluate(
     skipped_no_endpoint = 0
     logged_errors = 0
 
-    for rec in checks:
+    for index, rec in checks:
         payload = rec["payload"]
         if "result" not in payload:
             if "error" in payload:
@@ -325,44 +372,78 @@ def evaluate(
             else:
                 skipped_no_post += 1
             continue
-        pre_ep = endpoints.get(payload["pre_fingerprint"])
-        post_ep = endpoints.get(payload["post_fingerprint"])
-        if pre_ep is None or post_ep is None:
+        if index not in positions:
             skipped_no_endpoint += 1
             continue
+        pre_ep, post_ep = (endpoints[at] for at in positions[index])
 
         act_key = _act_key(pre_ep.act)
         act_stats = stats[act_key]
         act_stats.replayed += 1
         # A logged move can carry search statistics (a MoveStat: visits, value_mean, ...);
         # only the Move fields identify it.
-        move = moves.Move(**{k: v for k, v in payload["move"].items() if k in _MOVE_FIELDS})
+        move = moves.Move(
+            **{k: v for k, v in payload["move"].items() if k in _MOVE_FIELDS}
+        )
+
+        if index in tainted:
+            _mark_not_comparable(
+                act_stats,
+                outcomes,
+                act_key,
+                move.kind,
+                _debug_reason(tainted[index]),
+            )
+            continue
+        if payload["pre_fingerprint"] == payload["post_fingerprint"]:
+            _mark_not_comparable(
+                act_stats, outcomes, act_key, move.kind, _SAME_POSITION
+            )
+            continue
 
         try:
             pre_live = build_live_snapshot(
-                pre_ep.state, game_version=GAME_VERSION, room_type=pre_ep.room_type,
+                pre_ep.state,
+                game_version=GAME_VERSION,
+                room_type=pre_ep.room_type,
             )
         except SnapshotError as error:
             _mark_not_comparable(
-                act_stats, outcomes, act_key, move.kind, f"pre: snapshot: {error}",
+                act_stats,
+                outcomes,
+                act_key,
+                move.kind,
+                f"pre: snapshot: {error}",
             )
             continue
         try:
             post_live = build_live_snapshot(
-                post_ep.state, game_version=GAME_VERSION, room_type=post_ep.room_type,
+                post_ep.state,
+                game_version=GAME_VERSION,
+                room_type=post_ep.room_type,
             )
         except SnapshotError as error:
             _mark_not_comparable(
-                act_stats, outcomes, act_key, move.kind, f"post: snapshot: {error}",
+                act_stats,
+                outcomes,
+                act_key,
+                move.kind,
+                f"post: snapshot: {error}",
             )
             continue
 
+        sessionlog.carry_afflictions(pre_ep.state, pre_live)
+        sessionlog.carry_afflictions(post_ep.state, post_live)
         try:
             result = fidelity.check(pre_live, move, post_live, resamples=resamples)
         except ConversionError as error:
             path = getattr(error, "path", None)
             _mark_not_comparable(
-                act_stats, outcomes, act_key, move.kind, f"conversion ({path}): {error}",
+                act_stats,
+                outcomes,
+                act_key,
+                move.kind,
+                f"conversion ({path}): {error}",
             )
             continue
         except native.SnapshotError as error:
@@ -376,7 +457,11 @@ def evaluate(
             continue
         except moves.MappingError as error:
             _mark_not_comparable(
-                act_stats, outcomes, act_key, move.kind, f"mapping: {error}",
+                act_stats,
+                outcomes,
+                act_key,
+                move.kind,
+                f"mapping: {error}",
             )
             continue
 
@@ -385,7 +470,12 @@ def evaluate(
                 act_stats.add_warning(warning)
             outcomes.append(
                 CheckOutcome(
-                    act_key, move.kind, False, None, tuple(result["warnings"]), (),
+                    act_key,
+                    move.kind,
+                    False,
+                    None,
+                    tuple(result["warnings"]),
+                    (),
                 ),
             )
             continue
