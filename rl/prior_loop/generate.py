@@ -195,7 +195,7 @@ def _part(
     path: str,
 ) -> None:
     """Play one part in its own process and write it whole (tmp, then rename)."""
-    loop.ensure_nice()
+    loop.worker_init()
     result = _slice((fights, policy, settings))
     arrays = {
         key: _stack(key, result["arrays"][key], int(settings["sims"])) for key in KEYS

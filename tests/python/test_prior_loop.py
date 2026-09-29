@@ -8,10 +8,12 @@ which generates, trains and evaluates at a few simulations on one encounter.
 
 import gzip
 import json
+import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from collections import Counter
 from pathlib import Path
 from unittest import mock
 
@@ -38,7 +40,11 @@ from rl.prior_loop import cli, generate, loop, real_fights  # noqa: E402
 
 # The frozen set's own hash. Changing fight_set.json changes this; it must not change.
 FIGHT_SET_SHA256 = "8acde2f68b456b80e6dc05aca6544415f179a3617961749af0aba46021e3c124"
-REAL_SET_SHA256 = "8365dd42a35fbd1459fa646b1699484a602cf07ebd8e7d52f6a68a524cbe9d72"
+REAL_SET_SHA256 = "32689d29660c963de8f02b195863e5922babdf18e52cba071170facc0e1b8aec"
+# The first 600 fights: the set as it was before it grew to 2,000.
+REAL_SET_FIRST_600_SHA256 = (
+    "8365dd42a35fbd1459fa646b1699484a602cf07ebd8e7d52f6a68a524cbe9d72"
+)
 
 
 def fake_blob(
@@ -612,11 +618,20 @@ class RealFightsTest(unittest.TestCase):
     def test_the_gate_set_is_frozen_and_held_out(self):
         fights = real_fights.load_real_set()
         self.assertEqual(loop.fight_set_sha256(fights), REAL_SET_SHA256)
-        self.assertEqual(len(fights), 600)
+        self.assertEqual(len(fights), 2000)
+        # It grew by appending: the first 600 are the fights every earlier gate read.
+        self.assertEqual(loop.fight_set_sha256(fights[:600]), REAL_SET_FIRST_600_SHA256)
+        self.assertEqual(
+            Counter(f["group"] for f in fights),
+            {"hallway": 800, "elite": 600, "boss": 600},
+        )
+        self.assertEqual([f["index"] for f in fights], list(range(2000)))
+        self.assertEqual(len({f["seed"] for f in fights}), 2000)
+        self.assertEqual(len({f["source"] for f in fights}), 2000)
         for fight in fights:
             shard = Path(fight["source"].split(":")[0])
             self.assertTrue(real_fights.held_out(shard), fight["source"])
-        self.assertGreater(sum(1 for f in fights if f["potions"]), 150)
+        self.assertGreater(sum(1 for f in fights if f["potions"]), 500)
         self.assertTrue(real_fights.held_out(Path("r0005.jsonl.gz")))
         self.assertFalse(real_fights.held_out(Path("r0006.jsonl.gz")))
 
@@ -659,6 +674,86 @@ class RealFightsTest(unittest.TestCase):
             self.assertEqual(state_json["encounter_id"], 62)
         finally:
             combat.close()
+
+
+def hold_workers(kind: str, out: str) -> None:
+    """Start the loop's workers on fights far longer than any test, and wait on them."""
+    fight = loop.load_fight_set()[0]
+    fights = [{**fight, "index": i} for i in range(2)]
+    settings = {"ascension": 10, "sims": 10**7, "c": 0.1, "c_puct": 0.2, "workers": 2}
+    if kind == "generate":
+        generate.generate(fights, settings, Path(out) / "generated.npz", part_size=1)
+    else:
+        loop.evaluate_fights(fights, None, settings)
+
+
+def spawned_children(pid: int) -> list[int]:
+    """List the processes `pid` spawned through multiprocessing, its resource tracker aside."""
+    found = subprocess.run(
+        ["ps", "-A", "-o", "pid=,ppid=,command="],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    out = []
+    for line in found.stdout.splitlines():
+        child, parent, command = line.split(None, 2)
+        if int(parent) == pid and "spawn_main" in command:
+            out.append(int(child))
+    return out
+
+
+def alive(pid: int) -> bool:
+    return subprocess.run(["kill", "-0", str(pid)], capture_output=True).returncode == 0
+
+
+class OrphanTest(unittest.TestCase):
+    """The loop's workers exit when it is stopped: SIGTERM kills it outright."""
+
+    def test_the_workers_go_when_the_loop_does(self):
+        here = Path(__file__).resolve().parent
+        for kind in ("generate", "evaluate"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                # A process of its own, as the loop is: not a multiprocessing child, which
+                # `evaluate_fights` would play in-process rather than nest a pool.
+                parent = subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-c",
+                        f"import test_prior_loop as t; t.hold_workers({kind!r}, {tmp!r})",
+                    ],
+                    cwd=here,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                workers: list[int] = []
+                try:
+                    deadline = time.monotonic() + 120
+                    while len(workers := spawned_children(parent.pid)) < 2:
+                        self.assertIsNone(parent.poll(), "the loop ended by itself")
+                        self.assertLess(
+                            time.monotonic(),
+                            deadline,
+                            "no workers started",
+                        )
+                        time.sleep(0.2)
+                    time.sleep(2.0)  # into their first fight
+                    parent.terminate()
+                    parent.wait(timeout=30)
+                    deadline = time.monotonic() + 15
+                    while any(alive(pid) for pid in workers):
+                        self.assertLess(
+                            time.monotonic(),
+                            deadline,
+                            f"workers outlived the loop: {[p for p in workers if alive(p)]}",
+                        )
+                        time.sleep(0.2)
+                finally:
+                    if parent.poll() is None:
+                        parent.kill()
+                        parent.wait()
+                    for pid in workers:
+                        subprocess.run(["kill", "-9", str(pid)], capture_output=True)
 
 
 class CliTest(unittest.TestCase):

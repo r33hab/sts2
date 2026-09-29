@@ -12,6 +12,8 @@ the test: a shard whose index is a multiple of `HOLD_OUT_EVERY` is held out.
 
 - `freeze_real_set` samples the held-out gate set from the full-run job's newest held-out
   shards and freezes it in `real_fight_set.json`, like the design's fixed set.
+  `extend_real_set` grew it from 600 fights to 2,000 (generations 3-4, then 5-18): the
+  gate's CI on 600 fights could not tell a +0.3 HP challenger from none.
 - `training_fights` samples the fights the prior trains on from every other shard of the
   full-run job and the stage-2 job.
 
@@ -158,10 +160,11 @@ def fight_spec(
 def specs(
     sampled: Sequence[tuple[int, str, dict[str, Any]]],
     first_seed: int,
+    first_index: int = 0,
 ) -> list[dict[str, Any]]:
     return [
         fight_spec(kind, source, fight, index, first_seed + index)
-        for index, (kind, source, fight) in enumerate(sampled)
+        for index, (kind, source, fight) in enumerate(sampled, start=first_index)
     ]
 
 
@@ -200,10 +203,56 @@ def freeze_real_set(
         "sha256": loop.fight_set_sha256(fights),
         "fights": fights,
     }
+    _write_set(path, data)
+    return data
+
+
+def _write_set(path: Path, data: dict[str, Any]) -> None:
     head = {key: value for key, value in data.items() if key != "fights"}
     text = json.dumps(head, indent=2)[:-2] + ',\n  "fights": [\n'
-    text += ",\n".join("    " + json.dumps(fight) for fight in fights)
+    text += ",\n".join("    " + json.dumps(fight) for fight in data["fights"])
     Path(path).write_text(text + "\n  ]\n}\n")
+
+
+def extend_real_set(
+    path: Path = REAL_SET,
+    generations: Sequence[int] = tuple(range(5, 19)),
+    per_kind: dict[int, int] | None = None,
+    seed: int = 1,
+) -> dict[str, Any]:
+    """Append fights from more held-out shards to the frozen gate set, keeping its own.
+
+    The fights already there stay first and unchanged, so an evaluation made on them still
+    reads the same fights at the same indices. The new ones come from the held-out shards
+    of `generations`, none of which the set drew from before, split by room kind as the
+    first part is (`per_kind`, 560/420/420 by default, which takes 600 fights to 2,000),
+    and are dealt with the seeds that follow the set's own.
+
+    Raises:
+        ValueError: If a shard of `generations` is one the set already drew from.
+
+    """
+    data = json.loads(Path(path).read_text())
+    fights = load_real_set(path)
+    per_kind = per_kind or {1: 560, 2: 420, 6: 420}
+    paths = [p for p in shards(FULL_JOB, generations) if held_out(p)]
+    names = [str(p.relative_to(JOBS)) for p in paths]
+    if overlap := sorted(set(names) & set(data["shards"])):
+        raise ValueError(f"the set already drew from {overlap[:3]}")
+    added = specs(sample_fights(paths, per_kind, seed), FIRST_SEED, len(fights))
+    fights = [*fights, *added]
+    data = {
+        "description": (
+            f"{data['description']} Extended to {len(fights)} fights: the fights after "
+            f"the first {len(fights) - len(added)} come from the held-out shards of "
+            f"generations {list(generations)}, {per_kind} by node type, sampled with seed "
+            f"{seed}, dealt with the seeds that follow."
+        ),
+        "shards": [*data["shards"], *names],
+        "sha256": loop.fight_set_sha256(fights),
+        "fights": fights,
+    }
+    _write_set(path, data)
     return data
 
 

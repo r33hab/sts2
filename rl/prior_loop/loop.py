@@ -36,6 +36,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ProcessPoolExecutor
@@ -104,6 +105,8 @@ FIGHT_ID_STRIDE = 1_000_000
 # The equal-time comparison gives the plain search at most this many times the prior's
 # simulations (and at least its inverse).
 MAX_TIME_RATIO = 10.0
+# How often a worker checks that the loop that started it is still alive.
+ORPHAN_POLL_SECONDS = 1.0
 
 PHASES = (
     ("generate", GENERATED_DONE),
@@ -204,6 +207,33 @@ def ensure_nice(level: int = 10) -> None:
     current = os.nice(0)
     if current < level:
         os.nice(level - current)
+
+
+def _exit_when_orphaned(parent: int) -> None:
+    """Exit this process once `parent` is gone (the process is reparented).
+
+    It runs on a thread of its own, so it fires while the main thread is deep in a fight:
+    ctypes releases the GIL around every native call.
+    """
+    while os.getppid() == parent:
+        time.sleep(ORPHAN_POLL_SECONDS)
+    os._exit(1)
+
+
+def worker_init() -> None:
+    """Set up a process the loop starts: nice, and gone within a second of the loop.
+
+    A loop stopped with SIGTERM dies at once and leaves its workers behind; without this
+    they played on to the end of their slice, a core each (`run_train.runner` has the same
+    watchdog for the same reason).
+    """
+    ensure_nice()
+    threading.Thread(
+        target=_exit_when_orphaned,
+        args=(os.getppid(),),
+        name="orphan-watchdog",
+        daemon=True,
+    ).start()
 
 
 class _Tee(io.TextIOBase):
@@ -694,7 +724,11 @@ def evaluate_fights(
         chunks = [_evaluate_slice(payload) for payload in payloads]
     else:
         context = multiprocessing.get_context("spawn")
-        with ProcessPoolExecutor(max_workers=workers, mp_context=context) as pool:
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            mp_context=context,
+            initializer=worker_init,
+        ) as pool:
             chunks = list(pool.map(_evaluate_slice, payloads))
     results: list[dict[str, Any] | None] = [None] * len(jobs)
     for chunk in chunks:
