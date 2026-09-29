@@ -1934,15 +1934,21 @@ champion to `~/Documents/git/spire-coach/data/models/combat_prior/` as
 `combat_policy.pt`, `combat_net.pt` and `model.json`: iteration, metrics, ascension,
 `NATIVE_API_VERSION`, a SHA-256 of `combat_tokens.VOCAB`, and the train flags.
 
-### 6.5 Later: the prior inside stage-2 self-play (not in Tasks 2-5)
+### 6.5 The prior inside stage-2 self-play (roadmap E2)
 
-After the snapshot-loader branch merges (it adds a `NativeCombat(CombatState, int seed)`
-constructor), add `Sts2Run_ForkCombat(int runHandle, int resampleHidden, int
-resampleSeed, int* obsBuf) -> int combatHandle` in `NativeExports.cs`. It builds a
-`NativeCombat` from `run.State.ActiveCombat` and its `ActiveCombatRng` (cloned, and
-resampled as in `ResampleHiddenState`), puts it in the combat pool, and bumps the run API
-version. Stage-2 combat search then forks combat handles: about 1.45x faster (2.2), and
-able to take `prior_fn`. It is gated by a paired run-level evaluation.
+`Sts2Run_ForkCombat(int runHandle, int resampleHidden, int resampleSeed, int* obsBuf) ->
+int combatHandle` (run API 22) copies the run's active fight and its combat stream into
+the combat pool (`RunEngine.ForkActiveCombat`). With a seed it is exactly the fight of
+`Sts2Run_Clone` with that seed: the same restream (shared with `ResampleHiddenState`) and
+the same reshuffle of the unseen draw pile. `JobConfig.combat_prior` (`--combat-prior
+DIR`, "" by default) makes the fight search PUCT with the exported prior at the gate's
+settings, on combat-handle forks (`RunCombat(fork_combat=True)`); the record's combat block
+and the evaluation meta carry the prior's sha256, so switching it re-evaluates the
+champion. The paired run-level evaluation (`rl/run_train/prior_check.py`: 395 seeds, A10,
+120/500, the full-run champion at argmax) gave +0.81 floors (95% CI -0.21, +1.82) and Act 1
+boss kills 65.3% -> 67.6% (52 seeds only with the prior, 43 only without), at 0.83x the
+time per decision; it stays off until a larger run resolves it. Measured alone on 137
+decisions at 120 sims, a combat fork costs 0.35x a run clone and the prior 1.6x a fork.
 
 ---
 
