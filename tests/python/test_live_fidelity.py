@@ -152,20 +152,14 @@ REAL_PAIRS: dict[str, tuple[str, str | None, str | None, str]] = {
         None,
         "captured/test_subject_round14",
     ),
-    # `autopilot-20260929-095244.jsonl`: Brand opens its exhaust screen, and the same
-    # screen once Defend is picked on it -- the mod takes a picked card off the
-    # candidates, and the converter refused the position until it offered it again.
+    # `autopilot-20260929-095244.jsonl`: Brand opens its exhaust screen. The replay read
+    # this check's position after as the same screen with Defend picked 7,900 lines on
+    # (one fingerprint), which the converter refused.
     "Brand opens its exhaust screen": (
         "captured/corpse_slugs_round1_before_brand",
         "BRAND#0",
         None,
         "captured/corpse_slugs_round1_brand_open",
-    ),
-    "Brand's screen with Defend already picked": (
-        "captured/corpse_slugs_round1_before_brand",
-        "BRAND#0",
-        None,
-        "captured/corpse_slugs_round1_brand_defend_picked",
     ),
 }
 CARD_PLAYS = [name for name, pair in REAL_PAIRS.items() if pair[1] is not None]
@@ -724,9 +718,13 @@ class NotComparableTests(unittest.TestCase):
         pre = load(f"{SPINNER}_after_two_defends")
         self.assertEqual(pre["player"]["energy"], 0)
         move = played(pre, "BASH#0", "SLUDGE_SPINNER_0")
+        # A position after where the Bash has left the hand, as a played card does.
+        post = copy.deepcopy(pre)
+        bash = next(i for i, card in enumerate(post["hand"]) if card["uid"] == "BASH#0")
+        post["discard_pile"].append(post["hand"].pop(bash))
 
         self.assertEqual(
-            check(pre, move, pre),
+            check(pre, move, post),
             {
                 "comparable": True,
                 "deterministic_mismatches": [
@@ -803,6 +801,45 @@ class NotComparableTests(unittest.TestCase):
 
 
 # ── Refusals ─────────────────────────────────────────────────────────────────
+
+
+class NotTheMoveTests(unittest.TestCase):
+    """A position after that the logged move did not make is not comparable.
+
+    The old fight lab's Queen fight (`fightlab-20260928-220909.jsonl`) played cards its
+    log does not hold: its position after a move is sometimes another card's, or the
+    move's and one more. The simulator then looks wrong where it is not -- the emulator
+    rightly refused the Bound Strike, and rightly played one card, not two.
+    """
+
+    def test_the_card_still_in_hand_after_its_move_was_not_played(self) -> None:
+        pre = load("captured/queen_lab_round3_bound_strike_blocked")
+        post = load("captured/queen_lab_round3_after_an_unlogged_defend")
+        result = check(
+            pre, played(pre, "STRIKE_IRONCLAD#1", "TORCH_HEAD_AMALGAM_0"), post
+        )
+        self.assertFalse(result["comparable"])
+        self.assertEqual(result["deterministic_mismatches"], [])
+        self.assertEqual(len(result["warnings"]), 1)
+        self.assertIn("still in the hand", result["warnings"][0])
+
+    def test_more_cards_played_than_the_move_plays_is_not_comparable(self) -> None:
+        # Defend is played and so is a Strike nobody logged: 8 cards this combat before,
+        # 10 after, where the Defend makes 9.
+        pre = load("captured/queen_lab_round4_before_defend")
+        post = load("captured/queen_lab_round4_after_defend_and_an_unlogged_strike")
+        self.assertEqual(
+            (
+                pre["history"]["cards_played_this_combat"],
+                post["history"]["cards_played_this_combat"],
+            ),
+            (8, 10),
+        )
+        result = check(pre, played(pre, "DEFEND_IRONCLAD#0"), post)
+        self.assertFalse(result["comparable"])
+        self.assertEqual(result["deterministic_mismatches"], [])
+        self.assertEqual(len(result["warnings"]), 1)
+        self.assertIn("more cards", result["warnings"][0])
 
 
 class RefusalTests(unittest.TestCase):

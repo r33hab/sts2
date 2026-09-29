@@ -1466,19 +1466,20 @@ class SchemaTests(unittest.TestCase):
 # Real screens with a card already picked (autopilot-20260929-095244.jsonl): the mod
 # lists a picked card in `selected_uids` and no longer among the candidates, while it
 # stays in its pile until the screen is confirmed.
-CAPTURED = FIXTURES.parent / "captured"
+LIVE = FIXTURES.parent
 
 
-def captured(name: str) -> dict[str, Any]:
-    return json.loads((CAPTURED / f"{name}.json").read_text(encoding="utf-8"))
+def picked_screen(name: str) -> dict[str, Any]:
+    return json.loads((LIVE / "picked" / f"{name}.json").read_text(encoding="utf-8"))
 
 
 class PickedCardTests(unittest.TestCase):
-    """A card picked on the screen is offered again: the emulator's screen starts with no
-    pick made (`to_pending`), so it offers every card the game offered."""
+    """A card picked on the screen is accepted and offered again: `selected_uids` are
+    toggles the game has not acted on, so the emulator's screen starts with no pick made
+    (`to_pending`) and offers every card the game offered."""
 
     def test_gamblers_brew_offers_the_picked_shame_again(self) -> None:
-        live_doc = captured("devoted_sculptor_round2_gamblers_brew_shame_picked")
+        live_doc = picked_screen("devoted_sculptor_round2_gamblers_brew_shame_picked")
         self.assertEqual(live_doc["pending_selection"]["selected_uids"], ["SHAME#0"])
         result = convert.convert(live_doc)
         self.assertEqual(result.warnings, [])
@@ -1486,7 +1487,7 @@ class PickedCardTests(unittest.TestCase):
         self.assertEqual(result.doc["pending_selection"]["candidates"], [0, 1, 2])
 
     def test_brand_offers_the_picked_defend_again(self) -> None:
-        live_doc = captured("corpse_slugs_round1_brand_defend_picked")
+        live_doc = picked_screen("corpse_slugs_round1_brand_defend_picked")
         self.assertEqual(
             live_doc["pending_selection"]["selected_uids"],
             ["DEFEND_IRONCLAD#1"],
@@ -1503,9 +1504,18 @@ class PickedCardTests(unittest.TestCase):
 
     def test_the_picked_screen_converts_as_the_screen_before_the_pick(self) -> None:
         picked = convert.convert(
-            captured("devoted_sculptor_round2_gamblers_brew_shame_picked"),
+            picked_screen("devoted_sculptor_round2_gamblers_brew_shame_picked"),
         )
-        opened = convert.convert(captured("devoted_sculptor_round2_gamblers_brew_open"))
+        opened = convert.convert(
+            json.loads(
+                (
+                    LIVE
+                    / "captured"
+                    / "devoted_sculptor_round2_gamblers_brew_open.json"
+                ).read_text(encoding="utf-8"),
+            ),
+        )
+        self.assertEqual(opened.warnings, [])
         self.assertEqual(
             picked.doc["pending_selection"],
             opened.doc["pending_selection"],

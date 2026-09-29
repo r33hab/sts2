@@ -36,6 +36,9 @@ the pseudo-field `move.allowed`. A check that cannot be made at all is not compa
 says why in its warnings, rather than report a mismatch the simulator never made: when the
 converter could not carry the position before or after faithfully (its warnings, each
 marked with the side), or when the emulator cannot tell which of its candidates a pick is.
+So is a position after that the move did not make: the card the move plays still in the
+hand after it, or more cards played this combat than the move and what it plays itself
+account for in any resample -- a card played that the caller did not report.
 """
 
 from __future__ import annotations
@@ -79,10 +82,12 @@ class _RefusedError(Exception):
 
 @dataclass(frozen=True)
 class _Sample:
-    """What one resample shows, and whether its move reshuffled the discard pile."""
+    """What one resample shows, whether its move reshuffled the discard pile, and how many
+    cards have been played this combat after it."""
 
     fields: Outcome
     reshuffled: bool
+    plays: int | None = None
 
 
 def check(
@@ -110,6 +115,8 @@ def check(
     after = _converted(post, "post")
     if not (before.reliable and after.reliable):
         return _not_comparable([*_marked("pre", before), *_marked("post", after)])
+    if (unplayed := _still_in_hand(move, post)) is not None:
+        return _not_comparable([unplayed])
     # The converted enemies are the live ones, in their order.
     actual = _visible(after.doc, [enemy["entity_id"] for enemy in post["enemies"]])
     world = _World(pre, before.doc, move, _Names(pre, post))
@@ -119,8 +126,48 @@ def check(
         return _not_comparable([str(reason)])
     except _RefusedError:
         return _refused()
+    if (extra := _more_plays(samples, after.doc)) is not None:
+        return _not_comparable([extra])
     hand = _Hand(before.doc, after.doc, samples)
     return _compare([sample.fields for sample in samples], actual, hand)
+
+
+def _still_in_hand(move: moves.Move, post: Mapping[str, Any]) -> str | None:
+    """Say why a card move did not make the position after: its card is still in hand.
+
+    A card played leaves the hand as its play begins; the copy the move names, by uid,
+    held in the hand after it was not played -- the game refused it, or played something
+    else, and the position after is not this move's.
+    """
+    if move.kind != "card" or move.card_uid is None:
+        return None
+    if not any(card["uid"] == move.card_uid for card in post["hand"]):
+        return None
+    return (
+        f"not the move: {move.card_uid}, the card it plays, is still in the hand after "
+        "it, so the game did not play it"
+    )
+
+
+def _more_plays(samples: Sequence[_Sample], after: Mapping[str, Any]) -> str | None:
+    """Say why the position after holds a play the move does not: more cards played.
+
+    The game counts the cards played this combat (the live history), and so does every
+    resample after the move -- the move's own card and whatever it plays in turn. A
+    higher count after than any resample reaches is a card played that the move did not
+    play: one the caller's log does not hold.
+    """
+    actual = after["counters"].get("cards_played_this_combat")
+    predicted = [sample.plays for sample in samples]
+    if actual is None or not predicted or None in predicted:
+        return None
+    most = max(cast("list[int]", predicted))
+    if actual <= most:
+        return None
+    return (
+        f"more cards played: the game counts {actual} cards played this combat after the "
+        f"move, and the simulator {most}, so a card was played that the move does not play"
+    )
 
 
 # ── The two sides ────────────────────────────────────────────────────────────
@@ -286,7 +333,8 @@ class _World:
                 or len(predicted["piles"]["discard"]) < self._discarded
             )
             fields = _visible(predicted, self._names.of(predicted["enemies"]))
-            return _Sample(fields, reshuffled)
+            plays = predicted["counters"].get("cards_played_this_combat")
+            return _Sample(fields, reshuffled, plays)
         finally:
             native.destroy(handle)
 

@@ -646,8 +646,10 @@ def _picked_back(
     The mod lists a card the player has picked in `selected_uids` and takes it off the
     candidates, while the card stays in its pile until the screen is confirmed. The
     emulator's screen starts with no pick made, so each such card is offered again, found
-    by uid in the pile the screen is over. A CHOOSE screen's cards are generated and in no
-    pile, so a pick off its offer cannot be found, which is said instead.
+    by uid in the pile the screen is over. It has no live candidate index, so a search
+    that picks it again names no live move for it (`moves.UnmappedSelectionError`): on
+    the game's screen it is picked already. A CHOOSE screen's cards are generated and in
+    no pile, so a pick off its offer cannot be found, which is said instead.
     """
     offered = {card["uid"] for card in live["candidates"]}
     missing = [uid for uid in live["selected_uids"] if uid not in offered]
