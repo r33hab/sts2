@@ -27,6 +27,7 @@ The coach is imported from ~/Documents/git/spire-coach, or from SPIRE_COACH_REPO
 
 from __future__ import annotations
 
+import dataclasses
 import argparse
 import json
 import os
@@ -295,6 +296,9 @@ def _mark_not_comparable(
     outcomes.append(CheckOutcome(act_key, move_kind, False, None, (warning,), ()))
 
 
+_MOVE_FIELDS = frozenset(f.name for f in dataclasses.fields(moves.Move))
+
+
 def evaluate(
     records: list[dict[str, Any]], *, resamples: int = fidelity.DEFAULT_RESAMPLES,
 ) -> ReplayResult:
@@ -330,7 +334,9 @@ def evaluate(
         act_key = _act_key(pre_ep.act)
         act_stats = stats[act_key]
         act_stats.replayed += 1
-        move = moves.Move(**payload["move"])
+        # A logged move can carry search statistics (a MoveStat: visits, value_mean, ...);
+        # only the Move fields identify it.
+        move = moves.Move(**{k: v for k, v in payload["move"].items() if k in _MOVE_FIELDS})
 
         try:
             pre_live = build_live_snapshot(
