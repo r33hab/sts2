@@ -1,0 +1,369 @@
+{
+  "schema": "sts2-live-snapshot/1",
+  "game_version": "v0.107.1",
+  "character": "IRONCLAD",
+  "ascension": 10,
+  "act": 3,
+  "floor": 49,
+  "room_type": "boss",
+  "round": 4,
+  "player": {
+    "hp": 606,
+    "max_hp": 2000,
+    "block": 8,
+    "energy": 4,
+    "max_energy": 3,
+    "gold": 496,
+    "stars": 0,
+    "osty": null,
+    "orbs": {
+      "slots": 0,
+      "list": []
+    },
+    "powers": [
+      {
+        "id": "RUPTURE_POWER",
+        "amount": 1
+      },
+      {
+        "id": "STRENGTH_POWER",
+        "amount": 2
+      },
+      {
+        "id": "CHAINS_OF_BINDING_POWER",
+        "amount": 3
+      },
+      {
+        "id": "FRAIL_POWER",
+        "amount": 98
+      },
+      {
+        "id": "WEAK_POWER",
+        "amount": 98
+      },
+      {
+        "id": "VULNERABLE_POWER",
+        "amount": 98
+      }
+    ],
+    "relics": [
+      {
+        "id": "BURNING_BLOOD",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "SCROLL_BOXES",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "PENDULUM",
+        "counter": 0,
+        "fields": {
+          "TurnsSeen": 0
+        }
+      },
+      {
+        "id": "BAG_OF_PREPARATION",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "PAELS_TEARS",
+        "counter": null,
+        "fields": {
+          "_hadLeftoverEnergy": true
+        }
+      },
+      {
+        "id": "FROZEN_EGG",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "VEXING_PUZZLEBOX",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "LOST_WISP",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "CLAWS",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "ETERNAL_FEATHER",
+        "counter": null,
+        "fields": {}
+      }
+    ],
+    "potions": [
+      {
+        "slot": 0,
+        "id": null
+      },
+      {
+        "slot": 1,
+        "id": null
+      }
+    ],
+    "max_potion_slots": 2
+  },
+  "hand": [
+    {
+      "id": "MAUL",
+      "upgraded": true,
+      "uid": "MAUL#0",
+      "cost": 1,
+      "enchantment": "SHARP",
+      "enchant_amount": 2,
+      "fields": {},
+      "affliction": "BOUND"
+    },
+    {
+      "id": "BASH",
+      "upgraded": true,
+      "uid": "BASH#0",
+      "cost": 2,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": "BOUND"
+    },
+    {
+      "id": "DECAY",
+      "upgraded": false,
+      "uid": "DECAY#0",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": true,
+      "uid": "DEFEND_IRONCLAD#3",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": true,
+      "uid": "DEFEND_IRONCLAD#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": true,
+      "uid": "STRIKE_IRONCLAD#0",
+      "cost": 1,
+      "enchantment": "CORRUPTED",
+      "enchant_amount": 1,
+      "fields": {},
+      "affliction": null
+    }
+  ],
+  "draw_pile": [],
+  "discard_pile": [
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": true,
+      "uid": "STRIKE_IRONCLAD#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "HAVOC",
+      "upgraded": false,
+      "uid": "HAVOC#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": true,
+      "uid": "STRIKE_IRONCLAD#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": true,
+      "uid": "DEFEND_IRONCLAD#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": true,
+      "uid": "DEFEND_IRONCLAD#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "SHRUG_IT_OFF",
+      "upgraded": true,
+      "uid": "SHRUG_IT_OFF#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": "BOUND"
+    }
+  ],
+  "exhaust_pile": [
+    {
+      "id": "MOLTEN_FIST",
+      "upgraded": false,
+      "uid": "MOLTEN_FIST#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "ASCENDERS_BANE",
+      "upgraded": false,
+      "uid": "ASCENDERS_BANE#0",
+      "cost": null,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": true,
+      "uid": "STRIKE_IRONCLAD#3",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "THUNDERCLAP",
+      "upgraded": true,
+      "uid": "THUNDERCLAP#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    }
+  ],
+  "known_draw_top": [],
+  "known_draw_bottom": [],
+  "enemies": [
+    {
+      "entity_id": "TORCH_HEAD_AMALGAM_0",
+      "id": "TORCH_HEAD_AMALGAM",
+      "slot": 0,
+      "hp": 139,
+      "max_hp": 211,
+      "block": 0,
+      "powers": [
+        {
+          "id": "MINION_POWER",
+          "amount": 1
+        },
+        {
+          "id": "STRENGTH_POWER",
+          "amount": 1
+        }
+      ],
+      "intents": [
+        {
+          "type": "ATTACK",
+          "damage": 24,
+          "base_damage": 15,
+          "hits": 1
+        }
+      ],
+      "move_id": "TACKLE_3_MOVE",
+      "state_log": [
+        "TACKLE_MOVE",
+        "TACKLE_2_MOVE",
+        "BEAM_MOVE",
+        "TACKLE_3_MOVE"
+      ],
+      "ai_fields": {
+        "TackleDamage": 19,
+        "WeakTackleDamage": 15,
+        "SoulBeamDamage": 8
+      }
+    },
+    {
+      "entity_id": "QUEEN_0",
+      "id": "QUEEN",
+      "slot": 1,
+      "hp": 382,
+      "max_hp": 419,
+      "block": 20,
+      "powers": [],
+      "intents": [
+        {
+          "type": "BUFF",
+          "damage": null,
+          "base_damage": null,
+          "hits": null
+        },
+        {
+          "type": "DEFEND",
+          "damage": null,
+          "base_damage": null,
+          "hits": null
+        }
+      ],
+      "move_id": "BURN_BRIGHT_FOR_ME_MOVE",
+      "state_log": [
+        "PUPPET_STRINGS_MOVE",
+        "YOU_ARE_MINE_MOVE",
+        "BURN_BRIGHT_FOR_ME_MOVE",
+        "BURN_BRIGHT_FOR_ME_MOVE"
+      ],
+      "ai_fields": {
+        "_hasAmalgamDied": false,
+        "OffWithYourHeadDamage": 4,
+        "ExecutionDamage": 18,
+        "HasAmalgamDied": false
+      }
+    }
+  ],
+  "history": {
+    "cards_played_this_turn": 1,
+    "cards_played_this_combat": 11,
+    "attacks_played_this_turn": 0,
+    "skills_played_this_turn": 1
+  },
+  "pending_selection": null
+}

@@ -2986,5 +2986,102 @@ class MalformedPileTests(Refusals):
                     self.assert_refused(doc, f"{key}[0]")
 
 
+# ── The Queen's Bound ────────────────────────────────────────────────────────
+
+# Real positions of the Queen fight (autopilot-20260929-094048.jsonl, act 3, round 4):
+# Chains of Binding 3 has bound the first three cards drawn; the next position is after the
+# bound Shrug It Off was played, which shuts the other two for the turn. The mod marks a
+# bound card with `affliction: "BOUND"`, which the coach's snapshot carries per card.
+QUEEN = "captured/queen_round4"
+QUEEN_AFTER_SHRUG = "captured/queen_round4_after_shrug_it_off"
+
+
+def _without_afflictions(doc: dict[str, Any]) -> dict[str, Any]:
+    for key in ("hand", "draw_pile", "discard_pile", "exhaust_pile"):
+        for held in doc[key]:
+            held.pop("affliction", None)
+    return doc
+
+
+class BoundTests(unittest.TestCase):
+    """`ChainsOfBindingPower` (decompiled): the first `Amount` cards drawn each turn are
+    afflicted with Bound, and once one Bound card is played `ShouldPlay` refuses the rest
+    until `BeforeSideTurnEnd` clears them. The emulator keeps the affliction on
+    `CardInstance.Bound` and the turn on `BoundCardsThisTurn`/`BoundCardPlayedThisTurn`.
+    """
+
+    @staticmethod
+    def chains_warnings(result: Any) -> list[str]:
+        return [w for w in result.warnings if "CHAINS_OF_BINDING_POWER" in w]
+
+    def test_the_bound_cards_ride_the_cards_and_the_turn_rides_the_counters(
+        self,
+    ) -> None:
+        result = convert.convert(load(QUEEN))
+        self.assertEqual(
+            [held.get("bound", False) for held in result.doc["piles"]["hand"]],
+            [True, True, True, False, False, False],
+        )
+        self.assertEqual(result.doc["counters"]["bound_cards_this_turn"], 3)
+        self.assertFalse(result.doc["counters"]["bound_card_played_this_turn"])
+        self.assertEqual(self.chains_warnings(result), [])
+
+    def test_a_bound_card_played_this_turn_shuts_the_others(self) -> None:
+        # The played Shrug It Off sits in the discard pile still Bound: only a play can
+        # have put it there this turn, and the mod's own verdict agrees -- the two left in
+        # hand read `can_play: false`, "BlockedByHook".
+        result = convert.convert(load(QUEEN_AFTER_SHRUG))
+        self.assertEqual(result.doc["counters"]["bound_cards_this_turn"], 3)
+        self.assertTrue(result.doc["counters"]["bound_card_played_this_turn"])
+        self.assertEqual(
+            [held.get("bound", False) for held in result.doc["piles"]["discard"]],
+            [False, False, False, False, False, True],
+        )
+        self.assertEqual(self.chains_warnings(result), [])
+
+    def test_no_card_played_this_turn_means_no_bound_card_was(self) -> None:
+        doc = load(QUEEN_AFTER_SHRUG)
+        doc["history"]["cards_played_this_turn"] = 0
+        result = convert.convert(doc)
+        self.assertFalse(result.doc["counters"]["bound_card_played_this_turn"])
+
+    def test_a_snapshot_without_afflictions_still_warns(self) -> None:
+        result = convert.convert(_without_afflictions(load(QUEEN_AFTER_SHRUG)))
+        self.assertEqual(len(self.chains_warnings(result)), 1)
+        self.assertFalse(
+            any(held.get("bound") for held in result.doc["piles"]["hand"]),
+        )
+
+    def test_an_unknown_affliction_is_refused(self) -> None:
+        doc = load(QUEEN)
+        doc["hand"][0]["affliction"] = "NOT_AN_AFFLICTION"
+        with self.assertRaises(live.ConversionError) as caught:
+            convert.convert(doc)
+        self.assertEqual(caught.exception.path, "hand[0].affliction")
+
+    def test_the_afflictions_are_the_games(self) -> None:
+        folder = DECOMPILED / "MegaCrit.Sts2.Core.Models.Afflictions"
+        self.assertEqual(
+            {ids.game_entry(path.stem) for path in folder.glob("*.cs")},
+            set(convert.AFFLICTIONS),
+        )
+
+    def test_the_emulator_refuses_a_second_bound_card(self) -> None:
+        # What the search may play is what the game allows: the mod read MAUL and BASH as
+        # `can_play: false` ("BlockedByHook") and DECAY as unplayable, the rest playable.
+        live_doc = load(QUEEN_AFTER_SHRUG)
+        doc = convert.convert(live_doc).doc
+        handle = native.load_combat_snapshot(doc, 0)
+        try:
+            legal = native.valid_actions(handle, len(doc["piles"]["hand"]) + 1)
+            shown = [held["id"] for held in live_doc["hand"]]
+            self.assertEqual(
+                [shown[i] for i in range(len(shown)) if legal[i]],
+                ["DEFEND_IRONCLAD", "DEFEND_IRONCLAD", "STRIKE_IRONCLAD"],
+            )
+        finally:
+            native.destroy(handle)
+
+
 if __name__ == "__main__":
     unittest.main()

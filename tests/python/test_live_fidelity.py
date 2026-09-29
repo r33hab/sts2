@@ -115,6 +115,22 @@ REAL_PAIRS: dict[str, tuple[str, str | None, str | None, str]] = {
         "ENTOMANCER_0",
         "captured/entomancer_round1_after_bash",
     ),
+    # An A10 autopilot run's act 3 boss (`autopilot-20260929-094048.jsonl`, the Queen):
+    # Chains of Binding 3 bound the first three cards drawn, and Pael's Tears, Lost Wisp
+    # and Claws are on the relic bar. Every position of the fight was not comparable
+    # until the relics had entries and the cards carried their Bound.
+    "a Bound Shrug It Off against the Queen": (
+        "captured/queen_round4",
+        "SHRUG_IT_OFF#0",
+        None,
+        "captured/queen_round4_after_shrug_it_off",
+    ),
+    "a Strike once a Bound card is spent": (
+        "captured/queen_round4_after_shrug_it_off",
+        "STRIKE_IRONCLAD#0",
+        "TORCH_HEAD_AMALGAM_0",
+        "captured/queen_round4_after_strike",
+    ),
 }
 CARD_PLAYS = [name for name, pair in REAL_PAIRS.items() if pair[1] is not None]
 

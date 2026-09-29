@@ -223,6 +223,7 @@ AI_FIELD_POWERS = {"HEIST_POWER": "heist_gold"}
 # (decompiled ThieveryPower.Steal), which a mod from 2026-09-28 sends as
 # `fields.stolen_gold` and the emulator keeps as `EnemyState.StolenGold` (`to_ai_fields`).
 _THIEVERY = "THIEVERY_POWER"
+_CHAINS_OF_BINDING = "CHAINS_OF_BINDING_POWER"
 
 # Powers carried with their live amount, whose OTHER half the emulator keeps in a second
 # buff or on `CombatState` and the live snapshot cannot supply -- so the emulator starts
@@ -497,6 +498,7 @@ def to_buffs(
     warnings: list[str] | None = None,
     no_card_played: bool = False,
     cards_played_this_combat: int | None = None,
+    afflictions_carried: bool = False,
 ) -> list[dict[str, int]]:
     """Translate one creature's live powers into emulator buffs, `[{"id", "amount"}]`.
 
@@ -506,7 +508,9 @@ def to_buffs(
     given, collects what could not be carried. `no_card_played` says no card has finished
     this turn and none is waiting on a selection, which settles Skittish (`_spent`).
     `cards_played_this_combat` is the live history's count, None when it has none, which
-    settles Withering Presence (`_withering_cards_left`).
+    settles Withering Presence (`_withering_cards_left`). `afflictions_carried` says the
+    snapshot carries every card's affliction, from which `convert` rebuilds Chains of
+    Binding's Bound cards and turn (`convert._bound_turn`).
 
     Raises:
         ConversionError: for a power the game does not have, an amount that is not an
@@ -564,6 +568,8 @@ def to_buffs(
         elif entry == _WITHERING_PRESENCE and cards_played_this_combat is not None:
             magnitude = _withering_cards_left(cards_played_this_combat)
             carried = True
+        elif entry == _CHAINS_OF_BINDING:
+            carried = afflictions_carried
         _add(totals, ordinal, magnitude)
         if spent:
             _add(totals, _ORDINAL_OF["SkittishSpent"], 1)
