@@ -16,6 +16,7 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
@@ -265,6 +266,150 @@ class FightOutcomeTests(unittest.TestCase):
     def test_any_other_fight_is_only_told_its_heist(self) -> None:
         fight = self._fight(([("Toadpole", 20)], 99), last_move="end_turn")
         self.assertEqual(replay.fight_outcome(fight, None), {"stolen_back_gold": 0})
+
+
+class DebugActionTests(unittest.TestCase):
+    """The replay keeps comparing past a debug action, and leaves out only what it did."""
+
+    def test_a_debug_action_lands_on_the_floor_of_the_next_state(self) -> None:
+        # The record shapes the coach logs: the autopilot's buffer before a fight's first
+        # state, autoplay's kill between two of its states, one after the last.
+        records = [
+            {"kind": "session", "payload": {"command": "autopilot"}},
+            {"kind": "buffer", "payload": {"target_hp": 9000, "delta": 8920}},
+            {"kind": "state", "payload": {"state": {"run": {"floor": 5}}}},
+            {"kind": "debug", "payload": {"action": "debug_kill_enemy"}},
+            {"kind": "state", "payload": {"state": {"run": {"floor": 5}}}},
+            {"kind": "state", "payload": {"state": {"run": {"floor": 7}}}},
+            {"kind": "action", "payload": {"kind": "debug_add_card"}},
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "session.jsonl"
+            path.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+            states, debug = replay.load_session(path)
+            self.assertEqual(replay.session_command(path), "autopilot")
+        self.assertEqual(len(states), 3)
+        self.assertEqual(
+            debug,
+            [(5, "debug_gain_max_hp"), (5, "debug_kill_enemy"), (7, "debug_add_card")],
+        )
+
+    def test_what_each_debug_action_touches(self) -> None:
+        self.assertEqual(
+            replay.debug_touches(["debug_gain_max_hp", "debug_kill_enemy"]),
+            {"hp", "max_hp"},
+        )
+        self.assertEqual(replay.debug_touches(["debug_add_card"]), {"deck"})
+        self.assertIn("gold", replay.debug_touches(["debug_something_new"]))
+
+    def test_a_buffer_changes_no_score_and_the_rest_is_still_compared(self) -> None:
+        # A committed capture whose first map after floor 2 shows a buffer's +1000 HP:
+        # scored, it is an outcome difference; logged as a buffer on that floor, it is set
+        # without being scored, and every offer is compared as before.
+        path = sorted(replay.FIXTURES.glob("*.json"))[0]
+        clean = replay.replay_run(replay.run_from_fixture(path)).to_json()
+        run = replay.run_from_fixture(path)
+        floor = min(
+            int(state["run"]["floor"])
+            for state in run.states
+            if state.get("state_type") == "map" and int(state["run"]["floor"]) >= 3
+        )
+        for debug in ({}, {floor: ["debug_gain_max_hp"]}):
+            run = replay.run_from_fixture(path)
+            for state in run.states:
+                if state.get("state_type") == "map" and state["run"]["floor"] == floor:
+                    state["player"]["hp"] += 1000
+                    state["player"]["max_hp"] += 1000
+            run.debug = debug
+            doc = replay.replay_run(run).to_json()
+            with self.subTest(debug=debug):
+                outcome = doc["categories"]["outcome"]
+                self.assertEqual(
+                    outcome["compared"] == outcome["matched"],
+                    bool(debug),
+                    outcome,
+                )
+                for category in replay.CATEGORIES:
+                    if category != "outcome":
+                        self.assertEqual(
+                            doc["categories"][category],
+                            clean["categories"][category],
+                        )
+
+
+HISTORY_RUNS = ROOT / "tests" / "fixtures" / "run_history"
+
+
+def history_run(name: str) -> Any:
+    """A real autopilot run as the scoreboard joins it: its run history, and the fight
+    states its session logged (trimmed to what the replay reads)."""
+    doc = json.loads((HISTORY_RUNS / f"{name}.json").read_text(encoding="utf-8"))
+    history = doc["history"]
+    return replay.RealRun(
+        seed=str(history["seed"]),
+        ascension=int(history["ascension"]),
+        states=doc["states"],
+        label=doc["label"],
+        history=history,
+        sources=doc["sources"],
+        debug={int(floor): names for floor, names in doc["debug"].items()},
+    )
+
+
+class HistoryReplayTests(unittest.TestCase):
+    """A session that logged its fights only is replayed off the game's run history.
+
+    GNM8G0F5RF (spire-coach autopilot-20260929-000347.jsonl, A10): an HP buffer before
+    every fight, 23 floors to an abandoned fight in act 2. The history names every offer
+    and pick; the emulator makes the same offers on every floor it reaches.
+    """
+
+    def test_every_offer_the_history_names_is_the_emulators(self) -> None:
+        run = history_run("GNM8G0F5RF-a10")
+        self.assertFalse(replay.has_screens(run))
+        doc = replay.replay_run(run).to_json()
+        self.assertEqual(doc["divergences"], [])
+        self.assertEqual(doc["stopped"], "the run ended in the fight on floor 23")
+        compared = {
+            c: s["compared"] for c, s in doc["categories"].items() if s["compared"]
+        }
+        self.assertEqual(
+            compared,
+            {
+                "neow": 1,
+                "ancient": 1,
+                "map": 2,
+                "encounter": 11,
+                "unknown_room": 5,
+                "event": 3,
+                "card_reward": 10,
+                "gold": 7,
+                "potion": 10,
+                "relic": 1,
+                "treasure": 1,
+                "shop": 6,
+                "outcome": 22,
+            },
+        )
+        # Two events the history names no option for (the autopilot left them unchosen):
+        # flow notes, never scored.
+        self.assertEqual(len(doc["flow"]), 2)
+
+    def test_a_debug_kill_leaves_the_rest_of_the_run_compared(self) -> None:
+        clean = replay.replay_run(history_run("GNM8G0F5RF-a10")).to_json()
+        run = history_run("GNM8G0F5RF-a10")
+        # Killed by the autopilot: the elite on floor 12, and (to see the HP left out
+        # where a fight did not already leave it out) the event room on floor 3.
+        run.debug.setdefault(12, []).append("debug_kill_enemy")
+        run.debug.setdefault(3, []).append("debug_kill_enemy")
+        doc = replay.replay_run(run).to_json()
+        self.assertEqual(doc["divergences"], [])
+        for category in replay.CATEGORIES:
+            self.assertEqual(
+                doc["categories"][category]["compared"],
+                clean["categories"][category]["compared"],
+                category,
+            )
 
 
 class CommittedCapturesTests(unittest.TestCase):

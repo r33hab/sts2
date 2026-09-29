@@ -60,23 +60,28 @@ def debug_actions(records: Sequence[Mapping[str, Any]]) -> list[DebugAction]:
 
 def _debug_actions(records: Sequence[Mapping[str, Any]]) -> Iterator[DebugAction]:
     for index, record in enumerate(records):
-        kind = record.get("kind")
-        payload = record.get("payload")
-        payload = payload if isinstance(payload, Mapping) else {}
-        if kind == "buffer":
-            yield DebugAction(index, HP_BUFFER)
-        elif kind == "debug":
-            name = payload.get("action")
-            yield DebugAction(index, name if isinstance(name, str) else "debug")
-        elif kind == "action":
-            move = payload.get("move")
-            move_kind = move.get("kind") if isinstance(move, Mapping) else None
-            for name in (payload.get("kind"), payload.get("action"), move_kind):
-                if isinstance(name, str) and (
-                    name.startswith("debug_") or name == "debug"
-                ):
-                    yield DebugAction(index, name)
-                    break
+        name = debug_action_name(record)
+        if name is not None:
+            yield DebugAction(index, name)
+
+
+def debug_action_name(record: Mapping[str, Any]) -> str | None:
+    """Name the debug or HP-buffer action one session record is, or None."""
+    kind = record.get("kind")
+    payload = record.get("payload")
+    payload = payload if isinstance(payload, Mapping) else {}
+    if kind == "buffer":
+        return HP_BUFFER
+    if kind == "debug":
+        name = payload.get("action")
+        return name if isinstance(name, str) else "debug"
+    if kind == "action":
+        move = payload.get("move")
+        move_kind = move.get("kind") if isinstance(move, Mapping) else None
+        for name in (payload.get("kind"), payload.get("action"), move_kind):
+            if isinstance(name, str) and (name.startswith("debug_") or name == "debug"):
+                return name
+    return None
 
 
 def _max_hp(record: Mapping[str, Any]) -> object:

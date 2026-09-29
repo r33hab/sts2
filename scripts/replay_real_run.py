@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import functools
 import json
 import re
 import sys
@@ -72,6 +73,7 @@ from sts2_gym.live.ids import (  # noqa: E402
     potion_name_by_id,
     relic_slug_to_id,
 )
+from sts2_gym.live.sessionlog import HP_BUFFER, debug_action_name  # noqa: E402
 from sts2_gym.names import enchantments  # noqa: E402
 
 FIXTURES = REPO / "tests" / "fixtures" / "run_trace"
@@ -243,6 +245,15 @@ class RealRun:
     # from outside the game). The simulator is the unmodded game, so a modded run cannot
     # be replayed seed-exactly: its pools, and every roll drawn over them, differ.
     modded: list[str] = field(default_factory=list)
+    # The debug and HP-buffer actions the sessions logged (`sessionlog.debug_action_name`),
+    # by the floor they landed on: the autopilot's `debug_gain_max_hp` before a fight, its
+    # `debug_kill_enemy` on one it cannot win, a person's `debug_add_card`. The replay
+    # keeps comparing what the run is offered past them, and leaves out of the holdings
+    # only what they changed (`DEBUG_TOUCHES`).
+    debug: dict[int, list[str]] = field(default_factory=dict)
+    # A fight-lab session's run: its fights are started by `debug_start_encounter`, not
+    # walked into, so it has no run layer to compare.
+    lab: bool = False
 
 
 def history_dirs(root: Path = HISTORY_ROOT) -> list[Path]:
@@ -321,24 +332,66 @@ def mod_markers(states: list[tuple[float, dict[str, Any]]]) -> list[str]:
 
 def load_session_states(path: Path) -> list[tuple[float, dict[str, Any]]]:
     """A coach session log's states, as (epoch seconds, state), oldest first."""
-    out = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if record.get("kind") != "state":
-            continue
-        payload = record.get("payload") or {}
-        state = payload.get("state") if isinstance(payload.get("state"), dict) else None
-        if state is None:
-            continue
-        try:
-            stamp = dt.datetime.fromisoformat(str(record.get("ts"))).timestamp()
-        except ValueError:
-            stamp = 0.0
-        out.append((stamp, state))
-    return out
+    return load_session(path)[0]
+
+
+def session_command(path: Path) -> str | None:
+    """The coach command a session log was recorded by (its first, `session` record)."""
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if record.get("kind") == "session":
+                return (record.get("payload") or {}).get("command")
+            return None
+    return None
+
+
+def load_session(
+    path: Path,
+) -> tuple[list[tuple[float, dict[str, Any]]], list[tuple[int, str]]]:
+    """A coach session log's states, as `load_session_states` gives them, and its debug
+    actions as (floor, name), in one pass.
+
+    A debug action lands on the floor of the next state the log holds -- an HP buffer is
+    posted before the fight it pads, a kill before the position it leaves -- or of the last
+    one when nothing follows it.
+    """
+    states: list[tuple[float, dict[str, Any]]] = []
+    debug: list[tuple[int, str]] = []
+    waiting: list[str] = []
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            name = debug_action_name(record)
+            if name is not None:
+                waiting.append(name)
+                continue
+            if record.get("kind") != "state":
+                continue
+            payload = record.get("payload") or {}
+            state = payload.get("state")
+            if not isinstance(state, dict):
+                continue
+            try:
+                stamp = dt.datetime.fromisoformat(str(record.get("ts"))).timestamp()
+            except ValueError:
+                stamp = 0.0
+            states.append((stamp, state))
+            floor = (state.get("run") or {}).get("floor")
+            if waiting and isinstance(floor, int):
+                debug.extend((floor, name) for name in waiting)
+                waiting = []
+    if waiting and states:
+        floor = (states[-1][1].get("run") or {}).get("floor")
+        if isinstance(floor, int):
+            debug.extend((floor, name) for name in waiting)
+    return states, debug
 
 
 def split_session(
@@ -436,7 +489,8 @@ def runs_from_sessions(
     by_history: dict[str, RealRun] = {}
     unmatched: list[str] = []
     for path in paths:
-        states = load_session_states(path)
+        states, debug = load_session(path)
+        command = session_command(path)
         markers = mod_markers(states)
         for segment in split_session(states):
             entry = match_history(segment, histories)
@@ -460,6 +514,10 @@ def runs_from_sessions(
             run.states.extend(state for _, state in segment)
             run.sources.append(f"{path.name} floors {min(floors)}-{max(floors)}")
             run.modded = sorted(set(run.modded) | set(markers))
+            for floor, name in debug:
+                if min(floors) <= floor <= max(floors):
+                    run.debug.setdefault(floor, []).append(name)
+            run.lab = run.lab or command == "fight-lab"
     return list(by_history.values()), unmatched
 
 
@@ -1094,10 +1152,20 @@ class Replayer:
             # cards, so an empty deck means "not recorded", never "empty".
             real.pop("deck")
             emu.pop("deck")
+        # What a debug action on this floor changed is not the emulator's to match, and is
+        # set to the game's below without being scored.
+        touched = debug_touches(self.run.debug.get(screen.floor, []))
         differing = [key for key in real if real[key] != emu[key]]
-        if not differing:
-            self.report.record("outcome", screen.floor, f"after {room}", "same", "same")
+        scored = [key for key in differing if key not in touched]
+        if not scored:
+            if any(key not in touched for key in real):
+                self.report.record(
+                    "outcome", screen.floor, f"after {room}", "same", "same"
+                )
+            if differing:
+                self.set_holdings(player)
             return
+        differing = scored
         detail_real = {key: _diff_view(real[key], emu[key]) for key in differing}
         detail_emu = {key: _diff_view(emu[key], real[key]) for key in differing}
         self.report.record(
@@ -1722,8 +1790,752 @@ class Replayer:
         return False
 
 
+# --- runs whose sessions logged fights only ---------------------------------------------
+
+# The run history's map point types, as the emulator's node types.
+HISTORY_NODES = {
+    "monster": rc.NODE_NORMAL,
+    "elite": rc.NODE_ELITE,
+    "rest_site": rc.NODE_REST,
+    "shop": rc.NODE_SHOP,
+    "treasure": rc.NODE_RELIC,
+    "boss": rc.NODE_BOSS,
+    "unknown": rc.NODE_EVENT,
+    "ancient": rc.NODE_ANCIENT,
+}
+# What a room turned out to be, in the history's words, as `PHASE_ROOMS` says it.
+HISTORY_ROOMS = {
+    "monster": "combat",
+    "elite": "combat",
+    "boss": "combat",
+    "event": "event",
+    "shop": "shop",
+    "treasure": "treasure",
+    "rest_site": "rest_site",
+}
+EVENTS_SOURCE = REPO / "decompiled" / "MegaCrit.Sts2.Core.Models.Events"
+_EVENT_CHOICE = re.compile(
+    r"^([A-Z0-9_]+)\.pages\.([A-Z0-9_]+)\.options\.([A-Z0-9_]+)\."
+)
+
+
+def has_screens(run: RealRun) -> bool:
+    """Whether a run's sessions logged any screen but a fight's."""
+    return any(screen_kind(state) not in (None, "combat") for state in run.states)
+
+
+def history_card(card: dict[str, Any]) -> tuple[str | None, bool]:
+    """A history card, `{"id": "CARD.X", "current_upgrade_level": n}`, as `card_key`."""
+    return slug(card.get("id")), bool(card.get("current_upgrade_level"))
+
+
+def _picked(choices: list[dict[str, Any]]) -> list[str | None]:
+    return [slug(c.get("choice")) for c in choices if c.get("was_picked")]
+
+
+@functools.cache
+def event_option_blocks(entry: str) -> tuple[tuple[str, ...], ...]:
+    """Each option list an event builds, its keys as patterns, in the order it lists them.
+
+    Read off the decompiled event class (`EVENTS_SOURCE`): every `new EventOption[n]` array
+    is one page's options, each `new EventOption(this, ..., <key>)` with a literal key, an
+    interpolated one (`$"...pages.DECIPHER_{DecipherCount}.options..."`, whose `{...}`
+    matches any name) or `InitialOptionKey("KEY")` (the INITIAL page's). A locked variant
+    (`<KEY>_LOCKED`) is the other branch of its option's own slot, so it takes no index.
+    The emulator's action is the option's index in its list (as `Replayer.on_event` steps
+    a screen's option index). Empty without the decompiled source.
+    """
+    name = "".join(part.capitalize() for part in entry.split("_"))
+    path = EVENTS_SOURCE / f"{name}.cs"
+    if not path.is_file():
+        return ()
+    option = re.compile(
+        r'new EventOption\(this, \w+, (?:\$?"([A-Z0-9_]+\.pages\.[^"]+\.options\.'
+        r'[A-Z0-9_]+)"|InitialOptionKey\("([A-Z0-9_]+)"\))',
+    )
+    blocks = []
+    for chunk in path.read_text(encoding="utf-8").split("new EventOption[")[1:]:
+        keys = []
+        for literal, initial in option.findall(chunk):
+            key = literal or f"{entry}.pages.INITIAL.options.{initial}"
+            if key.endswith("_LOCKED"):
+                continue
+            keys.append(re.sub(r"\\\{[^}]*\\\}", "[A-Za-z0-9_]+", re.escape(key)))
+        if keys:
+            blocks.append(tuple(keys))
+    return tuple(blocks)
+
+
+def event_option_index(key: str) -> int | None:
+    """The index of a history event choice's option in the list that offers it."""
+    match = _EVENT_CHOICE.match(key)
+    if match is None:
+        return None
+    wanted = key.removesuffix(".title")
+    for block in event_option_blocks(match.group(1)):
+        for index, pattern in enumerate(block):
+            if re.fullmatch(pattern, wanted):
+                return index
+    return None
+
+
+class HistoryReplayer(Replayer):
+    """Replay a run whose sessions logged its fights only -- the autopilot's, the fight
+    lab's -- off the game's own run history, the one record that holds the rest.
+
+    The history's `map_point_history` names, floor by floor, the node the player took,
+    what the room turned out to be (the encounter or event model), and every offer with
+    what was picked: the Neow and Ancient blessings, the card, potion and relic rewards,
+    the treasure relic, a shop's whole shelf, the event options chosen, the rest site
+    choice, the cards upgraded, removed, transformed or gained. That is enough to walk the
+    emulator through the same run and compare what it offers at each floor.
+
+    The map's node is the fight's own coordinate where a session logged it; elsewhere it
+    is the one node of the history's type among the emulator's choices, or the one of
+    several whose path can reach the next logged coordinate through the history's types
+    (`walk`). A path the emulator's map cannot make loses the rest of the act, which is
+    caught up at the next one. Fights are resolved, as `Replayer` resolves them. After
+    each floor the gold, and away from a fight the HP, are compared with the history's and
+    set to it -- except what a debug action on the floor changed (`DEBUG_TOUCHES`): the
+    autopilot's HP buffer before a fight, its kill of a fight it cannot win. Everything
+    the run is offered afterwards is compared as usual.
+    """
+
+    def __init__(self, run: RealRun, *, verbose: bool = False) -> None:
+        super().__init__(run, verbose=verbose)
+        self.coords: dict[int, tuple[int, int]] = {}
+        for state in run.states:
+            where = state.get("run") or {}
+            coord = where.get("map_coord")
+            if coord and isinstance(where.get("floor"), int):
+                self.coords[where["floor"]] = (int(coord["col"]), int(coord["row"]))
+        self.fights = {
+            screen.floor: screen
+            for screen in build_screens(run.states)
+            if screen.kind == "combat"
+        }
+        self.report.notes.append(
+            "the sessions logged fights only, so the run is read off the game's run "
+            "history: offers are compared without prices, maps by the path the "
+            "history took",
+        )
+        self.points: list[tuple[int, dict[str, Any]]] = [
+            (act, point)
+            for act, points in enumerate(
+                (run.history or {}).get("map_point_history") or [],
+                start=1,
+            )
+            for point in points
+        ]
+        self.lost_act: int | None = None
+        self.path_ok: dict[int, bool] = {}
+        # Per floor: what has been taken or chosen so far, so a screen that comes round
+        # again is answered once.
+        self.cursor: Counter = Counter()
+        self.potions_taken: Counter = Counter()
+
+    # -- the walk ---------------------------------------------------------------
+
+    def replay(self) -> RunReport:
+        for index, (act, point) in enumerate(self.points):
+            floor = index + 1
+            self.report.floors = max(self.report.floors, floor)
+            if self.phase == rc.PHASE_COMPLETE:
+                self.report.stopped = (
+                    f"the emulator's run ended at floor {self.info.get('floor')} while "
+                    f"the game went on to floor {floor}"
+                )
+                break
+            if act != self.lost_act:
+                self.lost_act = None
+            if self.lost_act is not None:
+                continue
+            kind = str(point.get("map_point_type"))
+            stats = (point.get("player_stats") or [{}])[0]
+            rooms = point.get("rooms") or [{}]
+            self.cursor = Counter()
+            self.potions_taken = Counter()
+            if self.verbose:
+                print(
+                    f"  floor {floor} history {kind} emulator {self.emulator_screen()}"
+                )
+            try:
+                if kind == "ancient":
+                    self.at_ancient(floor, act, stats)
+                elif not self.walk(floor, act, kind, index):
+                    self.lost_act = act
+                    continue
+                else:
+                    self.enter(floor, kind, rooms[0], stats)
+                self.settle(floor, kind, stats)
+            except UnresolvableChoice as exc:
+                self.flow(floor, str(exc), kind)
+                self.reach("map", floor, limit=40)
+            except _RunOver:
+                break
+            self.outcome(floor, kind, str(rooms[0].get("room_type")), stats)
+        for act, ok in sorted(self.path_ok.items()):
+            self.report.record(
+                "map",
+                0,
+                f"act {act}: the history's path through the emulator's map",
+                "walkable",
+                "walkable" if ok else "not walkable",
+            )
+        self.env.close()
+        return self.report
+
+    def to_act(self, floor: int, act: int) -> None:
+        """Walk the emulator into the history's act, as a won boss does (a flow note)."""
+        while 0 < self.emulator_act < act:
+            before = self.emulator_act
+            self.flow(floor, f"catching up from act {before}", f"act {act}")
+            self.obs, self.info = self.env.debug_enter_next_act()
+            if self.emulator_act == before:
+                break
+
+    def at_ancient(self, floor: int, act: int, stats: dict[str, Any]) -> None:
+        """Neow, or an act's Ancient: compare the three blessings, take the same one."""
+        if self.phase == rc.PHASE_MAP:
+            self.to_act(floor, act)
+            # A later act's Ancient is its map's first node, walked into.
+            ancient = [
+                i
+                for i, c in enumerate(self.info.get("map_choices") or ())
+                if c["node_type"] == rc.NODE_ANCIENT
+            ]
+            if ancient:
+                self.step(ancient[0])
+        if self.phase != rc.PHASE_ANCIENT:
+            raise UnresolvableChoice(f"the emulator is at {self.emulator_screen()}")
+        emu = [
+            RELIC_NAMES.get(int(r), f"#{r}")
+            for r in self.info["neow_options"]
+            if int(r)
+        ]
+        real = [slug(o.get("TextKey")) for o in stats.get("ancient_choice") or []]
+        category = "neow" if act == 1 else "ancient"
+        self.report.record(category, floor, "blessings", real, emu)
+        chosen = next(
+            (
+                slug(o.get("TextKey"))
+                for o in stats.get("ancient_choice") or []
+                if o.get("was_chosen")
+            ),
+            None,
+        )
+        if chosen not in emu:
+            raise UnresolvableChoice(f"blessing {chosen!r} is not among {emu}")
+        self.step(emu.index(chosen))
+        self.ancients_chosen.add(act)
+
+    def walk(self, floor: int, act: int, kind: str, index: int) -> bool:
+        """Take the history's node on the emulator's map; say whether it could."""
+        if self.phase != rc.PHASE_MAP:
+            self.reach("map", floor, limit=40)
+        self.to_act(floor, act)
+        choices = self.info.get("map_choices") or ()
+        coord = self.coords.get(floor)
+        wanted = HISTORY_NODES.get(kind)
+        if coord is not None:
+            found = [i for i, c in enumerate(choices) if (c["x"], c["y"]) == coord]
+        else:
+            found = [i for i, c in enumerate(choices) if c["node_type"] == wanted]
+            if len(found) > 1:
+                found = self.reaching(found, choices, act, index) or found
+        if not found:
+            self.path_ok[act] = False
+            self.flow(
+                floor,
+                f"no {kind} node {coord or ''} among the emulator's choices "
+                f"{[(c['x'], c['y'], NODE_NAMES.get(c['node_type'])) for c in choices]}",
+                kind,
+            )
+            return False
+        self.path_ok.setdefault(act, True)
+        self.step(found[0])
+        return True
+
+    def reaching(
+        self,
+        found: list[int],
+        choices: tuple[dict[str, int], ...],
+        act: int,
+        index: int,
+    ) -> list[int]:
+        """The choices from which the history's next floors can be walked in this act.
+
+        Each next floor must be a child of the node before it, of the history's type, and
+        at the session's coordinate where it logged one; a logged coordinate anchors the
+        path, so the search stops there.
+        """
+        graph = self.env.map_graph()
+        children: dict[tuple[int, int], list[tuple[int, int]]] = {}
+        for start, end in graph["edges"]:
+            children.setdefault(tuple(start), []).append(tuple(end))
+        ahead = []
+        for later in range(index + 1, len(self.points)):
+            later_act, point = self.points[later]
+            if later_act != act:
+                break
+            ahead.append(
+                (
+                    HISTORY_NODES.get(str(point.get("map_point_type"))),
+                    self.coords.get(later + 1),
+                ),
+            )
+
+        @functools.cache
+        def walkable(node: tuple[int, int], step: int) -> bool:
+            if step >= len(ahead):
+                return True
+            wanted, coord = ahead[step]
+            for child in children.get(node, []):
+                if graph["nodes"].get(child) != wanted:
+                    continue
+                if coord is not None:
+                    if child == coord:
+                        return True
+                    continue
+                if walkable(child, step + 1):
+                    return True
+            return False
+
+        return [i for i in found if walkable((choices[i]["x"], choices[i]["y"]), 0)]
+
+    def enter(
+        self,
+        floor: int,
+        kind: str,
+        room: dict[str, Any],
+        stats: dict[str, Any],
+    ) -> None:
+        """Compare what the room turned out to be, and what it holds on entry."""
+        real_room = HISTORY_ROOMS.get(str(room.get("room_type")))
+        emu_room = PHASE_ROOMS.get(self.phase, self.emulator_screen())
+        if kind == "unknown":
+            self.report.record(
+                "unknown_room", floor, "unknown node", real_room, emu_room
+            )
+        if real_room != emu_room:
+            raise UnresolvableChoice(f"the room is a {real_room} in the game")
+        model = str(room.get("model_id") or "")
+        if emu_room == "combat":
+            last = floor == len(self.points) and not (self.run.history or {}).get("win")
+            if model.startswith("ENCOUNTER."):
+                emu_id = native.run_encounter_id(self.env._run_handle)
+                self.report.record(
+                    "encounter",
+                    floor,
+                    f"{room.get('room_type')} encounter",
+                    encounter_model_to_emulator(model),
+                    ENCOUNTER_NAMES.get(emu_id, f"#{emu_id}"),
+                )
+            if last:
+                # The run's last floor, and not a win: the fight ended the run, and there
+                # is nothing after it to compare.
+                self.report.stopped = f"the run ended in the fight on floor {floor}"
+                raise _RunOver
+            fight = self.fights.get(floor)
+            self.obs, self.info = self.env.debug_resolve_combat(
+                **(fight_outcome(fight, None) if fight is not None else {}),
+            )
+            if self.phase == rc.PHASE_RELIC_REWARD:
+                self.compare_rewards(floor, stats)
+        elif emu_room == "event" and model.startswith("EVENT."):
+            emu_event = EVENT_NAMES.get(
+                int(self.info["event_id"]), self.info["event_id"]
+            )
+            if self.phase == rc.PHASE_CRYSTAL_SPHERE:
+                emu_event = "CRYSTAL_SPHERE"
+            if not self.report.record("event", floor, "event", slug(model), emu_event):
+                raise UnresolvableChoice("a different event")
+        elif emu_room == "shop":
+            self.compare_shelf(floor, stats)
+        elif emu_room == "treasure":
+            emu = int(self.info.get("relic_reward") or 0)
+            self.report.record(
+                "treasure",
+                floor,
+                "chest relic",
+                [slug(c.get("choice")) for c in stats.get("relic_choices") or []],
+                [RELIC_NAMES.get(emu, f"#{emu}")] if emu else [],
+            )
+
+    def compare_rewards(self, floor: int, stats: dict[str, Any]) -> None:
+        emu = self.emu_reward_items()
+        # The history counts the gold TAKEN; a reward left on the screen says nothing of
+        # what it held, so only gold taken is compared.
+        if int(stats.get("gold_gained") or 0) > 0:
+            self.report.record(
+                "gold",
+                floor,
+                "combat gold",
+                int(stats.get("gold_gained") or 0),
+                sum(value for kind, value in emu if kind == "gold"),
+            )
+        self.report.record(
+            "potion",
+            floor,
+            "potion drop",
+            [slug(c.get("choice")) for c in stats.get("potion_choices") or []],
+            [value for kind, value in emu if kind == "potion"],
+        )
+        real_relic = [slug(c.get("choice")) for c in stats.get("relic_choices") or []]
+        emu_relic = [value for kind, value in emu if kind == "relic"]
+        if real_relic or emu_relic:
+            self.report.record("relic", floor, "combat relic", real_relic, emu_relic)
+
+    def emu_shelf(self) -> tuple[list[Any], list[Any], list[Any]]:
+        slots = self.info["shop_slots"]
+        cards = [
+            emulator_card(slots[s]["item_id"])
+            for s in SHOP_CARD_SLOTS
+            if slots[s]["item_id"]
+        ]
+        try:
+            upgraded = native.run_state_list(self.env._run_handle, 22, 7)
+        except RuntimeError:
+            upgraded = ()
+        if upgraded:
+            cards = [(entry, bool(upgraded[i])) for i, (entry, _) in enumerate(cards)]
+        relics = [
+            RELIC_NAMES.get(slots[s]["item_id"])
+            for s in SHOP_RELIC_SLOTS
+            if slots[s]["item_id"]
+        ]
+        potions = [
+            POTION_NAMES.get(slots[s]["item_id"])
+            for s in SHOP_POTION_SLOTS
+            if slots[s]["item_id"]
+        ]
+        return cards, relics, potions
+
+    def compare_shelf(self, floor: int, stats: dict[str, Any]) -> None:
+        cards, relics, potions = self.emu_shelf()
+        real_cards = sorted(
+            history_card(c.get("card") or {}) for c in stats.get("card_choices") or []
+        )
+        self.report.record("shop", floor, "cards", real_cards, sorted(cards))
+        self.report.record(
+            "shop",
+            floor,
+            "relics",
+            sorted(slug(c.get("choice")) for c in stats.get("relic_choices") or []),
+            sorted(relics),
+        )
+        self.report.record(
+            "shop",
+            floor,
+            "potions",
+            sorted(slug(c.get("choice")) for c in stats.get("potion_choices") or []),
+            sorted(potions),
+        )
+
+    # -- answering the room the way the player did ----------------------------------
+
+    def settle(self, floor: int, kind: str, stats: dict[str, Any]) -> None:
+        """Answer every screen the floor raises the way the history says, to the map."""
+        for _ in range(60):
+            phase = self.phase
+            if phase in (rc.PHASE_MAP, rc.PHASE_COMPLETE):
+                return
+            if phase == rc.PHASE_ANCIENT and kind != "ancient":
+                return  # the next act's Ancient, after a boss
+            if phase == rc.PHASE_RELIC_REWARD:
+                self.claim_rewards(stats)
+            elif phase == rc.PHASE_CARD_REWARD:
+                self.card_reward(floor, stats)
+            elif phase == rc.PHASE_TRANSFORM_SELECT:
+                self.deck_select(floor, stats)
+            elif phase == rc.PHASE_BUNDLE_SELECT:
+                self.bundle(floor, stats)
+            elif phase in (rc.PHASE_EVENT, rc.PHASE_CRYSTAL_SPHERE):
+                self.event_option(stats)
+            elif phase == rc.PHASE_SHOP:
+                self.shop(stats)
+            elif phase == rc.PHASE_TREASURE:
+                if (
+                    _picked(stats.get("relic_choices") or [])
+                    and not self.cursor["chest"]
+                ):
+                    self.cursor["chest"] += 1
+                    self.step(rc.TREASURE_TAKE_RELIC_ACTION)
+                else:
+                    self.step(rc.REWARD_SKIP_ACTION)
+            elif phase == rc.PHASE_REST:
+                self.rest(stats)
+            elif phase == rc.PHASE_COMBAT:
+                self.obs, self.info = self.env.debug_resolve_combat()
+            elif phase == rc.PHASE_ANCIENT:
+                self.step(0)  # an Ancient's finished page answers to its one option
+            else:
+                raise UnresolvableChoice(f"no answer for {self.emulator_screen()}")
+        raise UnresolvableChoice(
+            f"floor {floor} never settled ({self.emulator_screen()})"
+        )
+
+    def claim_rewards(self, stats: dict[str, Any]) -> None:
+        potions = Counter(_picked(stats.get("potion_choices") or []))
+        potions.subtract(self.potions_taken)
+        relics = _picked(stats.get("relic_choices") or [])
+        rewards = (len(stats.get("card_choices") or []) + 2) // 3
+        for index, (kind, value) in enumerate(self.emu_reward_items()):
+            take = (
+                (kind == "gold" and int(stats.get("gold_gained") or 0) > 0)
+                or (kind == "potion" and potions[value] > 0)
+                or (
+                    kind == "relic"
+                    and (value in relics or not stats.get("relic_choices"))
+                )
+                or (kind == "card" and self.cursor["card rewards"] < rewards)
+            )
+            if not take:
+                continue
+            if kind == "potion":
+                self.potions_taken[value] += 1
+            if kind == "card":
+                self.cursor["card rewards"] += 1
+            before = self.info["pending_rewards"]
+            self.step(index)
+            if (
+                self.phase != rc.PHASE_RELIC_REWARD
+                or self.info["pending_rewards"] != before
+            ):
+                return
+        self.step(rc.REWARD_SKIP_ACTION)
+
+    def card_reward(self, floor: int, stats: dict[str, Any]) -> None:
+        group = self.cursor["card groups"]
+        self.cursor["card groups"] += 1
+        offered = (stats.get("card_choices") or [])[group * 3 : group * 3 + 3]
+        real = [history_card(c.get("card") or {}) for c in offered]
+        emu = self.emu_card_reward()
+        self.report.record("card_reward", floor, "cards offered", real, emu)
+        picked = next(
+            (history_card(c.get("card") or {}) for c in offered if c.get("was_picked")),
+            None,
+        )
+        self.step(emu.index(picked) if picked in emu else rc.REWARD_SKIP_ACTION)
+
+    def history_cards(self, stats: dict[str, Any]) -> list[tuple[str | None, bool]]:
+        """The deck cards the floor's selections acted on, in the history's order."""
+        cards = [(slug(c), False) for c in stats.get("upgraded_cards") or []]
+        cards += [history_card(c) for c in stats.get("cards_removed") or []]
+        cards += [
+            history_card(t.get("original_card") or {})
+            for t in stats.get("cards_transformed") or []
+        ]
+        cards += [
+            history_card(e.get("card") or {})
+            for e in stats.get("cards_enchanted") or []
+        ]
+        return cards
+
+    def deck_select(self, floor: int, stats: dict[str, Any]) -> None:
+        legal = valid_actions(self.env)
+        offer = [int(c) for c in self.info.get("offer_cards") or () if int(c)]
+        kind = int((self.info.get("deck_selection") or (0,))[0])
+        if offer and kind == 0:
+            # A choose-a-card grid: the card the floor gained.
+            entries = [emulator_card(c)[0] for c in offer]
+            gained = [slug(c.get("id")) for c in stats.get("cards_gained") or []]
+            pick = next((entries.index(e) for e in gained if e in entries), None)
+            if pick is None:
+                raise UnresolvableChoice(
+                    f"took {gained}, which the grid {entries} lacks"
+                )
+            self.step(pick)
+            return
+        wanted = self.history_cards(stats)[self.cursor["deck picks"] :]
+        deck = [emulator_card(c["card_id"], c["upgraded"]) for c in self.info["deck"]]
+        for card in wanted:
+            index = next(
+                (
+                    i
+                    for i, held in enumerate(deck)
+                    if i in legal
+                    and held[0] == card[0]
+                    and (held[1] == card[1] or not card[1])
+                ),
+                None,
+            )
+            self.cursor["deck picks"] += 1
+            if index is not None:
+                self.step(index)
+                return
+        if rc.REWARD_SKIP_ACTION in legal:
+            self.step(rc.REWARD_SKIP_ACTION)
+            return
+        raise UnresolvableChoice(
+            f"cannot tell which card of the deck floor {floor} chose"
+        )
+
+    def bundle(self, floor: int, stats: dict[str, Any]) -> None:
+        offer = [int(c) for c in self.info.get("bundle_offer") or ()]
+        bundles = [
+            sorted(emulator_card(c)[0] for c in offer[i : i + 3] if c)
+            for i in range(0, len(offer), 3)
+        ]
+        gained = sorted(slug(c.get("id")) for c in stats.get("cards_gained") or [])
+        self.report.record(
+            "card_offer",
+            floor,
+            "bundles",
+            [gained],
+            [b for b in bundles if b == gained] or bundles,
+        )
+        pick = next((i for i, b in enumerate(bundles) if b == gained), None)
+        if pick is None:
+            raise UnresolvableChoice(f"took {gained}, which no bundle holds")
+        self.step(pick)
+        if self.phase == rc.PHASE_BUNDLE_SELECT:
+            self.step(rc.BUNDLE_CONFIRM_ACTION)
+
+    def event_option(self, stats: dict[str, Any]) -> None:
+        keys = [
+            str((c.get("title") or {}).get("key") or "")
+            for c in stats.get("event_choices") or []
+        ]
+        legal = valid_actions(self.env)
+        while self.cursor["event choices"] < len(keys):
+            key = keys[self.cursor["event choices"]]
+            self.cursor["event choices"] += 1
+            if _EVENT_CHOICE.match(key) is None:
+                continue  # an Ancient's relic title, taken with the blessing
+            index = event_option_index(key)
+            if index is not None and index in legal:
+                self.step(index)
+                return
+            raise UnresolvableChoice(
+                f"event option {key} is not one the emulator can take"
+            )
+        if not self.proceed():
+            raise UnresolvableChoice(
+                "the event wants a choice the history does not name"
+            )
+
+    def shop(self, stats: dict[str, Any]) -> None:
+        slots = self.info["shop_slots"]
+        wanted: list[tuple[range, int | None]] = []
+        for choice in stats.get("card_choices") or []:
+            if choice.get("was_picked"):
+                wanted.append(
+                    (
+                        SHOP_CARD_SLOTS,
+                        CARD_IDS.get(slug((choice.get("card") or {}).get("id")) or ""),
+                    )
+                )
+        for choice in stats.get("relic_choices") or []:
+            if choice.get("was_picked"):
+                wanted.append(
+                    (SHOP_RELIC_SLOTS, RELIC_IDS.get(slug(choice.get("choice")) or ""))
+                )
+        for choice in stats.get("potion_choices") or []:
+            if choice.get("was_picked"):
+                wanted.append(
+                    (
+                        SHOP_POTION_SLOTS,
+                        POTION_IDS.get(slug(choice.get("choice")) or ""),
+                    )
+                )
+        legal = valid_actions(self.env)
+        while self.cursor["bought"] < len(wanted):
+            pool, item = wanted[self.cursor["bought"]]
+            self.cursor["bought"] += 1
+            slot = next((s for s in pool if item and slots[s]["item_id"] == item), None)
+            if slot is not None and slot in legal:
+                self.step(slot)
+                return
+        if stats.get("cards_removed") and not self.cursor["removal"]:
+            self.cursor["removal"] += 1
+            if rc.SHOP_REMOVE_ACTION in legal:
+                self.step(rc.SHOP_REMOVE_ACTION)
+                return
+        self.step(rc.SHOP_SKIP_ACTION)
+
+    def rest(self, stats: dict[str, Any]) -> None:
+        choices = [str(c) for c in stats.get("rest_site_choices") or []]
+        if self.cursor["rested"] < len(choices):
+            choice = choices[self.cursor["rested"]]
+            self.cursor["rested"] += 1
+            action = REST_ACTIONS.get(choice)
+            if action is not None and action in valid_actions(self.env):
+                self.step(action)
+                return
+            raise UnresolvableChoice(
+                f"rest choice {choice} is not the emulator's to take"
+            )
+        if not self.proceed():
+            self.step(rc.REWARD_SKIP_ACTION)
+
+    # -- after the floor ---------------------------------------------------------
+
+    def outcome(self, floor: int, kind: str, room: str, stats: dict[str, Any]) -> None:
+        """Compare the gold, and away from a fight the HP, with the history's; set them.
+
+        A fight is resolved, not played, so what it cost is the game's; and a debug action
+        on the floor changed what it touched (`DEBUG_TOUCHES`). Both are set to the
+        history's without being scored.
+        """
+        if not stats or stats.get("current_gold") is None:
+            return
+        real = {
+            "gold": int(stats.get("current_gold") or 0),
+            "hp": int(stats.get("current_hp") or 0),
+            "max_hp": int(stats.get("max_hp") or 0),
+        }
+        emu = {
+            "gold": int(self.info["gold"]),
+            "hp": int(self.info["player_hp"]),
+            "max_hp": int(self.info["player_max_hp"]),
+        }
+        touched = set(debug_touches(self.run.debug.get(floor, [])))
+        if HISTORY_ROOMS.get(room) == "combat":
+            touched |= {"hp", "max_hp"}
+        scored = {key: value for key, value in real.items() if key not in touched}
+        if scored:
+            self.report.record(
+                "outcome",
+                floor,
+                f"{' and '.join(sorted(scored))} after the {kind}",
+                scored,
+                {key: emu[key] for key in scored},
+            )
+        if real != emu and self.phase != rc.PHASE_COMPLETE:
+            self.obs, self.info = self.env.debug_set_player(**real)
+
+
+class _RunOver(Exception):
+    """The run ended on this floor; the history holds nothing after it."""
+
+
 class UnresolvableChoice(RuntimeError):
     """The real run's choice cannot be read off the record, so the replay cannot follow."""
+
+
+# --- debug actions ----------------------------------------------------------------
+
+# What each debug action changes of what the run holds: a buffer raises current and max
+# HP together (STS2MCP `ExecuteDebugGainMaxHp`), a kill ends a fight the player would have
+# lost HP in, a card added changes the deck. A debug action this does not name may have
+# changed anything.
+DEBUG_TOUCHES = {
+    HP_BUFFER: frozenset({"hp", "max_hp"}),
+    "debug_kill_enemy": frozenset({"hp"}),
+    "debug_force_play_phase": frozenset(),
+    "debug_set_energy": frozenset(),
+    "debug_add_card": frozenset({"deck"}),
+}
+_EVERYTHING = frozenset({"hp", "max_hp", "gold", "deck", "relics", "potions"})
+
+
+def debug_touches(names: list[str]) -> frozenset[str]:
+    """The holdings the named debug actions changed (`DEBUG_TOUCHES`)."""
+    touched: frozenset[str] = frozenset()
+    for name in names:
+        touched |= DEBUG_TOUCHES.get(name, _EVERYTHING)
+    return touched
 
 
 # --- diffs between two real screens --------------------------------------------------
@@ -1930,6 +2742,10 @@ def _shop_slot(item: dict[str, Any], slots: tuple[dict[str, int], ...]) -> int |
 
 
 def replay_run(run: RealRun, *, verbose: bool = False) -> RunReport:
+    """Replay one run: off its screens, or off its run history when the sessions logged
+    its fights only (`HistoryReplayer`)."""
+    if run.history and run.actions is None and not run.lab and not has_screens(run):
+        return HistoryReplayer(run, verbose=verbose).replay()
     return Replayer(run, verbose=verbose).replay()
 
 
