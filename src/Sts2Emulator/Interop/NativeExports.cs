@@ -149,6 +149,19 @@ public static class NativeExports
         }
 
         /// <summary>
+        /// A run's fight, handed over as <c>RunEngine.ForkActiveCombat</c> copied it: the
+        /// state and the stream its steps draw from. Nothing of a reset or a snapshot load
+        /// runs, because the position is mid-fight and its streams are already the run's.
+        /// <paramref name="seed" /> is only what a later reset of this handle seeds from.
+        /// </summary>
+        public NativeCombat(CombatState state, CountingRandom rng, int seed)
+        {
+            Seed = seed;
+            State = state;
+            Rng = rng;
+        }
+
+        /// <summary>
         /// Re-seeds every per-subsystem stream from the handle's seed and clears the
         /// win flag. Every Reset overload below opens with exactly this, so it lives in
         /// one place: six copies is six chances for a new stream to be added to five of
@@ -530,6 +543,51 @@ public static class NativeExports
             }
         }
         return -1; // pool exhausted
+    }
+
+    /// <summary>
+    /// Hand the fight a run stands in to a new combat handle, so a fight search inside a run
+    /// can fork combat handles instead of whole runs, and a combat prior can read them
+    /// (rl/run_train/DESIGN.md 6.5). Pass <paramref name="resampleHidden" /> non-zero to get
+    /// exactly the fight of <c>Sts2Run_Clone</c> with the same <paramref name="resampleSeed" />:
+    /// every stream rebuilt off the resampled seed at the same call counts, and the unseen
+    /// draw pile reshuffled. Without it the copy is faithful, which for a search is an
+    /// oracle. Only the fight is copied; the run is not touched.
+    /// </summary>
+    /// <returns>
+    /// The new combat handle; -1 if the run is unknown or not in a fight; -2 if the combat
+    /// handle pool is full.
+    /// </returns>
+    [UnmanagedCallersOnly(EntryPoint = "Sts2Run_ForkCombat")]
+    public static unsafe int Sts2Run_ForkCombat(
+        int runHandle,
+        int resampleHidden,
+        int resampleSeed,
+        int* obsBuf
+    )
+    {
+        if (!RunNativeExports.TryGetRun(runHandle, out var run))
+        {
+            return -1;
+        }
+
+        if (run.ForkActiveCombat(resampleHidden != 0 ? resampleSeed : null) is not { } fight)
+        {
+            return -1;
+        }
+
+        var combat = new NativeCombat(fight.Combat, fight.Rng, resampleSeed);
+        for (int i = 0; i < _pool.Length; i++)
+        {
+            if (_pool[i] is null)
+            {
+                _pool[i] = combat;
+                WriteObs(combat.State, obsBuf);
+                return i;
+            }
+        }
+
+        return -2;
     }
 
     /// <summary>Why the last <c>Sts2_LoadCombatSnapshot</c> was refused, as UTF-8; empty after a success.</summary>

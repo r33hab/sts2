@@ -1,7 +1,7 @@
 """The engine service: the simulator, spoken to by the coach in JSON lines.
 
-`python -m sts2_gym.live.service [--workers N]` is one long-lived process in the
-simulator's own environment (spire-coach plan `2026-09-24-sim-engine-service.md`). The
+`python -m sts2_gym.live.service [--workers N] [--prior-dir DIR]` is one long-lived process
+in the simulator's own environment (spire-coach plan `2026-09-24-sim-engine-service.md`). The
 coach starts it and writes one request per line to its stdin, `{"id": int, "method":
 str, "params": {...}}`, and reads one line back per request on its stdout: `{"id": int,
 "ok": true, "result": {...}}` or `{"id": int, "ok": false, "error": {"type": str,
@@ -18,7 +18,8 @@ A bad request is answered, never fatal. A param a method does not know is ignore
 one line in the log, so a newer coach still works with an older service. The methods:
 
   health    what is running: the service's version, the native API's, the simulator
-            commit the service started from, the game version it targets, its workers.
+            commit the service started from, the game version it targets, its workers,
+            and the combat prior its search plays with (null: none).
   analyze   a `sts2-live-snapshot/1` document in; the search's best move, the rest of the
             turn it expects and every move's statistics out, all in game terms (`moves`).
             A search worker that failed, died or hung during the call makes the answer
@@ -29,6 +30,11 @@ one line in the log, so a newer coach still works with an older service. The met
             strategy champion's value for each option on it, best first (`strategy`).
   shutdown  answer, then stop the worker pool and exit 0. EOF on stdin does the same, and
             so does SIGTERM, with status 143.
+
+`--prior-dir DIR` makes the search PUCT, guided by the combat prior the prior loop exported
+to DIR (`combat_prior`), with the gate's settings; without it the search is the rollout
+search it always was. A DIR with no prior, or one this build cannot play, stops the service
+at startup. The workers load the network before they report in, so no call pays for it.
 
 The error types: `bad_request` (not JSON, no id, a bad param value), `unknown_method`,
 `conversion` (the converter refused a snapshot, naming the field), `load` (the emulator
@@ -131,8 +137,14 @@ class Service:
         workers: int,
         sim_commit: str,
         strategy_model: strategy.StrategyModel | None = None,
+        combat_prior: Any | None = None,
     ) -> None:
+        """`combat_prior` is a `combat_prior.Champion` the search plays with, or None."""
         self._searcher = searcher
+        self._combat_prior = combat_prior
+        self._prior_settings: dict[str, Any] = (
+            {} if combat_prior is None else combat_prior.live_settings()
+        )
         self._workers = workers
         self._sim_commit = sim_commit
         self._strategy_model = (
@@ -204,7 +216,9 @@ class Service:
             "game_version_target": GAME_VERSION_TARGET,
             "workers": self._workers,
             "strategy_model": None,
-            "combat_prior": None,
+            "combat_prior": (
+                None if self._combat_prior is None else self._combat_prior.describe()
+            ),
         }
 
     def _shutdown(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -251,7 +265,7 @@ class Service:
 
     def _search(self, doc: dict[str, Any], settings: Mapping[str, float | int]) -> Any:
         try:
-            return self._searcher.search(doc, **settings)
+            return self._searcher.search(doc, **settings, **self._prior_settings)
         except native.SnapshotError as error:
             raise RequestError(
                 "load",
@@ -338,9 +352,19 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_WORKERS,
         help="search worker processes (default %(default)s)",
     )
+    parser.add_argument(
+        "--prior-dir",
+        type=Path,
+        default=None,
+        help="search with the combat prior exported to this folder (default: no prior)",
+    )
     args = parser.parse_args(argv)
     if args.workers < 1:
         parser.error("--workers must be at least 1")
+    try:
+        champion = _combat_prior(args.prior_dir)
+    except ValueError as error:
+        parser.error(str(error))
 
     logging.basicConfig(
         stream=sys.stderr,
@@ -354,12 +378,18 @@ def main(argv: list[str] | None = None) -> int:
     searcher = _search_module().ParallelSearcher(
         workers=args.workers,
         nice=WORKER_NICE,
+        warmup=None if champion is None else champion.live_prior().warm,
     )
     try:
         _LOG.info(
-            "serving with %d search workers, simulator %s",
+            "serving with %d search workers, simulator %s, %s",
             args.workers,
             sim_commit,
+            (
+                "no combat prior"
+                if champion is None
+                else f"combat prior {champion.directory} (iteration {champion.iteration})"
+            ),
         )
         requests = io.TextIOWrapper(
             sys.stdin.buffer,
@@ -367,7 +397,12 @@ def main(argv: list[str] | None = None) -> int:
             errors="replace",
         )
         serve(
-            Service(searcher, workers=args.workers, sim_commit=sim_commit),
+            Service(
+                searcher,
+                workers=args.workers,
+                sim_commit=sim_commit,
+                combat_prior=champion,
+            ),
             requests,
             protocol,
         )
@@ -780,10 +815,36 @@ def _search_module() -> ModuleType:
     `rl/` is a folder of scripts, not a package, and the search's worker processes import
     `live_search` by that name, so the service does too. A second call finds it imported.
     """
+    return _rl_module("live_search")
+
+
+def _rl_module(name: str) -> ModuleType:
+    """Import the module `rl/<name>.py` by its bare name, as the search's workers do."""
     rl = str(_ROOT / "rl")
     if rl not in sys.path:
         sys.path.insert(0, rl)
-    return importlib.import_module("live_search")
+    return importlib.import_module(name)
+
+
+def _combat_prior(directory: Path | None) -> Any | None:
+    """Read the combat prior exported to `directory`, which `--prior-dir` names; None: none.
+
+    Imported by name like the search (`combat_prior`, in `rl/`), and only when asked for.
+
+    Raises:
+        ValueError: If `directory` holds no prior, or one this build cannot play.
+
+    """
+    if directory is None:
+        return None
+    prior = _rl_module("combat_prior")
+    try:
+        champion = prior.find(directory)
+    except prior.PriorError as error:
+        raise ValueError(f"--prior-dir: {error}") from error
+    if champion is None:
+        raise ValueError(f"--prior-dir: no combat prior is exported to {directory}")
+    return champion
 
 
 def _exit_on_signal(signum: int, _frame: object) -> None:

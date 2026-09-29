@@ -232,7 +232,9 @@ def train(args: argparse.Namespace) -> None:
         )
         train_idx = train_idx[[f in keep_fights for f in fights[train_idx]]]
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(
+        getattr(args, "device", "") or ("cuda" if torch.cuda.is_available() else "cpu"),
+    )
     model = CombatNet(
         VOCAB,
         n_buckets,
@@ -572,6 +574,8 @@ def main() -> None:
     )
     parser.add_argument("--seed", type=int, default=0,
                         help="torch init/dropout seed")
+    parser.add_argument("--device", default="",
+                        help="training device (cpu, cuda, mps); default cuda if present")
     parser.add_argument("--ablate-endturn", action="store_true",
                         help="zero the end-turn probe channels, for the ablation")
     parser.add_argument("--plain-cards", action="store_true",

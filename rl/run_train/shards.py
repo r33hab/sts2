@@ -412,6 +412,8 @@ RUN_RECORD_SCHEMA: dict[str, Any] = {
                 "budget": {"type": "string", "pattern": "^[0-9]+(/[0-9]+)?$"},
                 "c": _NUMBER,
                 "crn_fraction": _NUMBER,
+                # The combat prior's policy sha256, when one guided the fights.
+                "prior": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
             },
             "additionalProperties": False,
         },

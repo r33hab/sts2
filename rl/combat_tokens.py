@@ -310,13 +310,17 @@ def end_turn_outlook(handle: int, obs) -> tuple[float, float, float, float]:
     )
 
 
-def encode(handle: int, obs, encounter_id: int) -> Tokens:
+def encode(handle: int, obs, encounter_id: int, *, probe: bool = True) -> Tokens:
     """One combat position as a token sequence.
 
     `obs` is the handle's observation buffer, already written by the last step. Piles come
     from `native.get_pile` rather than the observation because the observation caps the
     hand at ten slots and carries the other piles as counts only -- a value function that
     cannot see the deck it is holding is guessing.
+
+    `probe=False` skips the end-turn probe (five forks, five end-turns) and leaves its four
+    channels at 0, exactly what `train_combat.py --ablate-endturn` trains on. It is most
+    of what an encode costs, and the ablation found the network does not use it.
     """
     types: list[int] = []
     ids: list[int] = []
@@ -339,7 +343,9 @@ def encode(handle: int, obs, encounter_id: int) -> Tokens:
 
     hp, max_hp, block, energy = obs[0], obs[1], obs[2], obs[3]
     draw_n, discard_n, exhaust_n = obs[5], obs[6], obs[7]
-    mean_delta, worst_delta, p_death, known = end_turn_outlook(handle, obs)
+    mean_delta, worst_delta, p_death, known = (
+        end_turn_outlook(handle, obs) if probe else (0.0, 0.0, 0.0, 0.0)
+    )
     push(
         TYPE_GLOBAL,
         VOCAB.encounter.get(encounter_id, 0),
@@ -531,7 +537,6 @@ def bucket_centres(n_buckets: int, width: int) -> np.ndarray:
     for k in range(1, n_buckets):
         centres[k] = (k - 1) * width + (width + 1) / 2.0
     return centres
-
 
 
 def action_token_span(tokens: Tokens) -> int:

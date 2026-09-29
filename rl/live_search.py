@@ -297,6 +297,9 @@ class _Policy(NamedTuple):
     prior_fn: Callable | None
     c_puct: float  # PUCT's, likewise
     potion_value: float
+    # A node asks `prior_fn` once it has this many visits, and reads the rollout's tempo
+    # weights until then (see `_tree_choice`).
+    prior_min_visits: int = 0
 
 
 class _Node:
@@ -815,13 +818,19 @@ def _ucb_choice(node: _Node, moves: list[_Move], c: float) -> _Move:
     return best
 
 
-def _puct_choice(node: _Node, moves: list[_Move], c_puct: float) -> _Move:
+def _puct_choice(
+    node: _Node,
+    moves: list[_Move],
+    c_puct: float,
+    prior: dict[tuple, float] | None = None,
+) -> _Move:
     """AlphaZero's rule over every legal move, tried or not; ties go to the first.
 
     An untried move is scored at the node's own mean, the first-play urgency
     `combat_mcts.puct_action` uses, and sqrt(N + 1) keeps a fresh node from tying.
+    `prior` stands in for the node's own for this one choice (see `_tree_choice`).
     """
-    prior = node.prior or {}
+    prior = (node.prior if prior is None else prior) or {}
     first_play = node.value / node.visits if node.visits else 0.0
     explore = c_puct * math.sqrt(node.visits + 1)
     best, best_score = moves[0], -math.inf
@@ -837,6 +846,16 @@ def _puct_choice(node: _Node, moves: list[_Move], c_puct: float) -> _Move:
     return best
 
 
+def _heuristic_prior(world: Combat) -> dict[tuple, float]:
+    """Return the rollout's tempo weights on this world's moves as PUCT's prior, by key.
+
+    What a node reads before it has `prior_min_visits` visits, as
+    `combat_mcts.heuristic_prior` is for the prior loop's search: most nodes of a tree are
+    visited once or twice, and a network call there costs more than the playout it steers.
+    """
+    return _node_prior(world, lambda _handle, legal: live_rollout_weights(world, legal))
+
+
 def _tree_choice(
     world: Combat,
     node: _Node,
@@ -844,13 +863,19 @@ def _tree_choice(
     rng: np.random.Generator,
     policy: _Policy,
 ) -> _Move:
-    """Choose the next move inside the tree: UCT, or PUCT when there is a prior."""
+    """Choose the next move inside the tree: UCT, or PUCT when there is a prior.
+
+    A node asks the prior once, when it first has `prior_min_visits` visits, and keeps the
+    answer. Before that it reads the tempo weights of the world it is in, uncached.
+    """
     if policy.prior_fn is None:
         fresh = [move for move in moves if move.key not in node.children]
         if fresh:
             return fresh[int(rng.integers(len(fresh)))]
         return _ucb_choice(node, moves, policy.c)
     if node.prior is None:
+        if node.visits < policy.prior_min_visits:
+            return _puct_choice(node, moves, policy.c_puct, _heuristic_prior(world))
         node.prior = _node_prior(world, policy.prior_fn)
     return _puct_choice(node, moves, policy.c_puct)
 
@@ -1151,6 +1176,7 @@ class _Search:
         c_puct: float,
         confirm_pairs: int,
         lane: tuple[int, int],
+        prior_min_visits: int = 0,
     ):
         self.started = time.perf_counter()
         self.budget_s = time_budget_s
@@ -1166,7 +1192,13 @@ class _Search:
         self.root = Combat(handle)
         self.children, max_hp = _root_moves(self.root)
         scale = max(1, max_hp)  # UCT on V / max HP, the scale c was measured on
-        self.policy = _Policy(c * scale, prior_fn, c_puct * scale, potion_value)
+        self.policy = _Policy(
+            c * scale,
+            prior_fn,
+            c_puct * scale,
+            potion_value,
+            prior_min_visits,
+        )
         self.tree = _Node(-1, -1, "root")
         self.sims = self.uct_sims = self.attempts = 0
         self.failures = self.truncated = self.rounds = 0
@@ -1363,6 +1395,7 @@ def search_live(
     prior_fn: Callable[[int, list[int]], np.ndarray] | None = None,
     c_puct: float = 0.2,
     confirm_pairs: int = 50,
+    prior_min_visits: int = 0,
     _lane: tuple[int, int] = (0, 1),
 ) -> SearchResult:
     """Search the combat on `handle` and grade every root move.
@@ -1379,7 +1412,9 @@ def search_live(
 
     `prior_fn(handle, legal_actions)` switches the tree policy to PUCT with `c_puct`. It
     is handed a determinized world and that world's legal action ids, and returns one
-    non-negative weight per action; any other answer raises ValueError.
+    non-negative weight per action; any other answer raises ValueError. Below the root a
+    node asks it only once it has `prior_min_visits` visits, and reads the rollout's tempo
+    weights until then (`combat_mcts`'s lazy prior); 0 asks at a node's first choice.
 
     `_lane` is for `ParallelSearcher`: a search in lane (i, n) plays only seeds that are
     i modulo n, so searches in different lanes never share an imagined world.
@@ -1400,6 +1435,7 @@ def search_live(
         c_puct=c_puct,
         confirm_pairs=confirm_pairs,
         lane=_lane,
+        prior_min_visits=prior_min_visits,
     )
     if not search.children:
         raise ValueError("the position has no legal move to search")
@@ -1579,8 +1615,17 @@ class _Failure(NamedTuple):
     clean: bool  # the worker holds no combat afterwards, so it goes on serving
 
 
-def _serve(conn, nice: int, worker_fn: Callable) -> None:
+def _serve(
+    conn,
+    nice: int,
+    worker_fn: Callable,
+    warmup: Callable[[], None] | None = None,
+) -> None:
     """Be a search worker: lower this process's priority, report in, search until stopped.
+
+    `warmup` runs before the worker reports in, so what it loads (a prior's network) is
+    never paid for inside a call's budget. A warmup that raises kills the worker before it
+    has started.
 
     A call that raises is answered with the exception, and the worker goes on serving if
     it holds no combat afterwards. That is the only state a failed call can leave behind:
@@ -1591,6 +1636,8 @@ def _serve(conn, nice: int, worker_fn: Callable) -> None:
     os.nice(nice)
     # Ctrl-C is the parent's to handle, and the parent stops the workers itself.
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+    if warmup is not None:
+        warmup()
     conn.send("ready")
     while True:
         try:
@@ -1750,11 +1797,15 @@ class ParallelSearcher:
         workers: int = 4,
         nice: int = 10,
         *,
+        warmup: Callable[[], None] | None = None,
         _worker_fn: Callable | None = None,
     ):
         """Start the workers and wait until every one of them can search.
 
-        `_worker_fn` replaces what a worker runs for each call, for tests.
+        `warmup` runs in every worker before it reports in, a restarted one too: a
+        picklable callable that loads what the calls will need, such as
+        `combat_prior.LivePrior.warm`. `_worker_fn` replaces what a worker runs for each
+        call, for tests.
 
         Raises:
             ValueError: If `workers` is less than one.
@@ -1764,6 +1815,7 @@ class ParallelSearcher:
         if workers < 1:
             raise ValueError("ParallelSearcher needs at least one worker")
         self._nice = nice
+        self._warmup = warmup
         self._worker_fn = _worker_fn or _search_worker
         self._context = multiprocessing.get_context("spawn")
         self._calls = 0
@@ -1955,7 +2007,7 @@ class ParallelSearcher:
         parent_end, child_end = self._context.Pipe()
         process = self._context.Process(
             target=_serve,
-            args=(child_end, self._nice, self._worker_fn),
+            args=(child_end, self._nice, self._worker_fn, self._warmup),
             name=f"live-search-{index}",
             daemon=True,
         )

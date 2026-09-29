@@ -2,6 +2,7 @@
 
 import ctypes
 import dataclasses
+import functools
 import itertools
 import math
 import os
@@ -96,7 +97,16 @@ def bad_prior(_handle, legal):
     return np.ones(len(legal) + 1)
 
 
-def sleep_instead_of_serving(conn, nice, worker_fn):
+def mark_warm(directory):
+    """Warm up by leaving this worker's pid in `directory`."""
+    Path(directory, str(os.getpid())).touch()
+
+
+def fail_to_warm():
+    raise RuntimeError("the network is not there")
+
+
+def sleep_instead_of_serving(conn, nice, worker_fn, warmup=None):
     """Stand in for a restarted worker that never finishes starting."""
     time.sleep(3600)
 
@@ -1172,6 +1182,33 @@ class PriorTests(unittest.TestCase):
         # The same seeds without the prior spread the visits differently: PUCT ran.
         self.assertNotEqual(visits, [child.visits for child in plain.children])
 
+    def test_a_lazy_prior_is_asked_below_the_root_only_where_visited_enough(self):
+        asked = {}
+        for min_visits in (0, 3, 10**6):
+            calls = []
+
+            def counting(handle, legal, calls=calls):
+                calls.append(list(legal))
+                return np.ones(len(legal))
+
+            fight = Fight(0, TOADPOLES, POOL_DECK)
+            try:
+                result = search_live(
+                    fight.handle,
+                    time_budget_s=60.0,
+                    min_child_sims=10,
+                    max_sims=300,
+                    prior_fn=counting,
+                    prior_min_visits=min_visits,
+                )
+            finally:
+                fight.close()
+            self.assertEqual(result.sims, 300)
+            asked[min_visits] = len(calls)
+        self.assertEqual(asked[10**6], 1)  # the root's, and the tempo weights below it
+        self.assertLess(asked[3], asked[0])
+        self.assertGreater(asked[3], 1)
+
     def test_a_prior_with_the_wrong_shape_is_refused(self):
         fight = Fight(0, TOADPOLES, POOL_DECK)
         try:
@@ -1185,6 +1222,28 @@ class PriorTests(unittest.TestCase):
                 )
         finally:
             fight.close()
+
+
+class WarmupTests(unittest.TestCase):
+    def test_every_worker_warms_up_before_it_reports_in(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            searcher = live_search.ParallelSearcher(
+                workers=2,
+                nice=10,
+                warmup=functools.partial(mark_warm, tmp),
+            )
+            try:
+                # Ready means warm: both markers are there before any call.
+                pids = {str(worker.process.pid) for worker in searcher._workers}
+                self.assertEqual({path.name for path in Path(tmp).iterdir()}, pids)
+                result = searcher._search_arena(POOL_SPEC, **QUICK)
+            finally:
+                searcher.close()
+        self.assertEqual(result.warnings, [])
+
+    def test_a_warmup_that_fails_keeps_the_searcher_from_starting(self):
+        with self.assertRaisesRegex(RuntimeError, "while starting"):
+            live_search.ParallelSearcher(workers=1, nice=10, warmup=fail_to_warm)
 
 
 class MergeStatsTests(unittest.TestCase):

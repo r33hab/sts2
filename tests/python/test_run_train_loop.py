@@ -376,6 +376,21 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "feature version"):
                 cli.configure(root, parser.parse_args(["start", "--root", str(root)]))
 
+    def test_the_combat_prior_is_off_by_default_and_a_start_option_the_loop_keeps(self):
+        self.assertEqual(loop.LoopConfig().job.combat_prior, "")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "full"
+            parser = cli.build_parser()
+            config = cli.configure(
+                root,
+                parser.parse_args(
+                    ["start", "--root", str(root), "--combat-prior", str(root / "prior")],
+                ),
+            )
+            self.assertEqual(config.job.combat_prior, str((root / "prior").resolve()))
+            again = cli.configure(root, parser.parse_args(["start", "--root", str(root)]))
+            self.assertEqual(again.job.combat_prior, config.job.combat_prior)
+
     def test_export_dest_is_a_start_option_the_loop_keeps(self):
         # Only the job the coach follows exports to its folder; a new job names its own.
         with tempfile.TemporaryDirectory() as tmp:
@@ -763,6 +778,7 @@ class PromotionTests(LoopTestCase):
             "native_api": current.native_api - 1,
             "run_native_api": current.run_native_api - 1,
             "W": 18.0,
+            "combat_prior": "0" * 64,  # scored with a prior the job does not search with
         }
         for field, value in changes.items():
             with self.subTest(field=field):

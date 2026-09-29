@@ -20,7 +20,9 @@ public static class RunNativeExports
     // v21: Sts2Run_DebugResolveCombat and Sts2Run_DebugSetPlayer, the two hooks a real
     // run's run layer is replayed through (scripts/replay_real_run.py); state lists 22
     // (shop cards shown upgraded) and 23 (an offer grid's upgrades).
-    public const int RUN_NATIVE_API_VERSION = 21;
+    // v22: Sts2Run_ForkCombat hands the run's fight to a combat handle, faithful or as the
+    // fight of Sts2Run_Clone's resampled copy (rl/run_train/DESIGN.md 6.5).
+    public const int RUN_NATIVE_API_VERSION = 22;
     private static readonly RunEngine?[] _pool = new RunEngine?[256];
 
     public static int Sts2Run_NativeApiVersion() => RUN_NATIVE_API_VERSION;
@@ -652,6 +654,12 @@ public static class RunNativeExports
 
         return values.Length;
     }
+
+    /// <summary>The run on <paramref name="handle" />, for an export that reads one.</summary>
+    internal static bool TryGetRun(
+        int handle,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out RunEngine? run
+    ) => TryGet(handle, out run);
 
     private static bool TryGet(
         int handle,

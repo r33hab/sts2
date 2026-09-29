@@ -15,7 +15,7 @@ _LIB_NAMES = {
 }
 _ALLOW_STALE_ENV = "STS2_ALLOW_STALE_NATIVE"
 _REQUIRED_NATIVE_API_VERSION = 32
-_REQUIRED_RUN_NATIVE_API_VERSION = 21
+_REQUIRED_RUN_NATIVE_API_VERSION = 22
 
 
 def _repo_root() -> Path:
@@ -498,6 +498,13 @@ _lib.Sts2Run_ObsLayout.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_int]
 
 _lib.Sts2Run_Create.restype = ctypes.c_int
 _lib.Sts2Run_Create.argtypes = []
+_lib.Sts2Run_ForkCombat.restype = ctypes.c_int
+_lib.Sts2Run_ForkCombat.argtypes = [
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+]
 _lib.Sts2Run_Clone.restype = ctypes.c_int
 _lib.Sts2Run_Clone.argtypes = [
     ctypes.c_int,
@@ -1257,6 +1264,39 @@ def run_clone(
     )
     if handle_out < 0:
         raise RuntimeError("Sts2Run_Clone failed: unknown handle or the pool is full.")
+    return handle_out
+
+
+def run_fork_combat(
+    handle: int,
+    resample_hidden: bool,
+    resample_seed: int,
+    obs_buf: ctypes.Array,
+) -> int:
+    """Hand the fight a run stands in to a new COMBAT handle (rl/run_train/DESIGN.md 6.5).
+
+    With resample_hidden the fight is exactly the one `run_clone` with the same seed
+    holds: every stream rebuilt off resample_seed at the same call counts, and the unseen
+    draw pile reshuffled. Without it the copy is faithful, an oracle. The run is not
+    touched; the new handle is an ordinary combat handle, freed with `destroy`, and
+    obs_buf receives its combat observation.
+
+    Raises:
+        RuntimeError: If the run is unknown or not in a fight, or the combat pool is full.
+
+    """
+    handle_out = int(
+        _lib.Sts2Run_ForkCombat(
+            handle,
+            1 if resample_hidden else 0,
+            resample_seed,
+            obs_buf,
+        ),
+    )
+    if handle_out == -2:
+        raise RuntimeError("Sts2Run_ForkCombat failed: the combat handle pool is full.")
+    if handle_out < 0:
+        raise RuntimeError("Sts2Run_ForkCombat failed: unknown run, or not in a fight.")
     return handle_out
 
 

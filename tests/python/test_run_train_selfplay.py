@@ -5,6 +5,7 @@ evaluated at, standing in for A10 (erratum E11).
 """
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
@@ -19,9 +20,11 @@ sys.path.insert(0, str(ROOT / "rl"))
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import combat_prior  # noqa: E402
+import prior_fixture  # noqa: E402
 from test_run_train_features import make_view  # noqa: E402
 
-from rl.run_train import engine, selfplay, shards, vocab  # noqa: E402
+from rl.run_train import engine, runner, selfplay, shards, vocab  # noqa: E402
 from rl.run_train.features import CardRef, Decision, Option  # noqa: E402
 from sts2_gym import native  # noqa: E402
 
@@ -229,6 +232,71 @@ class OutcomeTests(unittest.TestCase):
         for fight in record["fights"]:
             hard = fight["node_type"] in {vocab.NODE_ELITE, vocab.NODE_BOSS}
             self.assertEqual(fight["sims"], 4 if hard else 2)
+
+
+class CombatPriorTests(unittest.TestCase):
+    """A job's combat prior guides the fight search on combat-handle forks (DESIGN.md 6.5)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.prior_dir = str(prior_fixture.export_prior(Path(cls.tmp.name)))
+        cls.champion = combat_prior.find(cls.prior_dir)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.tmp.cleanup()
+
+    def test_a_run_with_a_prior_asks_it_on_combat_handles_and_names_it(self):
+        asked: list[str] = []
+        real = combat_prior.WorldPrior.__call__
+
+        def counting(prior, world):
+            asked.append(type(world).__name__)
+            return real(prior, world)
+
+        with mock.patch.object(combat_prior.WorldPrior, "__call__", counting):
+            record = selfplay.play_run(
+                SEEDS[0],
+                selfplay.RulesPlayer(),
+                SIMS,
+                A9,
+                combat_prior=self.prior_dir,
+            )
+        VALIDATOR.validate(record)
+        self.assertEqual(record["combat"]["prior"], self.champion.policy_sha256)
+        self.assertGreaterEqual(
+            len(asked),
+            sum(f["decisions"] for f in record["fights"]),
+        )
+        self.assertEqual(set(asked), {"Combat"})  # the root too, through a combat fork
+
+    def test_a_run_without_a_prior_records_none(self):
+        record = selfplay.play_run(SEEDS[0], selfplay.RulesPlayer(), SIMS, A9)
+        self.assertNotIn("prior", record["combat"])
+
+    def test_the_job_names_the_prior_a_task_plays_with(self):
+        config = runner.JobConfig(
+            workers=1,
+            combat_budget=engine.CombatBudget(SIMS, SIMS),
+            ascension=A9,
+            combat_prior=self.prior_dir,
+        )
+        record = selfplay.play_task(runner.Task(SEEDS[1], {"kind": "rules"}, config))
+        self.assertEqual(record["combat"]["prior"], self.champion.policy_sha256)
+        self.assertEqual(
+            selfplay.combat_prior_sha256(self.prior_dir),
+            self.champion.policy_sha256,
+        )
+        self.assertIsNone(selfplay.combat_prior_sha256(""))
+
+    def test_a_prior_that_is_not_there_is_refused(self):
+        selfplay.check_combat_prior("")  # none configured
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            self.assertRaisesRegex(ValueError, "no combat prior is exported"),
+        ):
+            selfplay.check_combat_prior(tmp)
 
 
 class RulesPlayerTests(unittest.TestCase):

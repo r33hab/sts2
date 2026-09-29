@@ -337,6 +337,7 @@ class EvaluateTests(unittest.TestCase):
         self.assertEqual(meta.seeds_sha256, evaluate.seeds_sha256(eval_seeds))
         self.assertNotEqual(meta.seeds_sha256, evaluate.seeds_sha256(eval_seeds[:2]))
         self.assertIsNone(meta.policy_sha256)  # the rules policy has no checkpoint
+        self.assertIsNone(meta.combat_prior)  # the plain fight search
         # Evaluation is argmax (5.5): exploration is switched off.
         self.assertEqual(result.policy, {"kind": "rules", "eps": 0.0})
         self.assertEqual(
@@ -383,6 +384,11 @@ class EvaluateTests(unittest.TestCase):
         saved = json.loads(path.read_text())
         self.assertEqual(saved["summary"]["n"], 2)
         self.assertEqual(saved["meta"]["ascension_stands_in_for"], 10)
+
+    def test_an_eval_from_before_the_combat_prior_reads_as_the_plain_search(self):
+        data = META.to_json()
+        self.assertIsNone(data.pop("combat_prior"))
+        self.assertEqual(evaluate.EvalMeta.from_json(data), META)
 
 
 class SeedSetTests(unittest.TestCase):
