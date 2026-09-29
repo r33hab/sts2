@@ -1,0 +1,441 @@
+{
+  "schema": "sts2-live-snapshot/1",
+  "game_version": "v0.107.1",
+  "character": "IRONCLAD",
+  "ascension": 2,
+  "act": 3,
+  "floor": 35,
+  "room_type": "monster",
+  "round": 1,
+  "player": {
+    "hp": 80,
+    "max_hp": 86,
+    "block": 0,
+    "energy": 2,
+    "max_energy": 3,
+    "gold": 160,
+    "stars": 0,
+    "osty": null,
+    "orbs": {
+      "slots": 0,
+      "list": []
+    },
+    "powers": [
+      {
+        "id": "DEXTERITY_POWER",
+        "amount": 1
+      }
+    ],
+    "relics": [
+      {
+        "id": "BURNING_BLOOD",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "LARGE_CAPSULE",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "WHETSTONE",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "CANDELABRA",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "HORN_CLEAT",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "TOXIC_EGG",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "PAELS_WING",
+        "counter": 0,
+        "fields": {
+          "_rewardsSacrificed": 8,
+          "RewardsSacrificed": 8
+        }
+      },
+      {
+        "id": "WHITE_BEAST_STATUE",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "KUSARIGAMA",
+        "counter": 2,
+        "fields": {
+          "_attacksPlayedThisTurn": 2
+        }
+      },
+      {
+        "id": "SPARKLING_ROUGE",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "ORICHALCUM",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "ORRERY",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "PENDULUM",
+        "counter": 0,
+        "fields": {
+          "TurnsSeen": 0
+        }
+      },
+      {
+        "id": "ODDLY_SMOOTH_STONE",
+        "counter": null,
+        "fields": {}
+      },
+      {
+        "id": "BOOK_OF_FIVE_RINGS",
+        "counter": 1,
+        "fields": {
+          "_cardsAdded": 1,
+          "CardsAdded": 1
+        }
+      },
+      {
+        "id": "THROWING_AXE",
+        "counter": null,
+        "fields": {
+          "_usedThisCombat": true
+        }
+      }
+    ],
+    "potions": [
+      {
+        "slot": 0,
+        "id": "BLOCK_POTION"
+      },
+      {
+        "slot": 1,
+        "id": null
+      },
+      {
+        "slot": 2,
+        "id": null
+      }
+    ],
+    "max_potion_slots": 3
+  },
+  "hand": [
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": true,
+      "uid": "STRIKE_IRONCLAD#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "SHRUG_IT_OFF",
+      "upgraded": true,
+      "uid": "SHRUG_IT_OFF#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": false,
+      "uid": "STRIKE_IRONCLAD#2",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "POMMEL_STRIKE",
+      "upgraded": true,
+      "uid": "POMMEL_STRIKE#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    }
+  ],
+  "draw_pile": [
+    {
+      "id": "BARRICADE",
+      "upgraded": false,
+      "uid": "BARRICADE#0",
+      "cost": 3,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "BASH",
+      "upgraded": false,
+      "uid": "BASH#0",
+      "cost": 2,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "BLOODLETTING",
+      "upgraded": true,
+      "uid": "BLOODLETTING#0",
+      "cost": 0,
+      "enchantment": "PERFECT_FIT",
+      "enchant_amount": 1,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "BODY_SLAM",
+      "upgraded": true,
+      "uid": "BODY_SLAM#0",
+      "cost": 0,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "BURNING_PACT",
+      "upgraded": true,
+      "uid": "BURNING_PACT#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "DEFEND_IRONCLAD",
+      "upgraded": false,
+      "uid": "DEFEND_IRONCLAD#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "DEMON_FORM",
+      "upgraded": false,
+      "uid": "DEMON_FORM#0",
+      "cost": 3,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "FIGHT_ME",
+      "upgraded": true,
+      "uid": "FIGHT_ME#0",
+      "cost": 2,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "FIGHT_ME",
+      "upgraded": true,
+      "uid": "FIGHT_ME#1",
+      "cost": 2,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "INFLAME",
+      "upgraded": true,
+      "uid": "INFLAME#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "NOT_YET",
+      "upgraded": true,
+      "uid": "NOT_YET#0",
+      "cost": 2,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "STRIKE_IRONCLAD",
+      "upgraded": true,
+      "uid": "STRIKE_IRONCLAD#1",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "THUNDERCLAP",
+      "upgraded": false,
+      "uid": "THUNDERCLAP#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "ULTIMATE_STRIKE",
+      "upgraded": true,
+      "uid": "ULTIMATE_STRIKE#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    },
+    {
+      "id": "UNRELENTING",
+      "upgraded": true,
+      "uid": "UNRELENTING#0",
+      "cost": 2,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    }
+  ],
+  "discard_pile": [
+    {
+      "id": "HEMOKINESIS",
+      "upgraded": true,
+      "uid": "HEMOKINESIS#0",
+      "cost": 1,
+      "enchantment": null,
+      "enchant_amount": null,
+      "fields": {},
+      "affliction": null
+    }
+  ],
+  "exhaust_pile": [],
+  "known_draw_top": [],
+  "known_draw_bottom": [],
+  "enemies": [
+    {
+      "entity_id": "SCROLL_OF_BITING_1",
+      "id": "SCROLL_OF_BITING",
+      "slot": 0,
+      "hp": 35,
+      "max_hp": 35,
+      "block": 0,
+      "powers": [
+        {
+          "id": "PAPER_CUTS_POWER",
+          "amount": 2
+        }
+      ],
+      "intents": [
+        {
+          "type": "ATTACK",
+          "damage": 5,
+          "base_damage": 5,
+          "hits": 2
+        }
+      ],
+      "move_id": "CHEW",
+      "state_log": [
+        "CHEW"
+      ],
+      "ai_fields": {
+        "_starterMoveIdx": 1,
+        "ChompDamage": 14,
+        "ChewDamage": 5,
+        "StarterMoveIdx": 1
+      }
+    },
+    {
+      "entity_id": "SCROLL_OF_BITING_2",
+      "id": "SCROLL_OF_BITING",
+      "slot": 1,
+      "hp": 32,
+      "max_hp": 32,
+      "block": 0,
+      "powers": [
+        {
+          "id": "PAPER_CUTS_POWER",
+          "amount": 2
+        }
+      ],
+      "intents": [
+        {
+          "type": "BUFF",
+          "damage": null,
+          "base_damage": null,
+          "hits": null
+        }
+      ],
+      "move_id": "MORE_TEETH",
+      "state_log": [
+        "MORE_TEETH"
+      ],
+      "ai_fields": {
+        "_starterMoveIdx": 2,
+        "ChompDamage": 14,
+        "ChewDamage": 5,
+        "StarterMoveIdx": 2
+      }
+    }
+  ],
+  "history": {
+    "cards_played_this_turn": 2,
+    "cards_played_this_combat": 2,
+    "attacks_played_this_turn": 2,
+    "skills_played_this_turn": 0
+  },
+  "pending_selection": null
+}

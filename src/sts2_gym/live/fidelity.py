@@ -36,9 +36,10 @@ the pseudo-field `move.allowed`. A check that cannot be made at all is not compa
 says why in its warnings, rather than report a mismatch the simulator never made: when the
 converter could not carry the position before or after faithfully (its warnings, each
 marked with the side), or when the emulator cannot tell which of its candidates a pick is.
-So is a position after that the move did not make: the card the move plays still in the
-hand after it, or more cards played this combat than the move and what it plays itself
-account for in any resample -- a card played that the caller did not report.
+So is a mismatch the move did not make: one where no copy of the card the move plays left
+the hand, or where the game counts more cards played this combat than the move and what it
+plays itself do in any resample -- a card played that the caller did not report. Neither
+count is a field the player sees, so a check they explain nothing in stays as it is.
 """
 
 from __future__ import annotations
@@ -115,8 +116,6 @@ def check(
     after = _converted(post, "post")
     if not (before.reliable and after.reliable):
         return _not_comparable([*_marked("pre", before), *_marked("post", after)])
-    if (unplayed := _still_in_hand(move, post)) is not None:
-        return _not_comparable([unplayed])
     # The converted enemies are the live ones, in their order.
     actual = _visible(after.doc, [enemy["entity_id"] for enemy in post["enemies"]])
     world = _World(pre, before.doc, move, _Names(pre, post))
@@ -125,27 +124,49 @@ def check(
     except _NotComparableError as reason:
         return _not_comparable([str(reason)])
     except _RefusedError:
-        return _refused()
-    if (extra := _more_plays(samples, after.doc)) is not None:
-        return _not_comparable([extra])
+        unplayed = _still_in_hand(move, pre, post)
+        return _refused() if unplayed is None else _not_comparable([unplayed])
     hand = _Hand(before.doc, after.doc, samples)
-    return _compare([sample.fields for sample in samples], actual, hand)
+    result = _compare([sample.fields for sample in samples], actual, hand)
+    # A mismatch the move did not make: the position after is another move's.
+    if result["deterministic_mismatches"] or result["implausible"]:
+        why = _still_in_hand(move, pre, post) or _more_plays(samples, after.doc)
+        if why is not None:
+            return _not_comparable([why])
+    return result
 
 
-def _still_in_hand(move: moves.Move, post: Mapping[str, Any]) -> str | None:
-    """Say why a card move did not make the position after: its card is still in hand.
+def _still_in_hand(
+    move: moves.Move,
+    pre: Mapping[str, Any],
+    post: Mapping[str, Any],
+) -> str | None:
+    """Say why a card move did not make the position after: no copy of it left the hand.
 
-    A card played leaves the hand as its play begins; the copy the move names, by uid,
-    held in the hand after it was not played -- the game refused it, or played something
-    else, and the position after is not this move's.
+    A card played leaves the hand as its play begins. Copies of one card are the same card
+    to the simulator, and a log can name another copy than the one the game played -- a
+    person's action log did -- so what is asked is whether the hand after holds fewer of
+    the card than before. When it holds as many, the game did not play it: it refused it,
+    or played something else, and the position after is not this move's.
     """
-    if move.kind != "card" or move.card_uid is None:
+    if move.kind != "card":
         return None
-    if not any(card["uid"] == move.card_uid for card in post["hand"]):
+    try:
+        card = pre["hand"][moves.hand_index(pre, move)]
+    except (moves.MappingError, IndexError):
+        return None  # the check proper names what the move does not hold
+
+    def copies(hand: Iterable[Mapping[str, Any]]) -> int:
+        return sum(
+            (held["id"], held["upgraded"]) == (card["id"], card["upgraded"])
+            for held in hand
+        )
+
+    if copies(post["hand"]) < copies(pre["hand"]):
         return None
     return (
-        f"not the move: {move.card_uid}, the card it plays, is still in the hand after "
-        "it, so the game did not play it"
+        f"not the move: no {card['id']} the move plays left the hand, so the game did "
+        "not play it"
     )
 
 

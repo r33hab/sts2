@@ -749,6 +749,11 @@ def _emu_face(card: Mapping[str, Any]) -> Shown:
 # ── Reading moves back ───────────────────────────────────────────────────────
 
 
+def hand_index(live: Mapping[str, Any], move: Move) -> int:
+    """Return the live hand index a card move names (`_hand_index`)."""
+    return _hand_index(live, move)
+
+
 def _hand_index(live: Mapping[str, Any], move: Move) -> int:
     """Return the live hand index a card move names, by its index or else its uid.
 

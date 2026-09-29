@@ -821,7 +821,7 @@ class NotTheMoveTests(unittest.TestCase):
     rightly refused the Bound Strike, and rightly played one card, not two.
     """
 
-    def test_the_card_still_in_hand_after_its_move_was_not_played(self) -> None:
+    def test_no_copy_leaving_the_hand_means_the_card_was_not_played(self) -> None:
         pre = load("captured/queen_lab_round3_bound_strike_blocked")
         post = load("captured/queen_lab_round3_after_an_unlogged_defend")
         result = check(
@@ -830,7 +830,31 @@ class NotTheMoveTests(unittest.TestCase):
         self.assertFalse(result["comparable"])
         self.assertEqual(result["deterministic_mismatches"], [])
         self.assertEqual(len(result["warnings"]), 1)
-        self.assertIn("still in the hand", result["warnings"][0])
+        self.assertIn("left the hand", result["warnings"][0])
+
+    def test_a_copy_leaving_the_hand_is_the_move_whichever_copy_the_log_named(
+        self,
+    ) -> None:
+        # A person's session (`20260928-190511.jsonl`): the action log names Strike #2,
+        # and Strike #3 is the copy the game put in the discard pile. The same card to the
+        # simulator: one Strike left the hand, as the move says.
+        pre = load("captured/corpse_slugs_a_strike_logged_by_another_copy")
+        post = load("captured/corpse_slugs_after_the_strike")
+        self.assertIn("STRIKE_IRONCLAD#2", [card["uid"] for card in post["hand"]])
+        result = check(pre, played(pre, "STRIKE_IRONCLAD#2", "CORPSE_SLUG_1"), post)
+        self.assertTrue(result["comparable"], result)
+        self.assertEqual(result["deterministic_mismatches"], [])
+
+    def test_a_count_that_explains_no_mismatch_changes_nothing(self) -> None:
+        # A person's act 3 session (`20260926-220853.jsonl`): the mod of the day counted a
+        # combat's first card twice (0 cards played before Hemokinesis, 2 after), and the
+        # simulator predicts every field the game shows.
+        pre = load("captured/scrolls_first_play_counted_twice")
+        post = load("captured/scrolls_after_hemokinesis")
+        self.assertEqual(post["history"]["cards_played_this_combat"], 2)
+        result = check(pre, played(pre, "HEMOKINESIS#0", "SCROLL_OF_BITING_0"), post)
+        self.assertTrue(result["comparable"], result)
+        self.assertEqual(result["deterministic_mismatches"], [])
 
     def test_more_cards_played_than_the_move_plays_is_not_comparable(self) -> None:
         # Defend is played and so is a Strike nobody logged: 8 cards this combat before,
