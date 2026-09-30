@@ -8,6 +8,11 @@ overall, by room kind, on potion fights and in Act 2+. Settings follow
 `rl.prior_loop.real_fights.run`. Needs only the repository and a built simulator.
 
     uv run python scripts/fight_budget_test.py --workers 14 --out fight_budget.json
+
+With --policy (a prior loop network, combat_policy.pt), it instead plays plain search
+against the same search guided by that network, both at --base: what the network is worth
+at the budget self-play uses. The end-turn probe setting comes from the network's own
+trained.json, as the loop's gate reads it (`PriorLoop.probe_of`).
 """
 
 from __future__ import annotations
@@ -30,6 +35,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--bigger", default="240/1000")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--limit", type=int, default=None, help="only the first N fights (a smoke run)")
+    parser.add_argument("--policy", type=Path, default=None, help="a prior network: plain vs prior at --base")
+    parser.add_argument("--prior-min-visits", type=int, default=3, help="the loop's gate setting")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
 
@@ -37,6 +44,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     fights = real_fights.load_real_set()
     if args.limit:
         fights = fights[: args.limit]
+    probe = True
+    if args.policy is not None:
+        trained = loop.read_json(args.policy.parent / "trained.json") or {}
+        probe = not trained.get("flags", {}).get("ablate_endturn", False)
+        players = [(f"plain {args.base}", args.base, None), (f"prior {args.base}", args.base, args.policy)]
+    else:
+        players = [(args.base, args.base, None), (args.bigger, args.bigger, None)]
     settings = {
         "ascension": 10,
         "sims": 0,
@@ -44,25 +58,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         "c_puct": 0.2,
         "batch_fights": 16,
         "workers": args.workers,
-        "prior_min_visits": 0,
-        "probe": True,
+        "prior_min_visits": args.prior_min_visits if args.policy is not None else 0,
+        "probe": probe,
     }
     results: dict[str, list[dict]] = {}
     seconds: dict[str, float] = {}
-    for budget in (args.base, args.bigger):
+    for label, budget, policy in players:
         start = time.perf_counter()
-        results[budget] = loop.evaluate_fights(
-            real_fights.with_budget(fights, budget), None, settings
+        results[label] = loop.evaluate_fights(
+            real_fights.with_budget(fights, budget), policy, settings
         )
-        seconds[budget] = round(time.perf_counter() - start, 1)
-        print(f"{budget}: {len(fights)} fights in {seconds[budget]} s", flush=True)
+        seconds[label] = round(time.perf_counter() - start, 1)
+        print(f"{label}: {len(fights)} fights in {seconds[label]} s", flush=True)
 
-    comparison = real_fights.by_group(fights, results[args.base], results[args.bigger])
+    (first, _, _), (second, _, _) = players
+    comparison = real_fights.by_group(fights, results[first], results[second])
     loop.write_json(
         args.out,
         {
-            "base": args.base,
-            "bigger": args.bigger,
+            "players": [label for label, _, _ in players],
+            "policy": None if args.policy is None else str(args.policy),
             "settings": settings,
             "seconds": seconds,
             "comparison": comparison,
