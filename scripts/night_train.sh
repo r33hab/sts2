@@ -44,7 +44,9 @@ kill_pidfile() {
 
 case "${1:-status}" in
 start)
-  if [ -f "$ROOT/config.json" ]; then
+  if [ -f "$ROOT/loop.pid" ] && kill -0 "$(cat "$ROOT/loop.pid")" 2>/dev/null; then
+    echo "the loop is already running: refreshing the keep-awake, sync and auto-stop only"
+  elif [ -f "$ROOT/config.json" ]; then
     train start --root "$ROOT"
   else
     train start --root "$ROOT" --workers "$WORKERS" --ascension 10 --export-dest "$ROOT/export"
