@@ -11,7 +11,11 @@
 # generation's evaluations, the exported champion; not the shards -- go back to the Mac
 # under ~/Documents/git/sts2-wt/night/a10 every 5 minutes.
 #
-# Overrides: MAC=user@host, STOP_AT (default 07:30), WORKERS (default: cores but 2).
+# Fights are played with the fight network the Mac exported to
+# ~/Documents/git/sts2-wt/priors/current (rl.prior_loop export), copied here on every start
+# and passed as the job's combat_prior; PRIOR=0 plays them with plain search.
+#
+# Overrides: MAC=user@host, STOP_AT (default 07:30), WORKERS (default: cores but 2), PRIOR.
 set -euo pipefail
 
 export MAC="${MAC:-user@your-mac.local}"
@@ -42,14 +46,27 @@ kill_pidfile() {
   fi
 }
 
+prior_args() {
+  [ "${PRIOR:-1}" = 1 ] || return 0
+  mkdir -p "$REPO/runs/prior"
+  if rsync -a --delete "$MAC:Documents/git/sts2-wt/priors/current/" "$REPO/runs/prior/" &&
+    [ -f "$REPO/runs/prior/model.json" ]; then
+    echo "--combat-prior $REPO/runs/prior"
+  else
+    echo "no fight network copied from the Mac; plain search" >&2
+  fi
+}
+
 case "${1:-status}" in
 start)
   if [ -f "$ROOT/loop.pid" ] && kill -0 "$(cat "$ROOT/loop.pid")" 2>/dev/null; then
     echo "the loop is already running: refreshing the keep-awake, sync and auto-stop only"
   elif [ -f "$ROOT/config.json" ]; then
-    train start --root "$ROOT"
+    # shellcheck disable=SC2046 -- prior_args prints the option and its path, or nothing
+    train start --root "$ROOT" $(prior_args)
   else
-    train start --root "$ROOT" --workers "$WORKERS" --ascension 10 --export-dest "$ROOT/export"
+    # shellcheck disable=SC2046
+    train start --root "$ROOT" --workers "$WORKERS" --ascension 10 --export-dest "$ROOT/export" $(prior_args)
   fi
   now=$(date +%s)
   target=$(date -j -f "%H:%M" "$STOP_AT" +%s 2>/dev/null || date -d "$STOP_AT" +%s)
