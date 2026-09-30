@@ -364,6 +364,10 @@ class HistoryReplayTests(unittest.TestCase):
     and pick; the emulator makes the same offers on every floor it reaches.
     """
 
+    @unittest.skipUnless(
+        replay.EVENTS_SOURCE.is_dir(),
+        "the replay reads event option order from decompiled/ (gitignored)",
+    )
     def test_every_offer_the_history_names_is_the_emulators(self) -> None:
         run = history_run("GNM8G0F5RF-a10")
         self.assertFalse(replay.has_screens(run))

@@ -78,9 +78,8 @@ cd "$REPO"
 bash scripts/build.sh "$RID"
 
 step "tests"
-# Known on Linux (2026-09-29): test_every_offer_the_history_names_is_the_emulators
-# (the replay maps one recorded Sapphire Seed choice differently; run-level only) and,
-# on a slow machine, the timing test test_a_pooled_call_takes_its_budget.
+# Known: on a slow machine the timing tests (test_a_pooled_call_takes_its_budget,
+# test_a_slow_first_playout_does_not_end_the_search) can fail; they measure speed.
 uv run python -m unittest discover -s tests/python 2>&1 | grep -E "^(FAIL|ERROR): |^Ran |^OK|^FAILED" ||
   echo "SOME TESTS FAILED: paste the lines above to Claude"
 
