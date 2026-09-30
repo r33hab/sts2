@@ -9,7 +9,7 @@
 #    Mac's full-run and stage-2 jobs -- to the path the loop reads them from
 #    (rl/prior_loop/real_fights.py JOBS: ~/Documents/git/sts2-wt/training/runs).
 # 2. Starts the loop in tmux session "fight" (log: ~/fight_loop.log), exporting nothing.
-# 3. Starts tmux session "sync": every 30 minutes the loop's small files (status, the
+# 3. Starts tmux session "sync": every 5 minutes the loop's small files (status, the
 #    champion's networks, evaluations -- not the generated training data) go back to the
 #    Mac under ~/Documents/git/sts2-wt/desktop/prior_loop.
 #
@@ -44,7 +44,7 @@ else
   echo "started"
 fi
 
-step "sync back to the Mac: tmux session 'sync', every 30 minutes"
+step "sync back to the Mac: tmux session 'sync', every 5 minutes"
 if tmux has-session -t sync 2>/dev/null; then
   echo "already running"
 else
@@ -52,7 +52,7 @@ else
       mkdir -p '$ROOT'
       rsync -a --exclude='generated_parts/' --exclude='*.npz' '$ROOT/' '$MAC:Documents/git/sts2-wt/desktop/prior_loop/' &&
         date '+%F %T synced' || date '+%F %T sync failed'
-      sleep 1800
+      sleep 300
     done 2>&1 | tee -a '$HOME/fight_sync.log'"
   echo "started"
 fi

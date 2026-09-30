@@ -9,7 +9,7 @@
 # The job lives in ~/sts2/runs/a10 and resumes where it stopped. While it runs, the Mac is
 # kept awake on power (keep the lid open), and its small files -- status, log, every
 # generation's evaluations, the exported champion; not the shards -- go back to the Mac
-# under ~/Documents/git/sts2-wt/night/a10 every 30 minutes.
+# under ~/Documents/git/sts2-wt/night/a10 every 5 minutes.
 #
 # Overrides: MAC=user@host, STOP_AT (default 07:30), WORKERS (default: cores but 2).
 set -euo pipefail
@@ -57,7 +57,7 @@ start)
   nohup caffeinate -s -t "$seconds" >/dev/null 2>&1 &
   echo $! >"$ROOT/.caffeinate.pid"
   kill_pidfile .sync.pid
-  nohup bash -c "$(declare -f sync_once); while true; do sync_once; sleep 1800; done" \
+  nohup bash -c "$(declare -f sync_once); while true; do sync_once; sleep 300; done" \
     >>"$HOME/night_sync.log" 2>&1 &
   echo $! >"$ROOT/.sync.pid"
   kill_pidfile .autostop.pid
