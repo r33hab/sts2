@@ -22,6 +22,9 @@ export MAC="${MAC:-user@your-mac.local}"
 REPO="$HOME/sts2"
 export ROOT="$REPO/runs/a10"
 STOP_AT="${STOP_AT:-07:30}"
+# A run normally takes seconds to a few minutes; one stuck in an endless fight held a
+# whole generation for its 3600 s limit and then again for the retry (2026-09-30).
+SEED_TIMEOUT="${SEED_TIMEOUT:-900}"
 CPUS=$(sysctl -n hw.ncpu 2>/dev/null || nproc)
 WORKERS="${WORKERS:-$((CPUS > 3 ? CPUS - 2 : 1))}"
 export PATH="$HOME/.local/bin:$HOME/.dotnet:$PATH" DOTNET_ROOT="$HOME/.dotnet"
@@ -63,10 +66,11 @@ start)
     echo "the loop is already running: refreshing the keep-awake, sync and auto-stop only"
   elif [ -f "$ROOT/config.json" ]; then
     # shellcheck disable=SC2046 -- prior_args prints the option and its path, or nothing
-    train start --root "$ROOT" $(prior_args)
+    train start --root "$ROOT" --seed-timeout "$SEED_TIMEOUT" $(prior_args)
   else
     # shellcheck disable=SC2046
-    train start --root "$ROOT" --workers "$WORKERS" --ascension 10 --export-dest "$ROOT/export" $(prior_args)
+    train start --root "$ROOT" --workers "$WORKERS" --ascension 10 --export-dest "$ROOT/export" \
+      --seed-timeout "$SEED_TIMEOUT" $(prior_args)
   fi
   now=$(date +%s)
   target=$(date -j -f "%H:%M" "$STOP_AT" +%s 2>/dev/null || date -d "$STOP_AT" +%s)
