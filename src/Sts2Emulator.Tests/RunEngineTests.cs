@@ -752,6 +752,24 @@ public class RunEngineTests
     }
 
     [Fact]
+    public void ShopDoesNotOfferPotionsToSozuOwner()
+    {
+        var engine = new RunEngine();
+        engine.Reset("T0004R0754", 10);
+        engine.State.Phase = RunPhase.Shop;
+        engine.State.Gold = 100;
+        engine.State.ShopPotions[0] = 301;
+        engine.State.ShopCosts[10] = 90;
+        engine.State.Relics.Add(new RelicInstance(RelicEffects.Sozu));
+        var mask = new int[RunConstants.MaxActions];
+
+        engine.WriteActionMask(mask);
+
+        Assert.Equal(0, mask[10]);
+        Assert.Equal(1, mask[RunConstants.ShopSkipAction]);
+    }
+
+    [Fact]
     public void EventActionMask_UsesCurrentPythonPredicates()
     {
         var engine = new RunEngine();

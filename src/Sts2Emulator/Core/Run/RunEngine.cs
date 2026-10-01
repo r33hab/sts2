@@ -752,7 +752,9 @@ public sealed class RunEngine
                 // USABLE slots only. The array is `PotionSlotCapacity` wide so the
                 // observation has a stable shape; the slots past `MaxPotionSlots` are
                 // not free, they do not exist yet.
-                bool hasPotionSlot = State.UsablePotionSlots().Any(potion => potion == 0);
+                bool hasPotionSlot =
+                    !Effects.RelicEffects.Has(State.Relics, Effects.RelicEffects.Sozu)
+                    && State.UsablePotionSlots().Any(potion => potion == 0);
                 for (int action = 10; action < 13; action++)
                 {
                     if (
@@ -1448,13 +1450,6 @@ public sealed class RunEngine
     private int FinishCombat(bool playerWon, out bool terminal)
     {
         terminal = true;
-        // `ImprovementPower.AfterCombatEnd`, which fires whether or not the
-        // fight was won: upgrade its amount of UPGRADABLE deck cards, drawn
-        // off `Rng.CombatCardSelection` without replacement. Mad Science's
-        // Improvement rider, and the run-side seam that kept it unmodelled
-        // until O17. Before the sync, which is where the combat is dropped.
-        RunNonCombatEffects.ApplyImprovementUpgrades(State);
-
         // `RoyaltiesPower.AfterCombatEnd` and
         // `ForbiddenGrimoirePower.AfterCombatEnd` each hang an extra reward on the
         // room. Read off the COMBAT here, before the sync drops it -- both powers
@@ -1476,6 +1471,9 @@ public sealed class RunEngine
         // same as the candle -- and every third one melts a wax relic.
         RunNonCombatEffects.MeltAToyBoxRelic(State);
         SyncAfterCombat();
+        // In the game, Improvement's AfterCombatEnd reads the same run stream combat
+        // used. Copy combat's position back before drawing its deck upgrades.
+        RunNonCombatEffects.ApplyImprovementUpgrades(State);
         if (playerWon)
         {
             RunNonCombatEffects.TriggerFishingRod(State);
@@ -1789,8 +1787,12 @@ public sealed class RunEngine
         }
         if (followUp == RunFollowUp.PreRolledCardReward)
         {
-            // The grid is already up; Neow stays on screen for its Proceed once the choice
-            // is made, the way it does after every other blessing.
+            // Orrery already opened its card-reward screen. The other pickups leave a
+            // pre-rolled grid, which must be answered before Neow's Proceed.
+            if (State.PendingOfferCards.Length > 0)
+            {
+                State.Phase = RunPhase.TransformSelect;
+            }
             State.NeowAwaitingProceed = true;
             return;
         }

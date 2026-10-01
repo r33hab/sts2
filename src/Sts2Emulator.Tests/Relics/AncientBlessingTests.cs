@@ -244,6 +244,25 @@ public class AncientBlessingTests
         Assert.All(engine.State.PendingOfferCards, card => Assert.DoesNotContain(card, ironclad));
     }
 
+    [Fact]
+    public void ChoosingSeaGlassAtTheAncientOpensItsGridBeforeLeavingTheRoom()
+    {
+        var engine = new RunEngine();
+        engine.Reset("T0004R0177", 10);
+        engine.State.NeowOptions[0] = RunConstants.RelicSeaGlass;
+
+        Assert.Equal(0, engine.Step(0, -1, out _, out _, out _));
+
+        Assert.Equal(RunPhase.TransformSelect, engine.State.Phase);
+        Assert.Equal(15, engine.State.PendingOfferCards.Length);
+        var mask = new int[RunConstants.MaxActions];
+        engine.WriteActionMask(mask);
+        Assert.Equal(1, mask[15]);
+        Assert.Equal(0, engine.Step(15, -1, out _, out _, out _));
+        Assert.Empty(engine.State.PendingOfferCards);
+        Assert.Equal(RunPhase.Ancient, engine.State.Phase);
+    }
+
     /// <summary>
     /// `CardSelectorPrefs(prompt, 0, list.Count)` is MinSelect ZERO with a manual
     /// confirm: the player may take any number of the fifteen, including none. The grid

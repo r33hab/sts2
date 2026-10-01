@@ -55,4 +55,19 @@ public class RunStreamContinuityTests
         var aiRng = Assert.IsType<CountingRandom>(engine.State.ActiveCombat!.AiRng);
         Assert.Equal(0, aiRng.CallCount);
     }
+
+    [Fact]
+    public void ImprovementDrawsAfterCombatCardSelectionAtTheCurrentStreamPosition()
+    {
+        var engine = StartedRun();
+        EnterCombat(engine, 1);
+        var combat = engine.State.ActiveCombat!;
+        combat.CardSelectionRng!.Next();
+        BuffSystem.Apply(combat.PlayerBuffs, BuffId.Improvement, 2);
+
+        Assert.Equal(0, engine.DebugResolveCombat());
+
+        Assert.Equal(3, engine.State.Rng.CombatCardSelection.CallCount);
+        Assert.Equal(2, engine.State.Deck.Count(card => card.Upgraded));
+    }
 }
