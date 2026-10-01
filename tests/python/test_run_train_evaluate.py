@@ -406,7 +406,7 @@ class SeedSetTests(unittest.TestCase):
         return seeds_
 
     def test_the_eval_and_final_test_sets_are_fixed_and_disjoint(self):
-        eval_seeds = self.check(evaluate.EVAL_SEEDS, "E", 200)
+        eval_seeds = self.check(evaluate.EVAL_SEEDS, "E", 1000)
         test_seeds = self.check(evaluate.TEST_SEEDS, "F", 500)
         self.assertFalse(set(eval_seeds) & set(test_seeds))
 

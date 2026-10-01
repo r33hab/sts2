@@ -58,7 +58,7 @@ __all__ = [
     "wilson",
 ]
 
-EVAL_SEEDS = Path(__file__).with_name("eval_seeds.json")  # 200, promotion only
+EVAL_SEEDS = Path(__file__).with_name("eval_seeds.json")  # 1,000, promotion only
 TEST_SEEDS = Path(__file__).with_name("test_seeds.json")  # 500, the final test only
 STATUSES = ("completed", "aborted", "error", "truncated")
 Z95 = 1.96
