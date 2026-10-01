@@ -752,7 +752,9 @@ public sealed class RunEngine
                 // USABLE slots only. The array is `PotionSlotCapacity` wide so the
                 // observation has a stable shape; the slots past `MaxPotionSlots` are
                 // not free, they do not exist yet.
-                bool hasPotionSlot = State.UsablePotionSlots().Any(potion => potion == 0);
+                bool hasPotionSlot =
+                    !Effects.RelicEffects.Has(State.Relics, Effects.RelicEffects.Sozu)
+                    && State.UsablePotionSlots().Any(potion => potion == 0);
                 for (int action = 10; action < 13; action++)
                 {
                     if (
