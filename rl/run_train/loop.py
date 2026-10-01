@@ -649,7 +649,8 @@ class Loop:
         """Return the fields of `meta` that no longer match the config (5.6, E5, E6).
 
         Those that change what the same policy scores: the combat budget, the combat
-        prior, the ascension, both native API versions and W. Erratum E6 takes the
+        prior, the ascension, both native API versions, W, and the seed list itself (a
+        200-seed champion eval paired only 198 seeds with 1,000-seed learners, 2026-10-01). Erratum E6 takes the
         feature version off the list, since a checkpoint of another version refuses to
         load.
         """
@@ -661,6 +662,7 @@ class Loop:
             "ascension": job.ascension,
             "native_api": combat_api,
             "run_native_api": run_api,
+            "seeds_sha256": evaluate.seeds_sha256(self.eval_seeds),
         }
         stored = meta.to_json()
         stale = [name for name, value in current.items() if stored[name] != value]

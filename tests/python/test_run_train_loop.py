@@ -817,6 +817,20 @@ class PromotionTests(LoopTestCase):
             {},
         )
 
+    def test_an_eval_on_another_seed_list_is_redone(self):
+        # Live 2026-10-01: the eval seeds grew from 200 to 1,000, but the champion's
+        # stored 200-seed eval was kept, so every comparison paired only the old seeds.
+        run = self.make_loop()
+        self.through(run, "promote")
+        path = self.gen(0) / "eval.json"
+        stale = EvalResult.load(path)
+        other = dataclasses.replace(stale.meta, seeds_sha256="0" * 64)
+        dataclasses.replace(stale, meta=other).save(path)
+        with self.assertLogs(LOOP_LOG, "WARNING"):
+            self.assertEqual(run.step(), (0, "promote"))
+        promotion = self.read(self.gen(0) / "promotion.json")
+        self.assertEqual(promotion["reevaluated"], {"challenger": ["seeds_sha256"]})
+
     def test_a_stale_challenger_eval_is_redone_before_the_comparison(self):
         # Erratum E5: both EvalMetas are checked.
         run = self.make_loop()
