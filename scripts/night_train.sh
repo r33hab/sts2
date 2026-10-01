@@ -16,7 +16,9 @@
 # ~/Documents/git/sts2-wt/priors/current (rl.prior_loop export), copied here on every start
 # and passed as the job's combat_prior; PRIOR=0 plays them with plain search.
 #
-# Overrides: MAC=user@host, STOP_AT (default 07:30), WORKERS (default: cores but 2), PRIOR.
+# Overrides: MAC=user@host, WORKERS (default: cores but 2), PRIOR, STOP_AT: when it stops
+# itself -- "07:30" (the default: the next 07:30), a date and time ("2026-10-05 07:30"
+# runs through a weekend), or "none" (until `stop`).
 set -euo pipefail
 
 export MAC="${MAC:-user@your-mac.local}"
@@ -75,20 +77,38 @@ start)
       --seed-timeout "$SEED_TIMEOUT" $(prior_args)
   fi
   now=$(date +%s)
-  target=$(date -j -f "%H:%M" "$STOP_AT" +%s 2>/dev/null || date -d "$STOP_AT" +%s)
-  [ "$target" -le "$now" ] && target=$((target + 86400))
-  seconds=$((target - now))
+  case "$STOP_AT" in
+  none) seconds="" ;;
+  *-*)
+    target=$(date -j -f "%Y-%m-%d %H:%M" "$STOP_AT" +%s 2>/dev/null || date -d "$STOP_AT" +%s)
+    seconds=$((target - now))
+    ;;
+  *)
+    target=$(date -j -f "%H:%M" "$STOP_AT" +%s 2>/dev/null || date -d "$STOP_AT" +%s)
+    [ "$target" -le "$now" ] && target=$((target + 86400))
+    seconds=$((target - now))
+    ;;
+  esac
+  if [ -n "$seconds" ] && [ "$seconds" -le 0 ]; then
+    echo "STOP_AT $STOP_AT is in the past" >&2
+    exit 2
+  fi
   kill_pidfile .caffeinate.pid
-  nohup caffeinate -s -t "$seconds" >/dev/null 2>&1 &
+  # shellcheck disable=SC2086 -- no -t at all when it runs until `stop`
+  nohup caffeinate -s ${seconds:+-t "$seconds"} >/dev/null 2>&1 &
   echo $! >"$ROOT/.caffeinate.pid"
   kill_pidfile .sync.pid
   nohup bash -c "$(declare -f sync_once); while true; do sync_once; sleep 300; done" \
     >>"$HOME/night_sync.log" 2>&1 &
   echo $! >"$ROOT/.sync.pid"
   kill_pidfile .autostop.pid
-  nohup bash -c "sleep $seconds; bash '$REPO/scripts/night_train.sh' stop" >>"$HOME/night_sync.log" 2>&1 &
-  echo $! >"$ROOT/.autostop.pid"
-  echo "training with $WORKERS workers until $STOP_AT ($((seconds / 3600)) h); progress syncs to the Mac"
+  if [ -n "$seconds" ]; then
+    nohup bash -c "sleep $seconds; bash '$REPO/scripts/night_train.sh' stop" >>"$HOME/night_sync.log" 2>&1 &
+    echo $! >"$ROOT/.autostop.pid"
+    echo "training with $WORKERS workers until $STOP_AT ($((seconds / 3600)) h); progress syncs to the Mac"
+  else
+    echo "training with $WORKERS workers until you run: bash $REPO/scripts/night_train.sh stop"
+  fi
   ;;
 stop)
   train stop --root "$ROOT" || true
