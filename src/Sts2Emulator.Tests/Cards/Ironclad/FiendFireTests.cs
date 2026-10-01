@@ -68,4 +68,22 @@ public class FiendFireTests
             Fight.Ids(fight.State.ExhaustPile)
         );
     }
+
+    [Fact]
+    public void DoesNotExhaustCardsDrawnByDarkEmbraceDuringItsResolution()
+    {
+        var fight = Fight
+            .Hand(Card(IC.FiendFire), Card(IC.DefendIronclad))
+            .Energy(2)
+            .Enemy(hp: 60);
+        fight.State.DrawPile.Clear();
+        fight.State.DrawPile.Add(Card(IC.StrikeIronclad));
+        BuffSystem.Apply(fight.State.PlayerBuffs, BuffId.DarkEmbrace, 1);
+
+        fight.Play();
+
+        Assert.Equal(53, fight.Enemy0.Hp);
+        Assert.Equal([IC.DefendIronclad, IC.FiendFire], Fight.Ids(fight.State.ExhaustPile));
+        Assert.Equal([IC.StrikeIronclad], Fight.Ids(fight.State.Hand));
+    }
 }

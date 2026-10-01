@@ -441,10 +441,11 @@ public static class CardEffects
             case IC.FiendFire: // 2-cost, exhaust hand, deal 7/10 dmg per card exhausted
             {
                 int count = state.Hand.Count;
-                while (state.Hand.Count > 0)
+                for (int i = 0; i < count; i++)
                 {
-                    ExhaustCard(state, state.Hand[0], rng: rng);
+                    var exhausted = state.Hand[0];
                     state.Hand.RemoveAt(0);
+                    ExhaustCard(state, exhausted, rng: rng);
                 }
                 DealDamageMultiHit(state, Dmg(state, def, upgraded, card), count, rng);
                 break;
