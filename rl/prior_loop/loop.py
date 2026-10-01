@@ -823,31 +823,65 @@ def compare_groups(
     }
 
 
+DEATHS_ALPHA = 0.025  # one-sided: the same 95% level as the end-HP interval
+
+
+def deaths_test(
+    champion: Sequence[dict[str, Any]],
+    challenger: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    """The paired test on deaths (McNemar's, exact): of the fights exactly one side lost,
+    how likely the challenger losing this few of them is if both were equally good. Fights
+    both won, or both lost, say nothing either way."""
+    pairs = list(zip(champion, challenger, strict=True))
+    saved = sum(1 for a, b in pairs if not a["won"] and b["won"])
+    lost = sum(1 for a, b in pairs if a["won"] and not b["won"])
+    n = saved + lost
+    p = sum(math.comb(n, k) for k in range(saved, n + 1)) / 2**n if n else 1.0
+    return {"saved": saved, "lost": lost, "p": p}
+
+
 def decide(
     champion: Sequence[dict[str, Any]],
     challenger: Sequence[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Promote iff the paired 95% CI on end HP is above 0 AND deaths do not rise (6.4)."""
+    """Promote a challenger that is clearly better on end HP (the paired 95% CI is above 0)
+    OR clearly loses fewer fights (`deaths_test`, one-sided p below DEATHS_ALPHA), and is
+    clearly worse on neither: deaths do not rise and the end-HP CI is not wholly below 0
+    (6.4). End HP alone left networks dying ~5% less often (452-457 deaths against 476,
+    live 2026-10-01) unpromoted, and the loop kept learning from one teacher."""
     result = compare(champion, challenger)
-    ci_low = result["ci95"][0] if result["ci95"] else None
+    ci_low, ci_high = result["ci95"] if result["ci95"] else (None, None)
+    deaths = deaths_test(champion, challenger)
     deaths_champion = result["champion"]["deaths"]
     deaths_challenger = result["challenger"]["deaths"]
+    hp_better = ci_low is not None and ci_low > 0
+    deaths_better = deaths["p"] < DEATHS_ALPHA
     reasons = []
-    hp_ok = ci_low is not None and ci_low > 0
-    if not hp_ok:
+    if not hp_better and not deaths_better:
         reasons.append(
             "end HP: the paired 95% CI lower bound "
             f"{'is undefined' if ci_low is None else f'{ci_low:+.2f}'} is not above 0",
         )
+        reasons.append(
+            f"deaths: {deaths_champion} -> {deaths_challenger} is not clearly fewer "
+            f"(saved {deaths['saved']}, lost {deaths['lost']}, p {deaths['p']:.3f})",
+        )
     deaths_ok = deaths_challenger <= deaths_champion
     if not deaths_ok:
         reasons.append(f"deaths rose: {deaths_champion} -> {deaths_challenger}")
+    hp_ok = ci_high is None or ci_high >= 0
+    if not hp_ok:
+        reasons.append(f"end HP clearly worse: the CI upper bound {ci_high:+.2f} is below 0")
     return {
-        "promote": bool(hp_ok and deaths_ok),
+        "promote": bool((hp_better or deaths_better) and deaths_ok and hp_ok),
         "mean_diff_end_hp": result["mean_diff_end_hp"],
         "ci_low": ci_low,
         "deaths_champion": deaths_champion,
         "deaths_challenger": deaths_challenger,
+        "deaths_saved": deaths["saved"],
+        "deaths_lost": deaths["lost"],
+        "deaths_p": deaths["p"],
         "reasons": reasons,
     }
 

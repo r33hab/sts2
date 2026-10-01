@@ -364,6 +364,26 @@ class PriorLoopTest(unittest.TestCase):
         )
         self.assertFalse(self.export.exists())
 
+    def test_a_challenger_that_clearly_loses_fewer_fights_is_promoted_without_an_hp_gain(self):
+        # Live 2026-10-01: networks dying ~5% less often (452-457 deaths against 476)
+        # never cleared the end-HP interval, so the loop kept learning from one teacher.
+        # Twelve fights the champion lost are won (on 1 HP); the rest only get noisier.
+        base = [result(f, 0 if f["index"] < 12 else 30) for f in self.fights]
+        saves = [
+            result(f, 1 if f["index"] < 12 else (20 if f["index"] % 2 else 40))
+            for f in self.fights
+        ]
+        decision = loop.decide(base, saves)
+        self.assertLessEqual(decision["ci_low"], 0)  # no clear end-HP gain
+        self.assertLess(decision["deaths_p"], loop.DEATHS_ALPHA)
+        self.assertTrue(decision["promote"])
+
+        # Two saves out of two discordant fights is no evidence (p = 0.25).
+        few = [result(f, 1 if f["index"] < 2 else (20 if f["index"] % 2 else 40))
+               for f in self.fights]
+        base_few = [result(f, 0 if f["index"] < 2 else 30) for f in self.fights]
+        self.assertFalse(loop.decide(base_few, few)["promote"])
+
     def test_promotion_exports_the_champion(self):
         trainer = FakeTrainer()
         with trainer.patch():
