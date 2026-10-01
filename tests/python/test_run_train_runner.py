@@ -407,10 +407,12 @@ class GenerateTests(RunnerTestCase):
         self.assertEqual(shards.read_jsonl(self.gen / "retries.jsonl"), retry)
         self.assertTrue(any("quarantined" in line for line in logs.output))
 
-    def test_a_worker_hung_past_the_seed_timeout_is_killed_retried_then_quarantined(
+    def test_a_worker_hung_past_the_seed_timeout_is_killed_and_quarantined_without_a_retry(
         self,
     ):
-        # Erratum O5: a worker hung inside a native step is handled exactly like a crash.
+        # Erratum O5: a worker hung inside a native step is killed. A seed that hangs once
+        # hangs again, so it is quarantined at once: live 2026-09-30, a retry held a whole
+        # generation for a second full seed_timeout on one stuck run (T0008R0550).
         hang = "T0003R0001"
         config = runner.JobConfig(
             workers=2,
@@ -434,6 +436,8 @@ class GenerateTests(RunnerTestCase):
             [(q["seed"], q["status"], q["reason"], q["exit_code"]) for q in quarantine],
             [(hang, "aborted", "timeout", -signal.SIGKILL)],
         )
+        retries = self.gen / "retries.jsonl"
+        self.assertFalse(retries.exists() and shards.read_jsonl(retries))
         self.assertEqual(
             sorted(shard_seeds(self.gen)),
             ["T0003R0000", "T0003R0002", "T0003R0003"],

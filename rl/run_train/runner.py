@@ -18,7 +18,8 @@ nice 10 and loads its own native library, since the emulator is not thread-safe.
 - **Failures.** A worker that dies is replaced; a native abort shows up as SIGABRT,
   `exitcode == -6`. A worker still busy with one seed after `seed_timeout` seconds is
   killed (erratum O5). A Python exception comes back over the pipe and the worker carries
-  on. Whatever the failure, the seed is retried once and quarantined on a second failure,
+  on. A crash or an exception is retried once and quarantined on a second failure, a
+  timeout is quarantined at once (a seed that hangs once hangs again),
   with the exit code and the last fight the worker reported. A generation appends every
   first failure to `retries.jsonl` as it happens, and every second one to
   `quarantine.jsonl`. A worker that dies before it is ready never ran its seed, so the
@@ -415,7 +416,9 @@ def run_seeds(
     def fail(failure: Failure) -> None:
         nonlocal outstanding
         failures[failure.seed] = failures.get(failure.seed, 0) + 1
-        if failures[failure.seed] < 2:
+        # A seed that hangs once hangs again: a retry only held the generation for a second
+        # full seed_timeout (live 2026-09-30, T0008R0550). Crashes and exceptions keep it.
+        if failures[failure.seed] < 2 and failure.reason != "timeout":
             stats.retried += 1
             stats.retries.append(failure.to_json())
             if on_retry is not None:
@@ -436,9 +439,10 @@ def run_seeds(
             stats.quarantined_by_encounter.get(encounter, 0) + 1
         )
         log.warning(
-            "%s: %s again (%s, exit code %s, last encounter %s); quarantined",
+            "%s: %s%s (%s, exit code %s, last encounter %s); quarantined",
             failure.seed,
             failure.status,
+            " again" if failures[failure.seed] > 1 else "",
             failure.reason,
             failure.exit_code,
             failure.encounter,
