@@ -1450,13 +1450,6 @@ public sealed class RunEngine
     private int FinishCombat(bool playerWon, out bool terminal)
     {
         terminal = true;
-        // `ImprovementPower.AfterCombatEnd`, which fires whether or not the
-        // fight was won: upgrade its amount of UPGRADABLE deck cards, drawn
-        // off `Rng.CombatCardSelection` without replacement. Mad Science's
-        // Improvement rider, and the run-side seam that kept it unmodelled
-        // until O17. Before the sync, which is where the combat is dropped.
-        RunNonCombatEffects.ApplyImprovementUpgrades(State);
-
         // `RoyaltiesPower.AfterCombatEnd` and
         // `ForbiddenGrimoirePower.AfterCombatEnd` each hang an extra reward on the
         // room. Read off the COMBAT here, before the sync drops it -- both powers
@@ -1478,6 +1471,9 @@ public sealed class RunEngine
         // same as the candle -- and every third one melts a wax relic.
         RunNonCombatEffects.MeltAToyBoxRelic(State);
         SyncAfterCombat();
+        // In the game, Improvement's AfterCombatEnd reads the same run stream combat
+        // used. Copy combat's position back before drawing its deck upgrades.
+        RunNonCombatEffects.ApplyImprovementUpgrades(State);
         if (playerWon)
         {
             RunNonCombatEffects.TriggerFishingRod(State);
