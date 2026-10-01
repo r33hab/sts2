@@ -21,7 +21,7 @@ nice 10 and loads its own native library, since the emulator is not thread-safe.
   on. A crash or an exception is retried once and quarantined on a second failure, a
   timeout is quarantined at once (a seed that hangs once hangs again),
   with the exit code and the last fight the worker reported. A generation appends every
-  first failure to `retries.jsonl` as it happens, and every second one to
+  retried failure to `retries.jsonl` as it happens, and every quarantined one to
   `quarantine.jsonl`. A worker that dies before it is ready never ran its seed, so the
   seed is not charged; when workers keep dying that way (the play function cannot be
   loaded, say), the job fails instead of quarantining every seed.
