@@ -2,6 +2,11 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Prefer the .NET 9 SDK desktop_setup.sh installs in ~/.dotnet: a shell that has not read
+# its rc file finds none (WSL) or an older system SDK first (/usr/local/share/dotnet 8).
+if [ -x "$HOME/.dotnet/dotnet" ]; then
+  export PATH="$HOME/.dotnet:$PATH" DOTNET_ROOT="$HOME/.dotnet"
+fi
 # Default runtime to the host platform; override: bash scripts/build.sh linux-x64
 if [ -n "${1:-}" ]; then
   RUNTIME="$1"
