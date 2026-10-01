@@ -258,4 +258,37 @@ public class CascadeTests
 
         Assert.True(fight.State.DrawPile.Count < before, "the top of the pile should be spent");
     }
+
+    [Fact]
+    public void NestedCascadesResolveBeforeTheirParentReturnsToDiscard()
+    {
+        var fight = Fight.Hand(new CardInstance(Cascade, Upgraded: true)).Energy(0);
+        fight.State.DrawPile.Clear();
+        fight.State.DrawPile.Add(new CardInstance(Cascade, Upgraded: true));
+
+        CardEffects.Apply(
+            GeneratedData.Cards.Get(Cascade),
+            upgraded: true,
+            fight.State,
+            new Random(0),
+            new CardInstance(Cascade, Upgraded: true)
+        );
+
+        Assert.Empty(fight.State.AutoPlayQueue);
+        Assert.Single(fight.State.DiscardPile);
+    }
+
+    [Fact]
+    public void TwoUpgradedCascadesCannotReplayEachOtherForever()
+    {
+        var fight = Fight.Hand(new CardInstance(Cascade, Upgraded: true)).Energy(0);
+        fight.State.DrawPile.Clear();
+        fight.State.DrawPile.Add(new CardInstance(Cascade, Upgraded: true));
+
+        fight.Play();
+
+        Assert.Equal(2, fight.State.CardsPlayedThisCombat);
+        Assert.Equal(2, fight.State.DiscardPile.Count);
+        Assert.Empty(fight.State.AutoPlayQueue);
+    }
 }

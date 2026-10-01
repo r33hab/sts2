@@ -291,8 +291,12 @@ public static class CardEffects
                 // Cascade used to grant Strength, which is a different card entirely.
                 // It is `CardPileCmd.AutoPlayFromDrawPile(..., CardPilePosition.Top)`,
                 // NOT Catastrophe's random pick -- see AutoPlayFromDrawPileTop.
-                AutoPlayFromDrawPileTop(state, state.Energy + (upgraded ? 1 : 0), rng);
-                state.Energy = 0;
+                int count = state.Energy + (upgraded ? 1 : 0);
+                if (!state.AutoPlaying)
+                {
+                    state.Energy = 0;
+                }
+                AutoPlayFromDrawPileTop(state, count, rng);
                 break;
             }
 
@@ -4030,6 +4034,7 @@ public static class CardEffects
     /// </remarks>
     private static void AutoPlayFromDrawPileTop(CombatState state, int count, Random rng)
     {
+        var cards = new List<CardInstance>();
         for (int i = 0; i < count; i++)
         {
             if (state.DrawPile.Count == 0 && state.DiscardPile.Count > 0)
@@ -4044,7 +4049,15 @@ public static class CardEffects
 
             var picked = state.DrawPile[0];
             state.RemoveFromDrawPileAt(0);
-            state.AutoPlayQueue.Add(picked);
+            cards.Add(picked);
+        }
+
+        foreach (var card in cards)
+        {
+            if (CombatEngine.AutoPlayFromDrawPile(state, card, rng))
+            {
+                break;
+            }
         }
     }
 

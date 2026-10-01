@@ -5088,6 +5088,14 @@ public static class CombatEngine
         }
     }
 
+    internal static bool AutoPlayFromDrawPile(CombatState state, CardInstance card, Random rng)
+    {
+        var beforePlay = new Baseline(state);
+        AutoPlay(state, card, rng);
+        AnswerDeathsSince(state, beforePlay, rng);
+        return PlayerIsDead(state) || NoPrimaryEnemyLeft(state);
+    }
+
     private static void AutoPlayCore(CombatState state, CardInstance card, Random rng)
     {
         var def = GeneratedData.Cards.Get(card.DefId);
