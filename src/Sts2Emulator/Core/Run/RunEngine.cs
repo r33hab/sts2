@@ -1791,8 +1791,12 @@ public sealed class RunEngine
         }
         if (followUp == RunFollowUp.PreRolledCardReward)
         {
-            // The grid is already up; Neow stays on screen for its Proceed once the choice
-            // is made, the way it does after every other blessing.
+            // Orrery already opened its card-reward screen. The other pickups leave a
+            // pre-rolled grid, which must be answered before Neow's Proceed.
+            if (State.PendingOfferCards.Length > 0)
+            {
+                State.Phase = RunPhase.TransformSelect;
+            }
             State.NeowAwaitingProceed = true;
             return;
         }
