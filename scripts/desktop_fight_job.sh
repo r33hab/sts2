@@ -8,7 +8,8 @@
 # 1. Copies the recorded fight starts the loop trains on -- only the shard files of the
 #    Mac's full-run and stage-2 jobs -- to the path the loop reads them from
 #    (rl/prior_loop/real_fights.py JOBS: ~/Documents/git/sts2-wt/training/runs).
-# 2. Starts the loop in tmux session "fight" (log: ~/fight_loop.log), exporting nothing.
+# 2. Starts the loop in tmux session "fight", one round per process (fight_loop_rounds.sh,
+#    so memory never piles up), exporting nothing.
 # 3. Starts tmux session "sync": every 5 minutes the loop's small files (status, the
 #    champion's networks, evaluations -- not the generated training data) go back to the
 #    Mac under ~/Documents/git/sts2-wt/desktop/<ROOT_NAME>.
@@ -70,7 +71,7 @@ if tmux has-session -t fight 2>/dev/null; then
   echo "already running"
 else
   tmux new-session -d -s fight \
-    "cd '$REPO' && PYTHONUNBUFFERED=1 PYTHONPATH=src uv run python -m rl.prior_loop run --root '$ROOT' --workers $WORKERS --no-export 2>&1 | tee -a '$HOME/$ROOT_NAME.log'"
+    "cd '$REPO' && bash scripts/fight_loop_rounds.sh '$ROOT' --workers $WORKERS --no-export 2>&1 | tee -a '$HOME/$ROOT_NAME.log'"
   echo "started"
 fi
 
