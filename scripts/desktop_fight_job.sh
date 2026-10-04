@@ -16,8 +16,9 @@
 #
 # Overrides: MAC=user@host, WORKERS (default: all threads but 2), ROOT_NAME (default
 # prior_loop: the loop's folder under ~/sts2/runs, synced to the Mac under the same name),
-# SET="name=value ..." (a NEW loop's PriorConfig, e.g. SET="d_model=192 layers=3"; a
-# loop's settings are fixed once it has run, so SET applies only when its folder is new).
+# SET="name=value ..." (the loop's PriorConfig: any field for a new loop, e.g.
+# SET="d_model=192 layers=3"; only the runtime fields -- eval_budget, full_job, full_share,
+# full_recent, workers, device -- for one that has run).
 set -euo pipefail
 
 MAC="${MAC:-user@your-mac.local}"
@@ -33,16 +34,19 @@ export PYTHONUTF8=1 LANG=C.UTF-8 UV_PYTHON=3.12
 step() { printf '\n== %s\n' "$*"; }
 
 step "recorded fights from $MAC"
-for job in full stage2; do
-  mkdir -p "$JOBS/$job"
+# The A9 jobs, and the A10 night job (synced to the Mac from the M5 Pro) that the loops
+# can draw training fights from (PriorConfig.full_job).
+for src in training/runs/full training/runs/stage2 night/a10; do
+  dest="$HOME/Documents/git/sts2-wt/$src"
+  mkdir -p "$dest"
   rsync -a --prune-empty-dirs \
     --include='gen_*/' --include='gen_*/shards/' --include='gen_*/shards/r*.jsonl.gz' \
-    --exclude='*' "$MAC:Documents/git/sts2-wt/training/runs/$job/" "$JOBS/$job/"
-  echo "$job: $(find "$JOBS/$job" -name 'r*.jsonl.gz' | wc -l) shards"
+    --exclude='*' "$MAC:Documents/git/sts2-wt/$src/" "$dest/" || echo "($src: nothing to copy)"
+  echo "$src: $(find "$dest" -name 'r*.jsonl.gz' | wc -l) shards"
 done
 
-if [ -n "$SET" ] && [ ! -f "$ROOT/config.json" ]; then
-  step "new loop $ROOT_NAME with $SET"
+if [ -n "$SET" ]; then
+  step "loop $ROOT_NAME: $SET"
   mkdir -p "$ROOT"
   # shellcheck disable=SC2086 -- SET is a list of name=value words
   (cd "$REPO" && PYTHONPATH=src uv run python - "$ROOT/config.json" $SET <<'PY'
@@ -52,15 +56,22 @@ import sys
 
 from rl.prior_loop.loop import PriorConfig
 
-defaults = PriorConfig()
+from pathlib import Path
+
+from rl.prior_loop.loop import RUNTIME_FIELDS
+
+path = Path(sys.argv[1])
+stored = PriorConfig.from_json(json.loads(path.read_text())) if path.exists() else None
+base = stored or PriorConfig()
 overrides = {}
 for item in sys.argv[2:]:
     name, _, value = item.partition("=")
-    kind = type(getattr(defaults, name))  # an unknown name fails here, loudly
+    kind = type(getattr(base, name))  # an unknown name fails here, loudly
+    if stored is not None and name not in RUNTIME_FIELDS:
+        sys.exit(f"{name} is fixed once a loop has run (only {sorted(RUNTIME_FIELDS)} may change)")
     overrides[name] = value.lower() in ("1", "true", "yes") if kind is bool else kind(value)
-config = dataclasses.replace(defaults, **overrides)
-with open(sys.argv[1], "w") as out:
-    json.dump(config.to_json(), out, indent=2)
+config = dataclasses.replace(base, **overrides)
+path.write_text(json.dumps(config.to_json(), indent=2))
 print("config:", overrides)
 PY
   )

@@ -8,8 +8,8 @@
 #
 # The job lives in ~/sts2/runs/a10 and resumes where it stopped. While it runs, the Mac is
 # kept awake on power (keep the lid open), and its small files -- status, log, every
-# generation's evaluations and quarantined runs, each learner, the exported champion; not
-# the shards -- go back to the Mac
+# generation's evaluations and quarantined runs, each learner, the exported champion, and
+# the shards (the fight loops train on this job's fights) -- go back to the Mac
 # under ~/Documents/git/sts2-wt/night/a10 every 5 minutes.
 #
 # Fights are played with the fight network the Mac exported to
@@ -44,7 +44,7 @@ train() { PYTHONPATH=src uv run python -m rl.run_train "$@"; }
 sync_once() {
   rsync -a --prune-empty-dirs \
     --include='*/' --include='*.json' --include='*.log' --include='quarantine.jsonl' \
-    --include='learner.npz' --include='export/***' --exclude='*' \
+    --include='learner.npz' --include='r*.jsonl.gz' --include='export/***' --exclude='*' \
     "$ROOT/" "$MAC:Documents/git/sts2-wt/night/a10/" && date '+%F %T synced' || date '+%F %T sync failed'
 }
 

@@ -269,23 +269,34 @@ def load_real_set(path: Path = REAL_SET) -> list[dict[str, Any]]:
 # ---- training fights ----------------------------------------------------------------------
 
 
+def recent_generations(job: Path, count: int) -> list[int] | None:
+    """The last `count` generations `job` has (None, all of them, when count is 0)."""
+    if count <= 0:
+        return None
+    present = sorted(int(path.name[4:]) for path in Path(job).glob("gen_[0-9][0-9][0-9][0-9]"))
+    return present[-count:]
+
+
 def training_fights(
     count: int,
     iteration: int,
     shares: dict[int, float] | None = None,
     full_share: float = 0.7,
     stage2_generations: Sequence[int] | None = None,
+    full_job: Path = FULL_JOB,
+    full_recent: int = 0,
 ) -> list[dict[str, Any]]:
     """Sample `count` training fight starts from every shard that is not held out.
 
-    `full_share` of them from the full-run job, the rest from the stage-2 job (Act 1
-    only, for volume); `shares` splits each part by node type. Iteration k samples with
+    `full_share` of them from the full-run job `full_job` (its last `full_recent`
+    generations, or all), the rest from the stage-2 job (Act 1 only, for volume);
+    `shares` splits each part by node type. A part with no shards to draw from raises. Iteration k samples with
     seed k, so iterations draw different fights, and deals them with seeds that never
     meet the gate set's.
     """
     shares = shares or {1: 0.6, 2: 0.2, 6: 0.2}
     parts = [
-        (FULL_JOB, None, round(count * full_share)),
+        (Path(full_job), recent_generations(full_job, full_recent), round(count * full_share)),
         (STAGE2_JOB, stage2_generations, count - round(count * full_share)),
     ]
     sampled: list[tuple[int, str, dict[str, Any]]] = []
@@ -294,6 +305,8 @@ def training_fights(
             continue
         per_kind = {kind: round(total * share) for kind, share in shares.items()}
         paths = [p for p in shards(job, generations) if not held_out(p)]
+        if not paths:
+            raise ValueError(f"no shards to draw training fights from in {job}")
         sampled.extend(sample_fights(paths, per_kind, seed=1000 + iteration))
     return specs(sampled, TRAIN_SEED_BASE + 100_000 * iteration)
 

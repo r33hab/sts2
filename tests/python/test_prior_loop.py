@@ -802,3 +802,35 @@ class CliTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TrainingFightSourceTests(unittest.TestCase):
+    """Where a round's training fights come from (2026-10-04: from the A10 job, not the
+    old A9 recordings)."""
+
+    def test_they_come_from_the_named_job_and_its_last_generations(self):
+        from rl.prior_loop import real_fights
+
+        with tempfile.TemporaryDirectory() as tmp:
+            job = Path(tmp) / "a10"
+            for g in range(5):
+                (job / f"gen_{g:04d}" / "shards").mkdir(parents=True)
+            calls = []
+
+            def listed(job_, generations=None):
+                calls.append((Path(job_), generations))
+                return [Path(tmp) / "r0001.jsonl.gz"]
+
+            with (
+                mock.patch.object(real_fights, "shards", side_effect=listed),
+                mock.patch.object(real_fights, "sample_fights", return_value=[]),
+                mock.patch.object(real_fights, "specs", return_value=[]),
+            ):
+                real_fights.training_fights(100, 0, full_share=1.0, full_job=job, full_recent=2)
+        self.assertEqual(calls, [(job, [3, 4])])
+
+    def test_a_job_without_shards_fails_loudly(self):
+        from rl.prior_loop import real_fights
+
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(ValueError, "no shards"):
+            real_fights.training_fights(100, 0, full_share=1.0, full_job=Path(tmp))

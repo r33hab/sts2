@@ -395,6 +395,11 @@ class PriorConfig:
     train_fights: int = 10_000
     full_share: float = 0.7
     stage2_generations: tuple[int, ...] = tuple(range(12, 30))
+    # The full-run job the "full" share is drawn from ("" is real_fights.FULL_JOB, the A9
+    # job) and how many of its latest generations (0: all). The A10 job's fights are the
+    # decks and HP training meets now. Runtime fields: a running loop may switch source.
+    full_job: str = ""
+    full_recent: int = 0
     # The set the gate reads: "real" (`real_fight_set.json`) or "design" (6.3's set).
     gate: str = "real"
     # PUCT asks for a node's prior once the node has this many visits (combat_mcts).
@@ -428,7 +433,9 @@ class PriorConfig:
         return cls(**values)
 
 
-RUNTIME_FIELDS = frozenset({"workers", "device", "eval_budget"})
+RUNTIME_FIELDS = frozenset(
+    {"workers", "device", "eval_budget", "full_job", "full_share", "full_recent"}
+)
 
 
 def resolve_config(root: Path, overrides: dict[str, Any]) -> PriorConfig:
@@ -1235,6 +1242,8 @@ class PriorLoop:
                 k,
                 full_share=cfg.full_share,
                 stage2_generations=cfg.stage2_generations,
+                full_job=Path(cfg.full_job).expanduser() if cfg.full_job else real_fights.FULL_JOB,
+                full_recent=cfg.full_recent,
             )
             write_json(chosen, fights)
         settings = {
