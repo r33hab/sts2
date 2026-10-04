@@ -141,6 +141,7 @@ class LoopConfig:
                 "tau_decay": self.tau_decay,
                 "tau_min": self.tau_min,
                 "export_dest": self.export_dest,
+                "warm_start": self.warm_start,
             },
         }
 

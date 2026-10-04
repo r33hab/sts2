@@ -817,6 +817,13 @@ class PromotionTests(LoopTestCase):
             {},
         )
 
+    def test_warm_start_survives_the_config_file(self):
+        # Live 2026-10-04: `start --warm-start champion` set it, but to_json left it out,
+        # so the loop read the config back as "latest" and trained from the last learner.
+        config = dataclasses.replace(CONFIG, warm_start="champion")
+        loop.write_config(self.root, config)
+        self.assertEqual(loop.read_config(self.root).warm_start, "champion")
+
     def test_warm_start_champion_trains_each_learner_from_the_champion(self):
         # Live 2026-10-03/04 (the A10 job, gens 41-80): a learner trained from the
         # champion scored like it, the next one, trained from that learner, fell ~1.5
