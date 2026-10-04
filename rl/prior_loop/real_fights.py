@@ -307,12 +307,7 @@ def sources_sha256(fights: Sequence[dict[str, Any]]) -> str:
 
 def with_budget(fights: Sequence[dict[str, Any]], budget: str) -> list[dict[str, Any]]:
     """Give every fight its simulation count: "60" for all, or "120/500" by room kind."""
-    normal, _, hard = budget.partition("/")
-    hard = hard or normal
-    return [
-        {**fight, "sims": int(normal if fight["group"] == "hallway" else hard)}
-        for fight in fights
-    ]
+    return loop.budgeted(fights, budget)
 
 
 def by_group(

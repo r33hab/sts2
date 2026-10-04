@@ -7,6 +7,7 @@ which generates, trains and evaluates at a few simulations on one encounter.
 """
 
 import gzip
+import dataclasses
 import json
 import subprocess
 import sys
@@ -363,6 +364,23 @@ class PriorLoopTest(unittest.TestCase):
             json.loads((self.root / loop.CHAMPION).read_text())["iteration"],
         )
         self.assertFalse(self.export.exists())
+
+    def test_the_gate_can_play_the_real_set_at_the_training_budget(self):
+        # Live 2026-10-03: at the gate's 60 simulations round 9 beat round 4 by 24 deaths
+        # (452 vs 476); at the budget training plays (120/500) the two were level (419 vs
+        # 427, p 0.21). eval_budget plays the real set at that budget, by room kind.
+        plain = self.make(FakeEval())
+        self.assertNotIn("eval_budget", plain.eval_meta("real"))  # no needless replays
+        (self.root / loop.CONFIG).write_text(json.dumps(self.config.to_json()))
+        self.config = dataclasses.replace(self.config, eval_budget="120/500")
+        self.assertEqual(
+            loop.resolve_config(self.root, {"eval_budget": "120/500"}).eval_budget, "120/500"
+        )  # a running loop may switch
+        budgeted = self.make(FakeEval())
+        sims = {(f["group"], f["sims"]) for f in budgeted.sets()["real"]}
+        self.assertIn(("hallway", 120), sims)
+        self.assertTrue(all(n == 500 for group, n in sims if group != "hallway"))
+        self.assertEqual(budgeted.eval_meta("real")["eval_budget"], "120/500")
 
     def test_a_challenger_that_clearly_loses_fewer_fights_is_promoted_without_an_hp_gain(self):
         # Live 2026-10-01: networks dying ~5% less often (452-457 deaths against 476)

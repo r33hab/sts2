@@ -309,6 +309,16 @@ def build_fight_set(
     return fights
 
 
+def budgeted(fights: Sequence[dict[str, Any]], budget: str) -> list[dict[str, Any]]:
+    """Give every fight its simulation count: "60" for all, or "120/500" by room kind."""
+    normal, _, hard = budget.partition("/")
+    hard = hard or normal
+    return [
+        {**fight, "sims": int(normal if fight["group"] == "hallway" else hard)}
+        for fight in fights
+    ]
+
+
 def fight_set_sha256(fights: Sequence[dict[str, Any]]) -> str:
     canonical = json.dumps(list(fights), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
@@ -370,6 +380,11 @@ class PriorConfig:
     value_lambda: float = 0.3
     torch_threads: int = 2
     eval_sims: int = 60
+    # Play the real gate set at this budget by room kind ("120/500": hallway fights at 120
+    # simulations, elites and bosses at 500) instead of eval_sims: the budget self-play and
+    # the autopilot search at. At 60, networks that tie at 120/500 looked 24 deaths apart
+    # (2026-10-03). "" keeps eval_sims. A running loop may switch; its champion is replayed.
+    eval_budget: str = ""
     eval_batch_fights: int = 16
     encounters: tuple[int, ...] = ()  # empty: every act-1 id (`act_one_pool`)
     # Where training fights come from: "synthetic" is 6.1's `train_combat.generate()`
@@ -413,7 +428,7 @@ class PriorConfig:
         return cls(**values)
 
 
-RUNTIME_FIELDS = frozenset({"workers", "device"})
+RUNTIME_FIELDS = frozenset({"workers", "device", "eval_budget"})
 
 
 def resolve_config(root: Path, overrides: dict[str, Any]) -> PriorConfig:
@@ -1308,8 +1323,12 @@ class PriorLoop:
         return self.play_settings(self.config.eval_sims if sims is None else sims)
 
     def sets(self) -> dict[str, list[dict[str, Any]]]:
-        """Return the fight sets every challenger plays: 6.3's design set and the real set."""
-        return {"design": self.fights, "real": self.real_fights}
+        """Return the fight sets every challenger plays: 6.3's design set and the real set
+        (at `eval_budget` when one is set)."""
+        real = self.real_fights
+        if self.config.eval_budget:
+            real = budgeted(real, self.config.eval_budget)
+        return {"design": self.fights, "real": real}
 
     def eval_meta(self, name: str = "design") -> dict[str, Any]:
         """Return what an evaluation depends on; the champion is replayed when it changes."""
@@ -1324,6 +1343,7 @@ class PriorLoop:
             "c_puct": cfg.c_puct,
             "prior_min_visits": cfg.prior_min_visits,
             "fight_set_sha256": fight_set_sha256(self.sets()[name]),
+            **({"eval_budget": cfg.eval_budget} if cfg.eval_budget else {}),
         }
 
     def _play(
