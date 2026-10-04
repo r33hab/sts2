@@ -218,6 +218,12 @@ def _covered(parts_dir: Path) -> set[int]:
     return done
 
 
+# A fight's wall-clock limit (settings["fight_timeout"] overrides it); a part gets this
+# much per fight. Normal fights take seconds; one that loops inside the native library
+# never returns -- live 2026-10-04, a part ran 19 hours and held a round at 249/250.
+FIGHT_TIMEOUT_S = 120.0
+
+
 def generate(
     fights: Sequence[dict[str, Any]],
     settings: dict[str, Any],
@@ -232,9 +238,10 @@ def generate(
     Fight ids are the fights' positions in `fights`. The work is cut into parts of
     `part_size` consecutive fights, each played by a process of its own that writes
     `parts_dir/part_{first}_{end}.npz`, so a restart plays only the fights no part holds.
-    A process that dies (a native crash) is not fatal: its part is replayed one fight per
-    process, and a fight that kills its process again is quarantined and skipped
-    (`parts_dir/quarantine.json`). Returns a summary.
+    A process that dies (a native crash), or runs past FIGHT_TIMEOUT_S per fight and is
+    killed, is not fatal: its part is replayed one fight per process, and a fight that
+    fails again is quarantined and skipped (`parts_dir/quarantine.json`, with its reason).
+    Returns a summary.
     """
     out = Path(out)
     parts_dir = (
@@ -261,7 +268,10 @@ def generate(
         queue.append(run)
     workers = max(1, int(settings.get("workers", 1)))
     context = multiprocessing.get_context("spawn")
+    fight_timeout = float(settings.get("fight_timeout", FIGHT_TIMEOUT_S))
     running: dict[Any, list[int]] = {}
+    started_at: dict[Any, float] = {}
+    timed_out: set[Any] = set()
     crashes = 0
     start = time.perf_counter()
     while queue or running:
@@ -279,12 +289,20 @@ def generate(
             )
             process.start()
             running[process] = ids
+            started_at[process] = time.monotonic()
+        now = time.monotonic()
+        for process, ids in running.items():
+            if process.is_alive() and now - started_at[process] > fight_timeout * len(ids):
+                process.kill()
+                process.join()
+                timed_out.add(process)
         finished = [p for p in running if not p.is_alive()]
         if not finished:
             time.sleep(0.2)
             continue
         for process in finished:
             ids = running.pop(process)
+            started_at.pop(process, None)
             process.join()
             path = parts_dir / f"part_{ids[0]:06d}_{ids[-1] + 1:06d}.npz"
             if process.exitcode == 0 and path.exists():
@@ -297,6 +315,7 @@ def generate(
             entries.append(
                 {
                     "fight": ids[0],
+                    "reason": "timeout" if process in timed_out else "crash",
                     "exitcode": process.exitcode,
                     "encounter": fights[ids[0]]["encounter"],
                     "source": fights[ids[0]].get("source"),
@@ -314,6 +333,10 @@ def generate(
                 merged_lists[key].append(blob[key])
             max_hp = max(max_hp, int(blob["max_hp"][0]))
             n_fights += int(blob["n_fights"][0])
+    if not any(v.size for v in merged_lists[KEYS[0]]):
+        raise RuntimeError(
+            f"no fight finished: all {len(fights)} were quarantined ({quarantine_path})",
+        )
     merged = {}
     for key in KEYS:
         values = [v for v in merged_lists[key] if v.size]

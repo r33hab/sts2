@@ -566,6 +566,26 @@ class GenerateTest(unittest.TestCase):
             self.assertEqual((again["fights"], again["crashes"]), (2, 0))
 
 
+class GenerateTimeoutTest(unittest.TestCase):
+    def test_a_fight_past_its_time_limit_is_quarantined_not_waited_for(self):
+        # Live 2026-10-04: one fight looped inside the native library and its part ran 19
+        # hours, holding the whole round at 249 of 250 parts. A part over its limit is
+        # killed and replayed one fight per process; a fight over its limit is quarantined.
+        gate = real_fights.load_real_set()
+        fights = [{**fight, "index": i} for i, fight in enumerate(gate[:2])]
+        settings = {"ascension": 10, "sims": 3, "c": 0.1, "c_puct": 0.2, "workers": 2,
+                    "fight_timeout": 0.01}  # every fight is "too slow"
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "generated.npz"
+            with self.assertRaisesRegex(RuntimeError, "no fight finished"):
+                generate.generate(fights, settings, out, part_size=2)
+            quarantine = json.loads(
+                (Path(tmp) / "generated_parts" / "quarantine.json").read_text(),
+            )
+            self.assertEqual(sorted(q["fight"] for q in quarantine), [0, 1])
+            self.assertEqual({q["reason"] for q in quarantine}, {"timeout"})
+
+
 class PriorSpeedTest(unittest.TestCase):
     """The play-time prior: the packed forward, the probe-free encode, the lazy prior."""
 
