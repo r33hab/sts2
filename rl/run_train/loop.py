@@ -101,6 +101,9 @@ class LoopConfig:
     temperature of a learner from generation g is max(tau_min, tau_start * tau_decay^g).
     `export_dest` is where each new champion is exported; "" is the coach's model folder
     (`policy.STRATEGY_MODEL_DIR`), which only the job the coach follows should use.
+    `warm_start` is what each fit starts from: "latest", the learner that played the
+    generation (5.6), or "champion", the champion's weights -- on the A10 job a learner
+    trained from the last learner kept falling ~1.5 floors and being rolled back.
     """
 
     job: runner.JobConfig = field(default_factory=runner.JobConfig)
@@ -112,8 +115,11 @@ class LoopConfig:
     tau_decay: float = 0.85
     tau_min: float = 0.10
     export_dest: str = ""
+    warm_start: str = "latest"
 
     def __post_init__(self) -> None:
+        if self.warm_start not in ("latest", "champion"):
+            raise ValueError(f'warm_start must be "latest" or "champion", not {self.warm_start!r}')
         if self.runs_per_generation < 1:
             raise ValueError(
                 f"runs_per_generation must be at least 1, not {self.runs_per_generation}",
@@ -452,6 +458,9 @@ class Loop:
         ]
         learner = self.latest_learner(n)
         prev = None if learner is None else learner.pt
+        champion = self.champion()
+        if self.config.warm_start == "champion" and champion["checkpoint"] is not None:
+            prev = self.root / champion["checkpoint"]
         log.info("gen %d: training on %d shards, from %s", n, len(paths), prev)
         started = time.monotonic()
         self.fit(

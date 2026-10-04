@@ -28,6 +28,11 @@ STOP_AT="${STOP_AT:-07:30}"
 # A run normally takes seconds to a few minutes; one stuck in an endless fight held a
 # whole generation for its 3600 s limit and then again for the retry (2026-09-30).
 SEED_TIMEOUT="${SEED_TIMEOUT:-900}"
+# Each learner starts from the champion's weights at half the default learning rate: from
+# gen 41 to 80 a learner trained from the last learner kept falling ~1.5 floors and being
+# rolled back (2026-10-04).
+WARM_START="${WARM_START:-champion}"
+LR="${LR:-0.0005}"
 CPUS=$(sysctl -n hw.ncpu 2>/dev/null || nproc)
 WORKERS="${WORKERS:-$((CPUS > 3 ? CPUS - 2 : 1))}"
 export PATH="$HOME/.local/bin:$HOME/.dotnet:$PATH" DOTNET_ROOT="$HOME/.dotnet"
@@ -70,11 +75,11 @@ start)
     echo "the loop is already running: refreshing the keep-awake, sync and auto-stop only"
   elif [ -f "$ROOT/config.json" ]; then
     # shellcheck disable=SC2046 -- prior_args prints the option and its path, or nothing
-    train start --root "$ROOT" --seed-timeout "$SEED_TIMEOUT" $(prior_args)
+    train start --root "$ROOT" --seed-timeout "$SEED_TIMEOUT" --warm-start "$WARM_START" --lr "$LR" $(prior_args)
   else
     # shellcheck disable=SC2046
     train start --root "$ROOT" --workers "$WORKERS" --ascension 10 --export-dest "$ROOT/export" \
-      --seed-timeout "$SEED_TIMEOUT" $(prior_args)
+      --seed-timeout "$SEED_TIMEOUT" --warm-start "$WARM_START" --lr "$LR" $(prior_args)
   fi
   now=$(date +%s)
   case "$STOP_AT" in

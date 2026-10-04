@@ -817,6 +817,27 @@ class PromotionTests(LoopTestCase):
             {},
         )
 
+    def test_warm_start_champion_trains_each_learner_from_the_champion(self):
+        # Live 2026-10-03/04 (the A10 job, gens 41-80): a learner trained from the
+        # champion scored like it, the next one, trained from that learner, fell ~1.5
+        # floors and was rolled back, round after round. warm_start="champion" starts
+        # every fit from the champion's weights instead of the last learner's.
+        config = dataclasses.replace(CONFIG, warm_start="champion")
+        run = loop.Loop(
+            self.root,
+            config,
+            play=fake_play,
+            fit=functools.partial(fake_fit, strength=3, calls=self.calls),
+            eval_seeds=EVAL_SEEDS,
+        )
+        self.through(run, "train", 2)
+        champion = self.read(self.root / "champion.json")
+        self.assertEqual(champion["generation"], 0)  # gen 1 tied it: not promoted
+        self.assertFalse(self.read(self.gen(1) / "promotion.json")["rolled_back"])
+        run.step()  # gen 2's training
+        self.assertEqual(self.calls[-1]["prev"], self.root / champion["checkpoint"])
+        self.assertNotEqual(self.calls[-1]["prev"], self.gen(1) / "learner.pt")
+
     def test_an_eval_on_another_seed_list_is_redone(self):
         # Live 2026-10-01: the eval seeds grew from 200 to 1,000, but the champion's
         # stored 200-seed eval was kept, so every comparison paired only the old seeds.
