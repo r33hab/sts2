@@ -115,12 +115,35 @@ def _training_package(model_dir: Path, info: Mapping[str, Any]) -> Scorer:
     # live game was played by the A9 gen-12 champion left there on 2026-09-26 while this
     # service, pointed at the A10 job's export, reported gen 40 and then gen 83.
     champion = policy.load(model_dir)
+    rollouts = _rollouts_from_environment()
     _LOG.info(
-        "strategy champion generation %s loaded from %s",
+        "strategy champion generation %s loaded from %s%s",
         info["generation"],
         model_dir,
+        "" if rollouts is None else f"; deck screens with measured fights ({rollouts})",
     )
-    return features, functools.partial(policy.score_options, model=champion)
+    return features, functools.partial(
+        policy.score_options, model=champion, rollouts=rollouts,
+    )
+
+
+def _rollouts_from_environment() -> Any:
+    """Measured H at deck decisions, when `STS2_DECK_ROLLOUTS=1` turns it on (else None).
+
+    The autopilot sets these with `--deck-rollouts`: seeds, candidates and workers per
+    deck decision, and the combat prior folder the fights are searched with.
+    """
+    if os.environ.get("STS2_DECK_ROLLOUTS") != "1":
+        return None
+    deckfights = importlib.import_module("run_train.deckfights")
+    env = os.environ.get
+    return deckfights.RolloutConfig(
+        seeds=int(env("STS2_DECK_ROLLOUT_SEEDS", "3")),
+        candidates=int(env("STS2_DECK_ROLLOUT_CANDIDATES", "4")),
+        workers=int(env("STS2_DECK_ROLLOUT_WORKERS", "4")),
+        prior=env("STS2_DECK_ROLLOUT_PRIOR", ""),
+        ascension=10,
+    )
 
 
 class StrategyModel:

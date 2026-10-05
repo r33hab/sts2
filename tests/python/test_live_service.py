@@ -1722,12 +1722,25 @@ def load(source):
     return f"champion at {source}"
 
 
-def score_options(decision, view, model=None):
-    CALLS.append((decision.type, view, model))
+def score_options(decision, view, model=None, rollouts=None):
+    CALLS.append((decision.type, view, model, rollouts))
     return [
         OptionScore({"kind": "card.skip", "action": 3}, 10.0 + LOADS, 0.1, True),
         OptionScore({"kind": "card.take", "action": 0}, 11.0 + LOADS, 0.2, True),
     ]
+'''
+FAKE_DECKFIGHTS = '''"""A stand-in for run_train.deckfights."""
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class RolloutConfig:
+    seeds: int = 3
+    budget: str = "120/500"
+    candidates: int = 4
+    workers: int = 1
+    prior: str = ""
+    ascension: int = 10
 '''
 BROKEN_POLICY = 'raise RuntimeError("the champion was trained on feature version 0")\n'
 
@@ -1827,6 +1840,7 @@ class StrategyTests(unittest.TestCase):
         (package / "__init__.py").write_text('"""A stand-in."""\n', encoding="utf-8")
         (package / "features.py").write_text(FAKE_FEATURES, encoding="utf-8")
         (package / "policy.py").write_text(policy, encoding="utf-8")
+        (package / "deckfights.py").write_text(FAKE_DECKFIGHTS, encoding="utf-8")
         return folder
 
     @staticmethod
@@ -1865,13 +1879,35 @@ class StrategyTests(unittest.TestCase):
             # default one (live 2026-10-05: the A9 gen-12 champion played every run
             # while this said gen 83).
             self.assertEqual(
-                policy.CALLS, [("card_reward", {"floor": 5}, f"champion at {champion}")],
+                policy.CALLS,
+                [("card_reward", {"floor": 5}, f"champion at {champion}", None)],
             )
             self.assertEqual(values(), [12.0, 11.0])
             self.assertEqual(policy.LOADS, 1)  # the same generation is not reloaded
             model_dir(self.root, generation=4)
             self.assertEqual(values(), [13.0, 12.0])
             self.assertEqual(policy.LOADS, 2)
+
+    def test_rollouts_are_off_unless_the_environment_turns_them_on(self) -> None:
+        champion = model_dir(self.root, generation=3)
+        with self.importable(self.training_package(FAKE_POLICY)), mock.patch.dict(
+            os.environ, {}, clear=False,
+        ):
+            os.environ.pop("STS2_DECK_ROLLOUTS", None)
+            features, score = strategy._training_package(champion, {"generation": 3})
+            score(features.Decision("card_reward", {}), {})
+            policy = sys.modules["run_train.policy"]
+            self.assertIsNone(policy.CALLS[-1][3])
+
+    def test_the_environment_turns_rollouts_on(self) -> None:
+        champion = model_dir(self.root, generation=3)
+        env = {"STS2_DECK_ROLLOUTS": "1", "STS2_DECK_ROLLOUT_SEEDS": "2",
+               "STS2_DECK_ROLLOUT_PRIOR": "/prior"}
+        with self.importable(self.training_package(FAKE_POLICY)), mock.patch.dict(os.environ, env):
+            features, score = strategy._training_package(champion, {"generation": 3})
+            score(features.Decision("card_reward", {}), {})
+            rollouts = sys.modules["run_train.policy"].CALLS[-1][3]
+            self.assertEqual((rollouts.seeds, rollouts.prior), (2, "/prior"))
 
     def test_an_act_1_model_does_not_advise_outside_act_1(self) -> None:
         class ActTwoView:
