@@ -1678,6 +1678,7 @@ class RelicTableTests(unittest.TestCase):
             ("PERMAFROST", "_activatedThisCombat"),
             ("LIZARD_TAIL", "_wasUsed"),
             ("RUINED_HELMET", "_usedThisCombat"),
+            ("PAELS_EYE", "_usedThisCombat"),
             ("THROWING_AXE", "_usedThisCombat"),
             ("DEMON_TONGUE", "_triggeredThisTurn"),
             ("RED_SKULL", "_strengthApplied"),

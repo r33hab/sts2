@@ -433,6 +433,13 @@ RELICS: dict[str, Relic] = {
     "CENTENNIAL_PUZZLE": Relic(counter=_flag("_usedThisCombat")),  # :1506
     "PERMAFROST": Relic(counter=_flag("_activatedThisCombat")),  # :1477
     "RUINED_HELMET": Relic(counter=_flag("_usedThisCombat")),  # :2367
+    # Counter 1 once its extra turn is spent (RelicEffects.cs TakeExtraTurnForPaelsEye).
+    # Without it every converted state read the turn as unspent, and the search kept
+    # ending turns with nothing played for a turn that never came (live 2026-10-05).
+    "PAELS_EYE": Relic(counter=_flag("_usedThisCombat")),
+    # Act 2 ancients that act only when picked up (AfterObtained): no combat state.
+    "STORYBOOK": _STATELESS,
+    "YUMMY_COOKIE": _STATELESS,
     # Counter 1 once its extra play is spent (ConsumeThrowingAxePlay, :1276-1283); the
     # emulator's own combat-start reset agrees with the game's AfterRoomEntered (:706, :33).
     "THROWING_AXE": Relic(counter=_flag("_usedThisCombat")),
