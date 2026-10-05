@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from typing import Any
 from collections import Counter
 from pathlib import Path
 from unittest import mock
@@ -48,6 +49,7 @@ from rl.run_train import (  # noqa: E402
     train,
     vocab,
 )
+from rl.run_train import deckfights  # noqa: E402
 from rl.run_train.engine import CombatBudget  # noqa: E402
 from rl.run_train.features import CardRef, Decision, Option  # noqa: E402
 
@@ -712,6 +714,78 @@ class OneWTests(unittest.TestCase):
             {"kind": "rules"},
         )
 
+
+
+class MeasuredScoringTests(unittest.TestCase):
+    """Deck screens scored with measured H (deck-decision spec 3)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.npz = save_checkpoint(Path(cls.tmp.name))
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.tmp.cleanup()
+
+    def model(self) -> policy.Model:
+        return policy.Model(models.load_numpy(self.npz), W=53.0)
+
+    @staticmethod
+    def smith_screen() -> tuple[Decision, Any]:
+        view = make_view(ascension=10)
+        options = tuple(
+            Option("rest.smith", 1, deck_index=i) for i in range(len(view.deck))
+        ) + (Option("rest.heal", 0),)
+        return Decision("rest", options), view
+
+    def test_failed_measurement_scores_like_fightnet(self) -> None:
+        decision, view = self.smith_screen()
+        model = self.model()
+        plain = policy.score_options(decision, view, model)
+        rollouts = deckfights.RolloutConfig(seeds=1, candidates=2)
+        failed = policy.score_options(
+            decision, view, model, rollouts=rollouts, play=lambda specs: [None] * len(specs),
+        )
+        self.assertEqual([s.value for s in failed], [s.value for s in plain])
+
+    def test_measured_blocks_replace_fightnet_for_the_shortlist_only(self) -> None:
+        decision, view = self.smith_screen()
+        model = self.model()
+        rollouts = deckfights.RolloutConfig(seeds=1, candidates=1)
+        seen: list[int] = []
+
+        def play(specs):
+            seen.append(len(specs))
+            return [
+                {"seed": s["seed"], "encounter": s["encounter"], "start_hp": s["hp"],
+                 "end_hp": 0, "won": False, "max_hp": s["max_hp"]}  # every fight lost
+                for s in specs
+            ]
+
+        plain = policy.score_options(decision, view, model)
+        measured = policy.score_options(decision, view, model, rollouts=rollouts, play=play)
+        queries = len(features.fight_queries(view))
+        self.assertEqual(seen, [1 * queries])  # one shortlisted option, nothing unchanged
+        changed = [p.value != m.value for p, m in zip(plain, measured, strict=True)]
+        self.assertEqual(sum(changed), 1)  # only the shortlisted option moved
+
+    def test_a_screen_without_deck_options_is_not_measured(self) -> None:
+        view = make_view(ascension=10)
+        decision = Decision("rest", (Option("rest.heal", 0),))
+        policy.score_options(
+            decision, view, self.model(), rollouts=deckfights.RolloutConfig(),
+            play=lambda specs: self.fail("no fights for a screen without deck options"),
+        )
+
+    def test_a_lookahead_spec_carries_its_rollouts(self) -> None:
+        rollouts = deckfights.RolloutConfig(seeds=2, candidates=3)
+        player = selfplay.make_policy(
+            {"kind": "lookahead", "npz": str(self.npz), "tau": 0.0, "eps": 0.0,
+             "W": 53.0, "rollouts": rollouts.to_json()},
+        )
+        self.assertEqual(player.rollouts, rollouts)
+        self.assertEqual(player.describe()["rollouts"], rollouts.to_json())
 
 if __name__ == "__main__":
     unittest.main()

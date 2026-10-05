@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from . import features, models
+from . import deckfights, features, models
 from .rules import RulesPolicy
 from .selfplay import Pick
 
@@ -186,25 +186,86 @@ def floor_probs(
     nets: models.NumpyNets,
     view: RunView,
     options: Sequence[Option],
+    blocks: Sequence[np.ndarray | None] | None = None,
 ) -> np.ndarray:
     """Return V's floor distribution for each option's afterstate, (options, classes).
 
     Every option must be scorable. H is FightNet over the region's pools and the boss
-    (`features.fight_queries`), which an afterstate never changes. A version-1 model reads
-    the first 1843 numbers of each vector (`NumpyNets.base_size`).
+    (`features.fight_queries`), which an afterstate never changes -- except for an option
+    whose entry in `blocks` is a measured H (`deckfights`), which replaces FightNet's. A
+    version-1 model reads the first 1843 numbers of each vector (`NumpyNets.base_size`).
     """
     if not options:
         return np.zeros((0, nets.value.floor_classes), dtype=np.float32)
     bases = np.stack([features.encode_afterstate(view, option) for option in options])
     bases = bases[:, : nets.base_size]
     block = nets.fight.summary(bases, features.fight_queries(view))
+    if blocks is not None:
+        for i, measured in enumerate(blocks):
+            if measured is not None:
+                block[i] = measured
     return nets.value.floor_probs(np.concatenate([bases, block], axis=1))
+
+
+# Screens whose options change the deck (deck-decision spec 3): scored with measured H.
+DECK_KINDS = frozenset(
+    {
+        "card.take",
+        "card.skip",
+        "rest.smith",
+        "select.upgrade",
+        "select.remove",
+        "shop.card",
+        "shop.remove",
+        "reward.card",
+    },
+)
+
+
+def measured_probs(
+    nets: models.NumpyNets,
+    W: float,  # noqa: N803 -- DESIGN.md 7's name
+    view: RunView,
+    options: Sequence[Option],
+    rollouts: deckfights.RolloutConfig,
+    play: deckfights.Play | None = None,
+) -> np.ndarray:
+    """`floor_probs`, with measured H for the shortlist of a screen that changes the deck.
+
+    The shortlist is FightNet's best `rollouts.candidates` options (never a random
+    `select.transform`) plus every unchanged option (skip, leave, proceed). A screen with
+    no deck option, and every option off the shortlist, keeps FightNet's H.
+    """
+    probs = floor_probs(nets, view, options)
+    if not any(option.kind in DECK_KINDS for option in options):
+        return probs
+    values = models.expected_floors(probs, W)
+    ranked = [int(i) for i in np.argsort(-values) if options[i].kind != "select.transform"]
+    shortlist = sorted(
+        set(ranked[: rollouts.candidates])
+        | {i for i, option in enumerate(options) if option.kind in features.UNCHANGED_KINDS},
+    )
+    afters = [features.apply_option(view, options[i]) for i in shortlist]
+    measured = deckfights.measured_blocks(
+        view,
+        afters,
+        rollouts,
+        key=deckfights.decision_key(view),
+        play=play or deckfights.fight_player(rollouts),
+    )
+    blocks: list[np.ndarray | None] = [None] * len(options)
+    for i, block in zip(shortlist, measured, strict=True):
+        blocks[i] = block
+    return floor_probs(nets, view, options, blocks)
 
 
 def score_options(
     decision: Decision,
     view: RunView,
     model: Model | str | Path | None = None,
+    *,
+    rollouts: deckfights.RolloutConfig | None = None,
+    play: deckfights.Play | None = None,
 ) -> list[OptionScore]:
     """Value every option on a screen, best first (DESIGN.md 5.2, 7).
 
@@ -226,7 +287,11 @@ def score_options(
             "model.json carries W) or a Model given W (DESIGN.md 5.2)",
         )
     scorable = [option for option in decision.options if option.scorable]
-    probs = floor_probs(scorer.nets, view, scorable)
+    probs = (
+        floor_probs(scorer.nets, view, scorable)
+        if rollouts is None
+        else measured_probs(scorer.nets, scorer.W, view, scorable, rollouts, play)
+    )
     valued = zip(
         models.expected_floors(probs, scorer.W).tolist(),
         models.win_chance(probs).tolist(),
@@ -273,6 +338,9 @@ class LookaheadPolicy:
         temperature: float,
         eps: float = 0.02,
         W: float | None = None,  # noqa: N803 -- DESIGN.md 7's name for the parameter
+        *,
+        rollouts: deckfights.RolloutConfig | None = None,
+        play: deckfights.Play | None = None,
     ):
         if temperature < 0:
             raise ValueError(f"a temperature is never negative, not {temperature}")
@@ -296,16 +364,21 @@ class LookaheadPolicy:
         self.eps = float(eps)
         self.W = float(worth)
         self.rules = RulesPolicy()
+        self.rollouts = rollouts  # measured H at deck decisions (deckfights); None: FightNet's
+        self._play = play
 
     def describe(self) -> dict[str, Any]:
         """Return the record's policy block, with the W the options were valued at."""
-        return {
+        block: dict[str, Any] = {
             "kind": "lookahead",
             "checkpoint": self.checkpoint,
             "tau": self.tau,
             "eps": self.eps,
             "W": self.W,
         }
+        if self.rollouts is not None:
+            block["rollouts"] = self.rollouts.to_json()
+        return block
 
     def pick(
         self,
@@ -322,7 +395,12 @@ class LookaheadPolicy:
             if not options[choice].scorable:
                 counted = self.rules.stats.fallbacks.total() > fallbacks
                 return Pick(choice, fallback=counted)
-        probs = floor_probs(self.nets, view, [options[i] for i in scorable])
+        chosen = [options[i] for i in scorable]
+        probs = (
+            floor_probs(self.nets, view, chosen)
+            if self.rollouts is None
+            else measured_probs(self.nets, self.W, view, chosen, self.rollouts, self._play)
+        )
         values = models.expected_floors(probs, self.W)
         pi = self.distribution(values)
         k = _draw(pi, rng)

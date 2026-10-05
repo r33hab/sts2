@@ -130,7 +130,8 @@ def make_policy(spec: dict[str, Any]) -> Policy:
 
     `{"kind": "rules"}`, with an optional `eps` for generation 0's exploration, or
     `{"kind": "lookahead", "npz": path, "tau": float, "eps": float, "W": float}`, whose
-    W the runner writes from the job's config (`runner.playing_spec`).
+    W the runner writes from the job's config (`runner.playing_spec`). A lookahead spec's
+    optional "rollouts" (a `RolloutConfig.to_json()`) scores deck screens with measured H.
 
     Raises:
         ValueError: For any other kind, or a lookahead spec without its W.
@@ -148,11 +149,15 @@ def make_policy(spec: dict[str, Any]) -> Policy:
         # `policy` imports this module (for `Pick`), so it is imported when first asked.
         from .policy import LookaheadPolicy  # noqa: PLC0415
 
+        from .deckfights import RolloutConfig  # noqa: PLC0415
+
+        rollouts = spec.get("rollouts")
         return LookaheadPolicy(
             spec["npz"],
             float(spec["tau"]),
             eps=float(spec.get("eps", 0.02)),
             W=float(spec["W"]),
+            rollouts=None if rollouts is None else RolloutConfig.from_json(rollouts),
         )
     raise ValueError(f"unknown policy kind {kind!r}: 'rules' or 'lookahead'")
 
