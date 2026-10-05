@@ -28,6 +28,7 @@ from rl.run_train import (  # noqa: E402
     shards,
     train,
 )
+from rl.run_train.engine import CombatBudget  # noqa: E402
 from rl.run_train.features import CardRef, Option  # noqa: E402
 
 A9 = 9
@@ -465,6 +466,43 @@ class FitTests(unittest.TestCase):
             )
         self.assertFalse((self.dir / "none.pt").exists())
 
+
+
+class PairBufferTests(unittest.TestCase):
+    def test_pairs_add_fightnet_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pair = deckfights_pair_record("T1")  # helper below
+            path = Path(tmp) / "p0000.jsonl.gz"
+            shards.write_shard(path, [pair])
+            fights, _ = train.load_buffers(
+                [], pairs=[path], generation=6, combat_budget=CombatBudget.parse("120/500"), ascension=10,
+            )
+            self.assertEqual(len(fights.labels), len(pair["fights"]))
+
+    def test_pairs_of_a_reserved_seed_are_refused(self) -> None:
+        reserved = evaluate.load_seeds(evaluate.EVAL_SEEDS)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "p0000.jsonl.gz"
+            shards.write_shard(path, [deckfights_pair_record(reserved)])
+            with self.assertRaisesRegex(ValueError, "held out of training"):
+                train.load_buffers(
+                    [], pairs=[path], generation=6, combat_budget=CombatBudget.parse("120/500"), ascension=10,
+                )
+
+
+def deckfights_pair_record(seed: str) -> dict:
+    view = make_view(ascension=10)
+    state = shards.view_to_json(view, 0)
+    return {
+        "seed": seed, "generation": 6, "feature_version": train.FEATURE_VERSION,
+        "ascension": 10, "combat": {"budget": "120/500"}, "outcome": {"truncated": False},
+        "maps": [shards.map_to_json(view)],
+        "fights": [
+            {"floor": 3, "node_type": 1, "encounter": 13, "weak": True, "state": state,
+             "hp_before": 50, "hp_after": 44, "won": True, "variant": name}
+            for name in ("base", "upgrade")
+        ],
+    }
 
 if __name__ == "__main__":
     unittest.main()

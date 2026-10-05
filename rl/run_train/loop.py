@@ -47,7 +47,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
-from . import FEATURE_VERSION, evaluate, models, runner, selfplay, shards, train, vocab
+import numpy as np
+
+from . import FEATURE_VERSION, deckfights, evaluate, models, runner, selfplay, shards, train, vocab
 from .evaluate import EvalResult
 
 __all__ = [
@@ -77,6 +79,10 @@ LEARNER_PT = "learner.pt"
 LEARNER_NPZ = "learner.npz"
 EVAL = "eval.json"
 PROMOTION = "promotion.json"
+# Paired fights for FightNet (deck-decision spec 4): `gen_XXXX/pairs/p*.jsonl.gz`.
+PAIRS = "pairs"
+PAIRS_MANIFEST = f"{PAIRS}/manifest.json"
+PAIR_GLOB = "p*.jsonl.gz"
 SELFPLAY = "selfplay.json"
 QUARANTINE = "quarantine.jsonl"
 RETRIES = "retries.jsonl"
@@ -116,10 +122,13 @@ class LoopConfig:
     tau_min: float = 0.10
     export_dest: str = ""
     warm_start: str = "latest"
+    paired_fights: int = 0
 
     def __post_init__(self) -> None:
         if self.warm_start not in ("latest", "champion"):
             raise ValueError(f'warm_start must be "latest" or "champion", not {self.warm_start!r}')
+        if self.paired_fights < 0:
+            raise ValueError(f"paired_fights must be at least 0, not {self.paired_fights}")
         if self.runs_per_generation < 1:
             raise ValueError(
                 f"runs_per_generation must be at least 1, not {self.runs_per_generation}",
@@ -142,6 +151,7 @@ class LoopConfig:
                 "tau_min": self.tau_min,
                 "export_dest": self.export_dest,
                 "warm_start": self.warm_start,
+                "paired_fights": self.paired_fights,
             },
         }
 
@@ -296,8 +306,10 @@ class Loop:
         fit: Fit | None = None,
         eval_seeds: Sequence[str] | None = None,
         export_dest: Path | None = None,
+        pair_play: deckfights.Play | None = None,
     ):
         self.root = Path(root)
+        self.pair_play = pair_play  # the pair phase's fight player; None plays real fights
         self.config = config
         self.play = play
         self.fit: Fit = fit or train.fit
@@ -341,14 +353,18 @@ class Loop:
     # ---- the phase table (5.7) --------------------------------------------------------
 
     def next_phase(self, n: int) -> str:
-        """Return what generation `n` does next: its first phase whose output is missing."""
+        """Return what generation `n` does next: its first phase whose output is missing.
+
+        A `pair` phase comes between generate and train only when the job asks for paired
+        fights and the generation has not trained yet: one trained before pairs existed
+        is never sent back to make them.
+        """
         gen = self.gen_dir(n)
-        for output, phase in (
-            (MANIFEST, "generate"),
-            (LEARNER_NPZ, "train"),
-            (EVAL, "evaluate"),
-            (PROMOTION, "promote"),
-        ):
+        phases = [(MANIFEST, "generate")]
+        if self.config.paired_fights > 0 and not (gen / LEARNER_NPZ).exists():
+            phases.append((PAIRS_MANIFEST, "pair"))
+        phases += [(LEARNER_NPZ, "train"), (EVAL, "evaluate"), (PROMOTION, "promote")]
+        for output, phase in phases:
             if not (gen / output).exists():
                 return phase
         return "done"
@@ -368,6 +384,7 @@ class Loop:
         self._generation = n
         {
             "generate": self._generate,
+            "pair": self._pair,
             "train": self._train,
             "evaluate": self._evaluate,
             "promote": self._promote,
@@ -447,6 +464,49 @@ class Loop:
             summary["quarantined"],
         )
 
+    def _pair(self, n: int) -> None:
+        """Play paired fights from this generation's runs for FightNet (deck-decision spec 4)."""
+        self.write_status("pairing")
+        records = [
+            record
+            for path in shards.shard_paths(self.gen_dir(n) / "shards")
+            for record in shards.read_shard(path)
+        ]
+        job = self.config.job
+        play = self.pair_play or deckfights.fight_player(
+            deckfights.RolloutConfig(
+                budget=str(job.combat_budget),
+                workers=job.workers,
+                prior=job.combat_prior,
+                ascension=job.ascension,
+            ),
+        )
+        started = time.monotonic()
+        pairs = deckfights.pair_records(
+            records,
+            self.config.paired_fights,
+            n,
+            budget=str(job.combat_budget),
+            ascension=job.ascension,
+            rng=np.random.default_rng(n),
+            play=play,
+        )
+        folder = self.gen_dir(n) / PAIRS
+        folder.mkdir(parents=True, exist_ok=True)
+        if pairs:
+            shards.write_shard(folder / "p0000.jsonl.gz", pairs)
+        shards.write_json(
+            self.gen_dir(n) / PAIRS_MANIFEST,
+            {
+                "requested": self.config.paired_fights,
+                "pairs": len(pairs),
+                "fights": sum(len(p["fights"]) for p in pairs),
+                "seconds": round(time.monotonic() - started, 1),
+                "written": _now(),
+            },
+        )
+        log.info("gen %d: %d paired fight records", n, len(pairs))
+
     def _train(self, n: int) -> None:
         self.selfplay_summary(n)  # a crash may have fallen after the manifest
         self._refresh()
@@ -456,6 +516,12 @@ class Loop:
             for g in self.generations()
             if g <= n
             for path in shards.shard_paths(self.gen_dir(g) / "shards")
+        ]
+        pair_paths = [
+            path
+            for g in self.generations()
+            if g <= n
+            for path in sorted((self.gen_dir(g) / PAIRS).glob(PAIR_GLOB))
         ]
         learner = self.latest_learner(n)
         prev = None if learner is None else learner.pt
@@ -468,6 +534,7 @@ class Loop:
             paths,
             prev,
             self.gen_dir(n) / LEARNER_PT,
+            pairs=pair_paths,
             generation=n,
             combat_budget=self.config.job.combat_budget,
             ascension=self.config.job.ascension,

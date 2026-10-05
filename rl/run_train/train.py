@@ -345,6 +345,7 @@ def _in_era(record: RunRecord, budget: str, ascension: int) -> bool:
 def load_buffers(
     shards: Iterable[Path | str],
     *,
+    pairs: Iterable[Path | str] = (),
     generation: int,
     combat_budget: CombatBudget | int,
     ascension: int,
@@ -353,7 +354,8 @@ def load_buffers(
     """Read the replay buffers the shards hold for training generation `generation` (5.4).
 
     Only records of the current era count (`_in_era`), from generation `generation` or
-    before, and never a truncated run (1.4). V keeps the decisions of the last
+    before, and never a truncated run (1.4). `pairs` are paired fight records
+    (`deckfights.pair_records`): FightNet rows only. V keeps the decisions of the last
     `value_generations` generations; FightNet keeps every fight, capped at the newest
     `fight_cap` (newest by generation, then by the order the shards are given in).
 
@@ -387,6 +389,21 @@ def load_buffers(
                 fights.append(_FightChunk.of(key, record["seed"], rows))
             if played > generation - config.value_generations:
                 value.add(record, value_rows(record, config.beta))
+    for order, path in enumerate(pairs):
+        for line, record in enumerate(read_shard(Path(path))):
+            seed = canonicalize(record["seed"])
+            if seed in reserved:
+                raise ValueError(
+                    f"{path}: pairs of run {record['seed']!r} are seed {seed} of "
+                    f"{reserved[seed]}, which is held out of training (DESIGN.md 5.6)",
+                )
+            played = record.get("generation")
+            if played is None or played > generation or not _in_era(record, budget, ascension):
+                continue
+            if rows := fight_rows(record):
+                # After the generation's own runs: the newest fights of that generation.
+                key = (played, 1_000_000 + order, line)
+                fights.append(_FightChunk.of(key, record["seed"], rows))
     return _fight_data(fights, config), value.finish(config)
 
 
@@ -623,6 +640,7 @@ def fit(
     prev_checkpoint: Path | str | None,
     out: Path | str,
     *,
+    pairs: Iterable[Path | str] = (),
     generation: int,
     combat_budget: CombatBudget | int,
     ascension: int,
@@ -648,6 +666,7 @@ def fit(
     try:
         fights, values = load_buffers(
             shards,
+            pairs=pairs,
             generation=generation,
             combat_budget=combat_budget,
             ascension=ascension,

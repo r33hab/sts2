@@ -148,6 +148,7 @@ def fake_fit(
     combat_budget,
     ascension,
     config,
+    pairs=(),
     strength: int = 3,
     calls: list | None = None,
 ):
@@ -163,6 +164,7 @@ def fake_fit(
                 "combat_budget": combat_budget,
                 "ascension": ascension,
                 "config": config,
+                "pairs": [Path(path) for path in pairs],
             },
         )
     out.write_bytes(b"a stand-in for the torch checkpoint")
@@ -1111,6 +1113,39 @@ class CommandLineTests(unittest.TestCase):
         code, out = self.cli("status")
         self.assertFalse(json.loads(out)["running"])
 
+
+
+class PairPhaseTests(LoopTestCase):
+    def paired(self, count: int = 4) -> loop.Loop:
+        config = dataclasses.replace(CONFIG, paired_fights=count)
+        loop.write_config(self.root, config)
+        return loop.Loop(
+            self.root, config, play=fake_play,
+            fit=functools.partial(fake_fit, strength=3, calls=self.calls),
+            eval_seeds=EVAL_SEEDS,
+            pair_play=lambda specs: [None] * len(specs),
+        )
+
+    def test_no_pair_phase_by_default(self) -> None:
+        run = self.make_loop()
+        self.through(run, "train")
+        self.assertFalse((self.gen(0) / loop.PAIRS_MANIFEST).exists())
+
+    def test_the_pair_phase_runs_between_generate_and_train(self) -> None:
+        run = self.paired()
+        self.through(run, "pair")
+        run.step()
+        self.assertEqual(run.next_phase(0), "train")
+        manifest = self.read(self.gen(0) / loop.PAIRS_MANIFEST)
+        self.assertEqual(manifest["requested"], 4)
+        run.step()  # train
+        self.assertEqual(self.calls[-1]["pairs"], [])  # fake records hold no fights
+
+    def test_a_trained_generation_never_gets_a_pair_phase(self) -> None:
+        run = self.make_loop()
+        self.through(run, "evaluate")  # generation 0 trained without pairs
+        later = self.paired()
+        self.assertEqual(later.next_phase(0), "evaluate")
 
 if __name__ == "__main__":
     unittest.main()
