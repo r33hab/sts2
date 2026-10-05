@@ -197,10 +197,14 @@ OPTION_KINDS = (
     # The card a Thieving Hopper stole, offered back once it is killed (live only: the
     # engine returns it without asking).
     "reward.card",
+    # A potion taken over a full belt by throwing away a held one, potion id `arg`. Live
+    # only: the engine never swaps (DESIGN.md 1.5.4), the game can always discard.
+    "reward.potion_swap",
     "reward.proceed",
     "shop.card",
     "shop.relic",
     "shop.potion",
+    "shop.potion_swap",
     "shop.remove",
     "shop.leave",
     "rest.heal",
@@ -818,6 +822,10 @@ def apply_option(view: RunView, option: Option) -> RunView:
         return replace(view, relics=(*view.relics, _need(option.relic, kind)))
     if kind == "reward.potion":
         return replace(view, potions=(*view.potions, _need(option.potion, kind)))
+    if kind in {"reward.potion_swap", "shop.potion_swap"}:
+        potions = list(view.potions)
+        potions[potions.index(option.arg)] = _need(option.potion, kind)
+        return replace(view, potions=tuple(potions), gold=view.gold - option.price)
     if kind == "map.node":
         col, row, node_type = _need(option.node, kind)
         return replace(
@@ -1718,10 +1726,25 @@ def _free_slot(view: RunView) -> bool:
     return len(view.potions) < view.max_potion_slots
 
 
+def _swaps(kind: str, action: int, potion: int, view: RunView, price: int = 0) -> list[Option]:
+    """`potion` taken over a full belt, once per distinct held potion thrown away for it.
+
+    Scored as the belt with the swap against the belt as it is (`reward.proceed` /
+    `shop.leave`), so a potion is only swapped in when the model values it above the one
+    it replaces. Swapping a potion for its own kind changes nothing, so it is no option.
+    """
+    return [
+        Option(kind, action, potion=potion, price=price, arg=held)
+        for held in sorted(set(view.potions))
+        if held != potion
+    ]
+
+
 def _live_rewards(screen: dict, body: dict, view: RunView) -> Decision:
     """Read a rewards screen.
 
-    `reward.potion` into a free slot, `reward.relic` by display name, `reward.card` for a
+    `reward.potion` into a free slot (over a full belt, `reward.potion_swap` for each held
+    potion it could replace), `reward.relic` by display name, `reward.card` for a
     card a Thieving Hopper stole (the game returns it only when claimed, and leaving a
     weak card behind is a free removal; the engine returns it without asking),
     `reward.proceed` when the screen can be left; gold and card items are claimed
@@ -1744,7 +1767,9 @@ def _live_rewards(screen: dict, body: dict, view: RunView) -> Decision:
             first = "potion" not in seen
             seen.add("potion")
             if not _free_slot(view):
-                continue  # v1 never swaps a potion out (DESIGN.md 1.5.4)
+                if potion is not None and first:
+                    options += _swaps("reward.potion_swap", item["index"], potion, view)
+                continue
             if potion is None or not first:
                 options.append(
                     _unscorable("reward.potion", item["index"], potion=potion),
@@ -1826,10 +1851,13 @@ def _live_shop(screen: dict, body: dict, view: RunView) -> Decision:
             else:
                 options.append(Option("shop.relic", index, relic=relic, price=price))
         elif category == "potion":
-            # A potion needs a free usable slot, whatever it is (E1; `RunEngine.cs:704-747`).
-            if not _free_slot(view):
-                continue
+            # A potion needs a free usable slot, whatever it is (E1; `RunEngine.cs:704-747`):
+            # over a full belt it is a swap, which only the game offers.
             potion = vocab.potion_id_by_slug().get(item.get("potion_id"))
+            if not _free_slot(view):
+                if potion is not None:
+                    options += _swaps("shop.potion_swap", index, potion, view, price=price)
+                continue
             if potion is None:
                 options.append(_unscorable("unknown", index))
             else:

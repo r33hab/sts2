@@ -426,6 +426,42 @@ class DecisionFromLiveTests(unittest.TestCase):
         after = features.apply_option(view, decision.options[0])
         self.assertEqual(sorted(after.deck), sorted((*view.deck, CardRef(BASH, True))))
 
+    def test_a_potion_over_a_full_belt_is_a_swap_per_held_potion(self):
+        # The game can always throw a potion away; the engine never swaps (DESIGN.md
+        # 1.5.4). Each distinct held potion it could replace is one option, scored
+        # against leaving the new one (reward.proceed / shop.leave).
+        body = {
+            "items": [{"index": 0, "type": "potion", "potion_id": "FIRE_POTION"}],
+            "can_proceed": True,
+        }
+        full = make_view(potions=(BLOCK_POTION, BLOCK_POTION, FIRE_POTION), max_potion_slots=3)
+        decision = features.decision_from_live(screen("rewards", body), full)
+        self.assertEqual(
+            [(o.kind, o.action, o.arg) for o in decision.options],
+            [("reward.potion_swap", 0, BLOCK_POTION), ("reward.proceed", LIVE_PROCEED, 0)],
+        )
+        after = features.apply_option(full, decision.options[0])
+        self.assertEqual(sorted(after.potions), sorted((FIRE_POTION, BLOCK_POTION, FIRE_POTION)))
+
+        shop = {
+            "items": [
+                {
+                    "index": 4, "category": "potion", "price": 50, "is_stocked": True,
+                    "can_afford": True, "potion_id": "BLOCK_POTION",
+                },
+            ],
+        }
+        belt = make_view(potions=(FIRE_POTION, FIRE_POTION), gold=80)
+        decision = features.decision_from_live(screen("shop", shop), belt)
+        self.assertEqual(
+            [(o.kind, o.action, o.arg) for o in decision.options],
+            [("shop.potion_swap", 4, FIRE_POTION), ("shop.leave", LIVE_PROCEED, 0)],
+        )
+        after = features.apply_option(belt, decision.options[0])
+        self.assertEqual(
+            (sorted(after.potions), after.gold), (sorted((BLOCK_POTION, FIRE_POTION)), 30),
+        )
+
     def test_a_rewards_screen_with_nothing_to_decide(self):
         body = {
             "items": [{"index": 0, "type": "gold"}, {"index": 1, "type": "card"}],

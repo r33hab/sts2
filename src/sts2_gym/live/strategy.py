@@ -239,6 +239,10 @@ def _best_first(
         text = label(option, cards, screen or {})
         if isinstance(option, dict):
             option = {**option, "label": text}
+            if option.get("kind") in _SWAP_KINDS:
+                # The game's slug of the potion to throw away: the autopilot finds its slot.
+                vocab = importlib.import_module("run_train.vocab")
+                option["discard"] = vocab.potion_slugs()[int(option["arg"])]
         options.append(
             {
                 "option": option,
@@ -327,6 +331,8 @@ def label(
         return f"Take {thing}"
     if kind == "reward.card" and thing:
         return f"Take back {thing}"
+    if kind in _SWAP_KINDS and thing and option.get("arg") is not None:
+        return f"Swap {names.potion_name(int(option['arg']))} for {thing}{cost}"
     if kind.startswith("shop.") and thing:
         return f"Buy {thing}{cost}"
     if kind in {"neow.relic", "select.offer"} and thing:
@@ -385,6 +391,9 @@ def _screen_title(screen: Mapping[str, Any], action: object) -> str | None:
             title = choice.get("title") or choice.get("name")
             return str(title) if title else None
     return None
+
+
+_SWAP_KINDS = frozenset({"reward.potion_swap", "shop.potion_swap"})
 
 
 def _plain(option: object) -> object:
