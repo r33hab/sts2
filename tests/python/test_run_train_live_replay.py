@@ -52,9 +52,19 @@ def _afterstates(view, decision, excluded: set[str], mask_enchanted: bool) -> Co
     apart.
     """
     out: Counter = Counter()
-    for option in decision.options if decision is not None else ():
-        if not option.scorable or option.kind in excluded:
-            continue
+    kept = [
+        option
+        for option in (decision.options if decision is not None else ())
+        if option.scorable and option.kind not in excluded
+    ]
+    if decision is not None and decision.type == "rewards" and all(
+        option.kind == "reward.proceed" for option in kept
+    ):
+        # A rewards screen offers proceed only beside something to claim
+        # (`features._live_rewards`); once the live-only swaps are left out, a lone
+        # proceed is the engine's no-decision screen.
+        kept = []
+    for option in kept:
         x = features.encode_afterstate(view, option)
         if mask_enchanted:
             x = x.copy()
@@ -202,7 +212,7 @@ class _Fixture:
             record["masked"] = mask
             record["decisions"] = (live_decision, engine_decision)
             record["afterstates"] = (
-                _afterstates(scored_view, live_decision, set(), mask),
+                _afterstates(scored_view, live_decision, set(features.LIVE_ONLY_KINDS), mask),
                 _afterstates(engine_view, engine_decision, excluded, mask),
             )
             record["event_steps"] = (screen.get("event_step"), self.visit.event_step)
@@ -379,7 +389,8 @@ class ReplayAgreementTests(unittest.TestCase):
 
     def test_decisions_agree_as_equal_multisets_of_afterstates(self):
         # Erratum E1: equal multisets, so an extra option on either side fails. Kinds the
-        # live screen can build none of (unscorable there) are left out on both sides.
+        # live screen can build none of (unscorable there) are left out on both sides, and
+        # the live-only kinds (`features.LIVE_ONLY_KINDS`) on the live side.
         # Erratum E2: where the payload carries no per-card enchantment, D's enchanted
         # count is masked (the engine's deck carries one after an enchant, the fixture's
         # cannot).

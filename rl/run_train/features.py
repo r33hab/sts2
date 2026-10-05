@@ -238,6 +238,10 @@ OPTION_KINDS = (
     # never scorable, decided by the rules fallback and counted.
     "unknown",
 )
+# Options only the live game offers (the engine returns a stolen card without asking and
+# never swaps a potion): never part of an engine decision, so the replay's agreement
+# check leaves them out of the live side.
+LIVE_ONLY_KINDS = frozenset({"reward.card", "reward.potion_swap", "shop.potion_swap"})
 UNCHANGED_KINDS = frozenset(
     {"card.skip", "select.offer_done", "reward.proceed", "shop.leave", "rest.leave"},
 )
