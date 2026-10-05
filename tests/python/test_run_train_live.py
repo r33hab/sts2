@@ -400,6 +400,32 @@ class DecisionFromLiveTests(unittest.TestCase):
             ],
         )
 
+    def test_a_card_the_thief_stole_is_a_choice(self):
+        # Killing the Thieving Hopper offers the stolen card back as a special_card item;
+        # only claiming it returns it to the deck, so leaving a starter card behind is a
+        # free removal. Scored as the deck with the card against the deck without it.
+        body = {
+            "items": [
+                {"index": 0, "type": "special_card", "card": card("BASH", 0, upgraded=True)},
+                {"index": 1, "type": "special_card", "card": card("NOT_A_CARD", 0)},
+                {"index": 2, "type": "special_card"},  # an older mod: no card
+            ],
+            "can_proceed": True,
+        }
+        view = make_view()
+        decision = features.decision_from_live(screen("rewards", body), view)
+        self.assertEqual(
+            [(o.kind, o.action, o.card, o.scorable) for o in decision.options],
+            [
+                ("reward.card", 0, CardRef(BASH, True), True),
+                ("reward.card", 1, None, False),
+                ("reward.card", 2, None, False),
+                ("reward.proceed", LIVE_PROCEED, None, True),
+            ],
+        )
+        after = features.apply_option(view, decision.options[0])
+        self.assertEqual(sorted(after.deck), sorted((*view.deck, CardRef(BASH, True))))
+
     def test_a_rewards_screen_with_nothing_to_decide(self):
         body = {
             "items": [{"index": 0, "type": "gold"}, {"index": 1, "type": "card"}],

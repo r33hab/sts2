@@ -325,6 +325,8 @@ def label(
     thing = _thing(option)
     if kind in {"card.take", "reward.potion", "reward.relic"} and thing:
         return f"Take {thing}"
+    if kind == "reward.card" and thing:
+        return f"Take back {thing}"
     if kind.startswith("shop.") and thing:
         return f"Buy {thing}{cost}"
     if kind in {"neow.relic", "select.offer"} and thing:

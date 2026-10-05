@@ -194,6 +194,9 @@ OPTION_KINDS = (
     "card.reroll",
     "reward.potion",
     "reward.relic",
+    # The card a Thieving Hopper stole, offered back once it is killed (live only: the
+    # engine returns it without asking).
+    "reward.card",
     "reward.proceed",
     "shop.card",
     "shop.relic",
@@ -735,6 +738,9 @@ def apply_option(view: RunView, option: Option) -> RunView:
             view,
             deck=(*view.deck, landed_card(view, _need(option.card, kind))),
         )
+    if kind == "reward.card":
+        # The deck's own card coming back as it left, not a newly obtained one.
+        return replace(view, deck=(*view.deck, _need(option.card, kind)))
     if kind == "select.duplicate":
         _, card = _deck_card(view, option)
         return replace(view, deck=(*view.deck, landed_card(view, card)))
@@ -1715,9 +1721,12 @@ def _free_slot(view: RunView) -> bool:
 def _live_rewards(screen: dict, body: dict, view: RunView) -> Decision:
     """Read a rewards screen.
 
-    `reward.potion` into a free slot, `reward.relic` by display name, `reward.proceed`
-    when the screen can be left; gold and card items are claimed without asking, as on
-    the engine side (DESIGN.md 1.2). Nothing to decide but those: no options.
+    `reward.potion` into a free slot, `reward.relic` by display name, `reward.card` for a
+    card a Thieving Hopper stole (the game returns it only when claimed, and leaving a
+    weak card behind is a free removal; the engine returns it without asking),
+    `reward.proceed` when the screen can be left; gold and card items are claimed
+    without asking, as on the engine side (DESIGN.md 1.2). Nothing to decide but those:
+    no options.
 
     The engine's screen carries one potion and one relic at a time and queues the rest,
     offering the next once the one on screen is claimed (`RunEngine.OfferPotionRewards` /
@@ -1752,6 +1761,15 @@ def _live_rewards(screen: dict, body: dict, view: RunView) -> Decision:
                 options.append(_unscorable("reward.relic", item["index"], relic=relic))
             else:
                 options.append(Option("reward.relic", item["index"], relic=relic))
+        elif kind == "special_card":
+            try:
+                stolen = live_card(item["card"], "rewards.items.card") if item.get("card") else None
+            except UnknownIdError:
+                stolen = None
+            if stolen is None:
+                options.append(_unscorable("reward.card", item["index"]))
+            else:
+                options.append(Option("reward.card", item["index"], card=stolen))
     if not options:
         return Decision("rewards", ())
     if body.get("can_proceed"):
