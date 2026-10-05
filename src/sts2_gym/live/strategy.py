@@ -136,14 +136,29 @@ def _rollouts_from_environment() -> Any:
     if os.environ.get("STS2_DECK_ROLLOUTS") != "1":
         return None
     deckfights = importlib.import_module("run_train.deckfights")
-    env = os.environ.get
     return deckfights.RolloutConfig(
-        seeds=int(env("STS2_DECK_ROLLOUT_SEEDS", "3")),
-        candidates=int(env("STS2_DECK_ROLLOUT_CANDIDATES", "4")),
-        workers=int(env("STS2_DECK_ROLLOUT_WORKERS", "4")),
-        prior=env("STS2_DECK_ROLLOUT_PRIOR", ""),
+        seeds=_env_int("STS2_DECK_ROLLOUT_SEEDS", 3),
+        candidates=_env_int("STS2_DECK_ROLLOUT_CANDIDATES", 4),
+        workers=_env_int("STS2_DECK_ROLLOUT_WORKERS", 4),
+        prior=os.environ.get("STS2_DECK_ROLLOUT_PRIOR", ""),
         ascension=10,
     )
+
+
+def _env_int(name: str, default: int) -> int:
+    """A positive integer setting; a malformed one keeps `default`, with a warning, so a
+    typo never takes the strategy service down."""
+    text = os.environ.get(name)
+    if text is None:
+        return default
+    try:
+        value = int(text.strip())
+    except ValueError:
+        value = 0
+    if value < 1:
+        _LOG.warning("%s=%r is not a positive integer; using %d", name, text, default)
+        return default
+    return value
 
 
 class StrategyModel:

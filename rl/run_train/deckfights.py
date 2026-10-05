@@ -18,6 +18,9 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import logging
+import multiprocessing
+import time
+from multiprocessing.connection import wait
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -38,6 +41,10 @@ MEAT_ON_THE_BONE = 149
 POOL_GROUP = {"weak": "hallway", "normal": "hallway", "elite": "elite", "boss": "boss"}
 # A candidate missing more of its fights than this keeps FightNet's H (spec: a quarter).
 MAX_MISSING = 0.25
+# A fight worker that finishes no batch of fights for this long is killed, and its
+# unfinished fights count as missing: a hung native fight held a whole generation once
+# (2026-09-30), and the pair phase runs unattended.
+STALL_S = 600.0
 
 Play = Callable[[list[dict[str, Any]]], list[dict[str, Any] | None]]
 
@@ -166,13 +173,16 @@ def _block(
     results: Sequence[dict[str, Any] | None],
     seeds: int,
 ) -> np.ndarray | None:
-    if sum(result is None for result in results) > MAX_MISSING * len(results):
+    missing = sum(result is None for result in results)
+    if missing > MAX_MISSING * len(results):
+        log.warning("%d of %d measured fights missing; FightNet's H stands in", missing, len(results))
         return None
     losses = np.zeros(len(queries))
     deaths = np.zeros(len(queries))
     for j in range(len(queries)):
         played = [r for r in results[j * seeds : (j + 1) * seeds] if r is not None]
         if not played:
+            log.warning("no measured fight of encounter %d; FightNet's H stands in", queries[j].encounter_id)
             return None
         losses[j] = np.mean([r["start_hp"] - post_fight_hp(view.relics, r) for r in played])
         deaths[j] = np.mean([0.0 if r["won"] else 1.0 for r in played])
@@ -182,15 +192,17 @@ def _block(
 def fight_player(config: RolloutConfig) -> Play:
     """Play fights with the fight search guided by `config.prior` (plain search if "").
 
-    A batch that raises (a crashed fight takes its batch with it) comes back as all None,
-    so its candidates keep FightNet's H.
+    In a top-level process (the loop, the engine service) the fights run in
+    `config.workers` spawned processes under `play_in_processes`, so a hung or crashed
+    fight costs only its own worker's unfinished fights. Inside a worker of a run (an
+    eval or self-play seed) they run in that process, where the runner's seed timeout
+    bounds them; a batch that raises there comes back as all None.
 
     Raises:
         ValueError: If `config.prior` names a folder with no combat prior export.
 
     """
     import combat_prior  # noqa: PLC0415 -- rl/ is on sys.path (the package's __init__)
-    from prior_loop import loop as fight_loop  # noqa: PLC0415 -- heavy: only when played
 
     from .selfplay import DEFAULT_C  # noqa: PLC0415
 
@@ -203,13 +215,19 @@ def fight_player(config: RolloutConfig) -> Play:
         "c": DEFAULT_C,
         "c_puct": champion.c_puct if champion else 0.2,
         "batch_fights": 16,
-        "workers": config.workers,
+        "workers": 1,
         "prior_min_visits": champion.prior_min_visits if champion else 0,
         "probe": champion.probe if champion else True,
     }
-    policy = champion.policy if champion else None
+    policy = None if champion is None else str(champion.policy)
 
     def play(specs: list[dict[str, Any]]) -> list[dict[str, Any] | None]:
+        if multiprocessing.parent_process() is None:
+            return play_in_processes(
+                specs, workers=config.workers, target=_fight_worker, args=(policy, settings),
+            )
+        from prior_loop import loop as fight_loop  # noqa: PLC0415 -- heavy: only when played
+
         try:
             return list(fight_loop.evaluate_fights(specs, policy, settings))
         except Exception:
@@ -217,6 +235,73 @@ def fight_player(config: RolloutConfig) -> Play:
             return [None] * len(specs)
 
     return play
+
+
+def _fight_worker(conn: Any, jobs: list, policy: str | None, settings: dict[str, Any]) -> None:
+    """Play `jobs` ((index, spec) pairs) a batch at a time, sending each batch's results."""
+    from prior_loop import loop as fight_loop  # noqa: PLC0415
+
+    fight_loop.worker_init()
+    batch = max(1, int(settings["batch_fights"]))
+    for start in range(0, len(jobs), batch):
+        conn.send(fight_loop._evaluate_slice((jobs[start : start + batch], policy, settings)))  # noqa: SLF001
+    conn.send(None)
+    conn.close()
+
+
+def play_in_processes(
+    specs: Sequence[dict[str, Any]],
+    *,
+    workers: int,
+    target: Callable[..., None],
+    args: tuple,
+    stall_s: float = STALL_S,
+) -> list[dict[str, Any] | None]:
+    """Play `specs` dealt round-robin to `workers` spawned processes running
+    `target(conn, jobs, *args)`, which sends lists of (index, result) as batches finish
+    and None when done. A worker that crashes, or sends nothing for `stall_s`, is killed;
+    its unfinished fights are None.
+    """
+    jobs = list(enumerate(specs))
+    out: list[dict[str, Any] | None] = [None] * len(jobs)
+    if not jobs:
+        return out
+    context = multiprocessing.get_context("spawn")
+    live: dict[Any, tuple[Any, float]] = {}  # connection -> (process, last message time)
+    for i in range(max(1, min(workers, len(jobs)))):
+        parent, child = context.Pipe(duplex=False)
+        process = context.Process(target=target, args=(child, jobs[i::workers], *args))
+        process.start()
+        child.close()
+        live[parent] = (process, time.monotonic())
+    while live:
+        for conn in wait(list(live), timeout=1.0):
+            process, _ = live[conn]
+            try:
+                message = conn.recv()
+            except (EOFError, OSError):
+                message = None  # crashed: its unfinished fights stay None
+            if message is None:
+                _end(process)
+                del live[conn]
+                continue
+            for index, result in message:
+                out[index] = result
+            live[conn] = (process, time.monotonic())
+        now = time.monotonic()
+        for conn, (process, last) in list(live.items()):
+            if now - last > stall_s:
+                log.warning("a fight worker stalled for %.0f s; killed", now - last)
+                _end(process)
+                del live[conn]
+    return out
+
+
+def _end(process: Any) -> None:
+    process.join(timeout=5)
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=5)
 
 
 # A recorded fight's room kind (`fights[].node_type`), as the budget's room kind.

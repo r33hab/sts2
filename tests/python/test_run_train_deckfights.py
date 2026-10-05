@@ -201,5 +201,63 @@ class PairRecordTests(unittest.TestCase):
         )
         self.assertEqual(pairs, [])
 
+# Workers for `play_in_processes` (module level: a spawned process imports them by name).
+def _ok_worker(conn, jobs, *args):
+    for index, spec in jobs:
+        conn.send([(index, {"index": index, "seed": spec["seed"]})])
+    conn.send(None)
+    conn.close()
+
+
+def _hang_worker(conn, jobs, *args):
+    index, spec = jobs[0]
+    conn.send([(index, {"index": index, "seed": spec["seed"]})])
+    import time
+
+    time.sleep(60)  # stalls: never sends again
+
+
+def _crash_worker(conn, jobs, *args):
+    if jobs[0][0] == 0:
+        raise RuntimeError("a native abort stand-in")
+    _ok_worker(conn, jobs, *args)
+
+
+class ProcessPlayTests(unittest.TestCase):
+    """A hung or crashed fight never holds the caller (the pair phase runs unattended)."""
+
+    @staticmethod
+    def specs(n: int) -> list[dict]:
+        return [{"seed": 100 + i} for i in range(n)]
+
+    def test_results_come_back_in_spec_order(self) -> None:
+        out = deckfights.play_in_processes(self.specs(6), workers=2, target=_ok_worker, args=())
+        self.assertEqual([r["seed"] for r in out], [100 + i for i in range(6)])
+
+    def test_a_stalled_worker_is_killed_and_its_unfinished_fights_are_missing(self) -> None:
+        import time
+
+        started = time.monotonic()
+        out = deckfights.play_in_processes(
+            self.specs(4), workers=1, target=_hang_worker, args=(), stall_s=1.0,
+        )
+        self.assertLess(time.monotonic() - started, 30)
+        self.assertEqual(out[0]["seed"], 100)
+        self.assertEqual(out[1:], [None, None, None])
+
+    def test_a_crashed_worker_loses_only_its_own_fights(self) -> None:
+        out = deckfights.play_in_processes(self.specs(4), workers=2, target=_crash_worker, args=())
+        # Round-robin: worker 0 has fights 0 and 2 (crashed), worker 1 has 1 and 3.
+        self.assertEqual([None if r is None else r["seed"] for r in out], [None, 101, None, 103])
+
+    def test_a_fallback_is_logged(self) -> None:
+        base = make_view(relics=())
+        with self.assertLogs("rl.run_train.deckfights", level="WARNING"):
+            blocks = deckfights.measured_blocks(
+                base, [base], deckfights.RolloutConfig(seeds=1), key=1,
+                play=lambda specs: [None] * len(specs),
+            )
+        self.assertEqual(blocks, [None])
+
 if __name__ == "__main__":
     unittest.main()

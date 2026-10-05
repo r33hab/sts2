@@ -1909,6 +1909,18 @@ class StrategyTests(unittest.TestCase):
             rollouts = sys.modules["run_train.policy"].CALLS[-1][3]
             self.assertEqual((rollouts.seeds, rollouts.prior), (2, "/prior"))
 
+    def test_a_malformed_rollout_setting_falls_back_to_its_default(self) -> None:
+        # A typo must not break every strategy answer: the setting keeps its default.
+        champion = model_dir(self.root, generation=3)
+        env = {"STS2_DECK_ROLLOUTS": "1", "STS2_DECK_ROLLOUT_SEEDS": "three",
+               "STS2_DECK_ROLLOUT_WORKERS": " 2 "}
+        with self.importable(self.training_package(FAKE_POLICY)), mock.patch.dict(os.environ, env):
+            with self.assertLogs(strategy._LOG, level="WARNING"):
+                features, score = strategy._training_package(champion, {"generation": 3})
+            score(features.Decision("card_reward", {}), {})
+            rollouts = sys.modules["run_train.policy"].CALLS[-1][3]
+            self.assertEqual((rollouts.seeds, rollouts.workers), (3, 2))
+
     def test_an_act_1_model_does_not_advise_outside_act_1(self) -> None:
         class ActTwoView:
             act_index = 1
