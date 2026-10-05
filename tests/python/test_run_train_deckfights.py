@@ -18,6 +18,7 @@ from test_run_train_features import BASH, STRIKE, make_view  # noqa: E402
 
 from rl.run_train import deckfights, features  # noqa: E402
 from rl.run_train.features import CardRef  # noqa: E402
+from rl.run_train import FEATURE_VERSION, shards, train, vocab  # noqa: E402
 
 
 def fake_play(lost: dict[int, int] | None = None, die: frozenset[int] = frozenset()):
@@ -136,6 +137,69 @@ class MeasuredBlockTests(unittest.TestCase):
         config = deckfights.RolloutConfig(seeds=5, budget="60", candidates=2, prior="/p")
         self.assertEqual(deckfights.RolloutConfig.from_json(config.to_json()), config)
 
+
+
+def run_record(seed: str = "T1", fights: int = 3) -> dict:
+    view = make_view(ascension=10, relics=(deckfights.BURNING_BLOOD,))
+    state = shards.view_to_json(view, 0)
+    return {
+        "seed": seed,
+        "generation": 5,
+        "feature_version": FEATURE_VERSION,
+        "ascension": 10,
+        "combat": {"budget": "120/500"},
+        "outcome": {"truncated": False},
+        "maps": [shards.map_to_json(view)],
+        "fights": [
+            {"floor": 3, "node_type": 1, "encounter": 13, "weak": True, "state": state,
+             "hp_before": view.hp, "hp_after": view.hp - 5, "won": True}
+        ] * fights,
+    }
+
+
+class VariantTests(unittest.TestCase):
+    def test_upgrade_remove_and_add(self) -> None:
+        view = make_view()
+        pool = vocab.card_pools()["Ironclad"]
+        found = dict(deckfights.variants(view, np.random.default_rng(0), pool))
+        self.assertEqual(set(found), {"upgrade", "remove", "add"})
+        self.assertEqual(sum(c.upgraded for c in found["upgrade"].deck), 1)
+        self.assertEqual(len(found["remove"].deck), len(view.deck) - 1)
+        self.assertEqual(len(found["add"].deck), len(view.deck) + 1)
+        self.assertIn(found["add"].deck[-1].card_id, pool)
+
+    def test_a_one_card_deck_is_never_emptied(self) -> None:
+        view = make_view(deck=(CardRef(STRIKE, True),))
+        names = [name for name, _ in deckfights.variants(view, np.random.default_rng(0), ())]
+        self.assertEqual(names, [])  # nothing to upgrade, nothing removable, no pool
+
+
+class PairRecordTests(unittest.TestCase):
+    def test_pairs_share_a_seed_and_read_as_fightnet_rows(self) -> None:
+        records = [run_record()]
+        play = fake_play()
+        pairs = deckfights.pair_records(
+            records, 2, 6, budget="120/500", ascension=10,
+            rng=np.random.default_rng(1), play=play,
+        )
+        self.assertEqual(len(pairs), 2)
+        specs = play.calls[0]
+        self.assertEqual(len({s["seed"] for s in specs[:4]}), 1)  # base and variants: one seed
+        pair = pairs[0]
+        self.assertEqual((pair["seed"], pair["generation"]), ("T1", 6))
+        self.assertEqual(pair["fights"][0]["variant"], "base")
+        # Lost 10 in the arena, Burning Blood heals 6: hp_after = hp - 4.
+        first = pair["fights"][0]
+        self.assertEqual(first["hp_before"] - first["hp_after"], 4)
+        rows = train.fight_rows(pair)
+        self.assertEqual(len(rows), len(pair["fights"]))
+
+    def test_no_fights_no_pairs(self) -> None:
+        pairs = deckfights.pair_records(
+            [run_record(fights=0)], 5, 6, budget="120/500", ascension=10,
+            rng=np.random.default_rng(1), play=fake_play(),
+        )
+        self.assertEqual(pairs, [])
 
 if __name__ == "__main__":
     unittest.main()

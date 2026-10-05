@@ -24,8 +24,8 @@ from typing import Any
 
 import numpy as np
 
-from . import features
-from .features import RunView
+from . import FEATURE_VERSION, features, shards, vocab
+from .features import CardRef, RunView
 
 log = logging.getLogger(__name__)
 
@@ -217,3 +217,108 @@ def fight_player(config: RolloutConfig) -> Play:
             return [None] * len(specs)
 
     return play
+
+
+# A recorded fight's room kind (`fights[].node_type`), as the budget's room kind.
+NODE_GROUP = {1: "hallway", 2: "elite", 6: "boss"}
+
+
+def variants(
+    view: RunView,
+    rng: np.random.Generator,
+    pool: Sequence[int],
+) -> list[tuple[str, RunView]]:
+    """One random upgrade, one random removal and one card from `pool` added -- each only
+    where the deck allows it (never an empty deck)."""
+    out: list[tuple[str, RunView]] = []
+    deck = view.deck
+    upgradable = [i for i, c in enumerate(deck) if vocab.card_upgradable(c.card_id, c.upgraded)]
+    if upgradable:
+        i = int(rng.choice(upgradable))
+        changed = list(deck)
+        changed[i] = dataclasses.replace(deck[i], upgraded=True)
+        out.append(("upgrade", dataclasses.replace(view, deck=tuple(changed))))
+    removable = [i for i, c in enumerate(deck) if vocab.card_removable(c.card_id)]
+    if removable and len(deck) > 1:
+        i = int(rng.choice(removable))
+        out.append(("remove", dataclasses.replace(view, deck=deck[:i] + deck[i + 1 :])))
+    if len(pool):
+        card = CardRef(int(rng.choice(pool)), False)
+        out.append(("add", dataclasses.replace(view, deck=(*deck, card))))
+    return out
+
+
+def pair_records(
+    records: Sequence[dict[str, Any]],
+    count: int,
+    generation: int,
+    *,
+    budget: str,
+    ascension: int,
+    rng: np.random.Generator,
+    play: Play,
+) -> list[dict[str, Any]]:
+    """`count` recorded fight starts, each played as itself and its `variants` on one seed.
+
+    Each pair is a record `train.fight_rows` reads like a run's: the variant's state at
+    fight start, its encounter and weak flag, and HP before and after (post-fight heals
+    counted). A fight whose result is missing is left out of its pair.
+    """
+    starts = [
+        (record, fight)
+        for record in records
+        if not record["outcome"]["truncated"]
+        for fight in record.get("fights") or ()
+        if fight.get("node_type") in NODE_GROUP
+    ]
+    if not starts or count <= 0:
+        return []
+    picked = rng.choice(len(starts), size=min(count, len(starts)), replace=False)
+    pool = vocab.card_pools()["Ironclad"]
+    plans = []
+    specs: list[dict[str, Any]] = []
+    for n, s in enumerate(sorted(int(p) for p in picked)):
+        record, fight = starts[s]
+        base = shards.state_view(record, fight)
+        seed = fight_seed(generation, n, 0)
+        views = [("base", base), *variants(base, rng, pool)]
+        first = len(specs)
+        group = NODE_GROUP[fight["node_type"]]
+        for name, view in views:
+            specs.append(fight_spec(view, int(fight["encounter"]), group, seed, len(specs), budget))
+        plans.append((record, fight, views, first))
+    results = play(specs)
+    pairs = []
+    for record, fight, views, first in plans:
+        fights = []
+        for k, (name, view) in enumerate(views):
+            result = results[first + k]
+            if result is None:
+                continue
+            fights.append(
+                {
+                    "floor": fight["floor"],
+                    "node_type": fight["node_type"],
+                    "encounter": int(fight["encounter"]),
+                    "weak": bool(fight["weak"]),
+                    "state": shards.view_to_json(view, 0),
+                    "hp_before": view.hp,
+                    "hp_after": post_fight_hp(view.relics, result),
+                    "won": bool(result["won"]),
+                    "variant": name,
+                },
+            )
+        if fights:
+            pairs.append(
+                {
+                    "seed": record["seed"],
+                    "generation": generation,
+                    "feature_version": FEATURE_VERSION,
+                    "ascension": ascension,
+                    "combat": {"budget": budget},
+                    "outcome": {"truncated": False},
+                    "maps": [record["maps"][fight["state"]["map"]]],
+                    "fights": fights,
+                },
+            )
+    return pairs
