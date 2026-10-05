@@ -1718,8 +1718,12 @@ LOADS = globals().get("LOADS", 0) + 1
 CALLS = globals().get("CALLS", [])
 
 
-def score_options(decision, view):
-    CALLS.append((decision.type, view))
+def load(source):
+    return f"champion at {source}"
+
+
+def score_options(decision, view, model=None):
+    CALLS.append((decision.type, view, model))
     return [
         OptionScore({"kind": "card.skip", "action": 3}, 10.0 + LOADS, 0.1, True),
         OptionScore({"kind": "card.take", "action": 0}, 11.0 + LOADS, 0.2, True),
@@ -1857,7 +1861,12 @@ class StrategyTests(unittest.TestCase):
 
             self.assertEqual(values(), [12.0, 11.0])
             policy = sys.modules["run_train.policy"]
-            self.assertEqual(policy.CALLS, [("card_reward", {"floor": 5})])
+            # Scored with the champion in the service's own folder, never the package's
+            # default one (live 2026-10-05: the A9 gen-12 champion played every run
+            # while this said gen 83).
+            self.assertEqual(
+                policy.CALLS, [("card_reward", {"floor": 5}, f"champion at {champion}")],
+            )
             self.assertEqual(values(), [12.0, 11.0])
             self.assertEqual(policy.LOADS, 1)  # the same generation is not reloaded
             model_dir(self.root, generation=4)

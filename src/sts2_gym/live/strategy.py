@@ -17,6 +17,7 @@ the one place that binds it, and the merge adapts that function if the binding d
 
 from __future__ import annotations
 
+import functools
 import importlib
 import json
 import logging
@@ -109,12 +110,17 @@ def _training_package(model_dir: Path, info: Mapping[str, Any]) -> Scorer:
         raise NoModelError(
             f"the training package is not importable: {error}",
         ) from error
+    # Bound to `model_dir`: `score_options` without a model scores with the package's own
+    # default folder (`policy.STRATEGY_MODEL_DIR`, spire-coach/data/models/strategy). The
+    # live game was played by the A9 gen-12 champion left there on 2026-09-26 while this
+    # service, pointed at the A10 job's export, reported gen 40 and then gen 83.
+    champion = policy.load(model_dir)
     _LOG.info(
         "strategy champion generation %s loaded from %s",
         info["generation"],
         model_dir,
     )
-    return features, policy.score_options
+    return features, functools.partial(policy.score_options, model=champion)
 
 
 class StrategyModel:
