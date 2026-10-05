@@ -16,7 +16,8 @@
 # ~/Documents/git/sts2-wt/priors/current (rl.prior_loop export), copied here on every start
 # and passed as the job's combat_prior; PRIOR=0 plays them with plain search.
 #
-# Overrides: MAC=user@host, WORKERS (default: cores but 2), PRIOR, STOP_AT: when it stops
+# Overrides: MAC=user@host, WORKERS (default: cores but 2), PRIOR, PAIRED_FIGHTS (default
+# 4000; 0 makes none), STOP_AT: when it stops
 # itself -- "07:30" (the default: the next 07:30), a date and time ("2026-10-05 07:30"
 # runs through a weekend), or "none" (until `stop`).
 set -euo pipefail
@@ -33,6 +34,9 @@ SEED_TIMEOUT="${SEED_TIMEOUT:-900}"
 # rolled back (2026-10-04).
 WARM_START="${WARM_START:-champion}"
 LR="${LR:-0.0005}"
+# Paired fights per generation for FightNet (deck-decision spec 4): each a recorded fight
+# start played as itself and with one upgrade, removal and added card, on one seed.
+PAIRED_FIGHTS="${PAIRED_FIGHTS:-4000}"
 CPUS=$(sysctl -n hw.ncpu 2>/dev/null || nproc)
 WORKERS="${WORKERS:-$((CPUS > 3 ? CPUS - 2 : 1))}"
 export PATH="$HOME/.local/bin:$HOME/.dotnet:$PATH" DOTNET_ROOT="$HOME/.dotnet"
@@ -44,7 +48,7 @@ train() { PYTHONPATH=src uv run python -m rl.run_train "$@"; }
 sync_once() {
   rsync -a --prune-empty-dirs \
     --include='*/' --include='*.json' --include='*.log' --include='quarantine.jsonl' \
-    --include='learner.npz' --include='r*.jsonl.gz' --include='export/***' --exclude='*' \
+    --include='learner.npz' --include='r*.jsonl.gz' --include='p*.jsonl.gz' --include='export/***' --exclude='*' \
     "$ROOT/" "$MAC:Documents/git/sts2-wt/night/a10/" && date '+%F %T synced' || date '+%F %T sync failed'
 }
 
@@ -75,11 +79,11 @@ start)
     echo "the loop is already running: refreshing the keep-awake, sync and auto-stop only"
   elif [ -f "$ROOT/config.json" ]; then
     # shellcheck disable=SC2046 -- prior_args prints the option and its path, or nothing
-    train start --root "$ROOT" --seed-timeout "$SEED_TIMEOUT" --warm-start "$WARM_START" --lr "$LR" $(prior_args)
+    train start --root "$ROOT" --seed-timeout "$SEED_TIMEOUT" --warm-start "$WARM_START" --lr "$LR" --paired-fights "$PAIRED_FIGHTS" $(prior_args)
   else
     # shellcheck disable=SC2046
     train start --root "$ROOT" --workers "$WORKERS" --ascension 10 --export-dest "$ROOT/export" \
-      --seed-timeout "$SEED_TIMEOUT" --warm-start "$WARM_START" --lr "$LR" $(prior_args)
+      --seed-timeout "$SEED_TIMEOUT" --warm-start "$WARM_START" --lr "$LR" --paired-fights "$PAIRED_FIGHTS" $(prior_args)
   fi
   now=$(date +%s)
   case "$STOP_AT" in
